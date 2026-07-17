@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
@@ -15,6 +17,7 @@ import (
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
 	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
 	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
+	projectwatch "github.com/billstark001/latexmk/packages/cli/internal/watch"
 )
 
 var (
@@ -45,6 +48,9 @@ type compileOptions struct {
 	quiet         bool
 	jsonOutput    bool
 	dryRun        bool
+	watch         bool
+	watchInterval time.Duration
+	watchDebounce time.Duration
 	insecure      bool
 	entry         string
 	exclude       []string
@@ -79,6 +85,8 @@ func run(args []string) int {
 			return runClean(argv[1:])
 		case "files":
 			return runCompile(argv[1:], "", true)
+		case "watch":
+			argv = append([]string{"--watch"}, argv[1:]...)
 		case "compile":
 			argv = argv[1:]
 		}
@@ -125,6 +133,8 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		exclude:       cfg.Exclude,
 		configPath:    cfg.ConfigPath,
 		dryRun:        listOnly,
+		watchInterval: 500 * time.Millisecond,
+		watchDebounce: 500 * time.Millisecond,
 	}
 	if forcedEngine != "" {
 		opts.engine = forcedEngine
@@ -167,9 +177,20 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		Force:           opts.force,
 		Quiet:           opts.quiet,
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
+	if opts.watch {
+		return runWatch(c, request, opts)
+	}
+	out, err := compileWithTimeout(context.Background(), c, request, opts)
+	return reportCompile(out, err, opts)
+}
+
+func compileWithTimeout(parent context.Context, c *client.Client, request protocol.CompileRequest, opts compileOptions) (client.CompileOutput, error) {
+	ctx, cancel := context.WithTimeout(parent, opts.timeout)
 	defer cancel()
-	out, err := c.Compile(ctx, request, opts.outDir)
+	return c.Compile(ctx, request, opts.outDir)
+}
+
+func reportCompile(out client.CompileOutput, err error, opts compileOptions) int {
 	if err != nil {
 		return fail(err)
 	}
@@ -203,6 +224,127 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		return 1
 	}
 	return 0
+}
+
+func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOptions) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	files, _, err := c.Manifest(request.Entry, request.Engine)
+	if err != nil {
+		return fail(fmt.Errorf("initialize watch manifest: %w", err))
+	}
+	fmt.Fprintf(os.Stderr, "latexmk: watching %d selected files (interval=%s debounce=%s)\n", len(files), opts.watchInterval, opts.watchDebounce)
+	for {
+		refreshed, _, refreshErr := c.Manifest(request.Entry, request.Engine)
+		if refreshErr != nil {
+			fmt.Fprintln(os.Stderr, "latexmk: warning: could not refresh manifest before watch compile:", refreshErr)
+		} else {
+			files = refreshed
+		}
+		before := files
+		out, compileErr := compileWithTimeout(ctx, c, request, opts)
+		if ctx.Err() != nil {
+			fmt.Fprintln(os.Stderr, "latexmk: watch stopped")
+			return 0
+		}
+		code := reportCompile(out, compileErr, opts)
+		if code != 0 {
+			fmt.Fprintf(os.Stderr, "latexmk: watch compile failed with status %d; waiting for another change\n", code)
+		}
+
+		after, _, manifestErr := c.Manifest(request.Entry, request.Engine)
+		if manifestErr != nil {
+			fmt.Fprintln(os.Stderr, "latexmk: warning: could not refresh watch manifest:", manifestErr)
+			after = before
+		}
+		if selectedFilesChanged(before, after) {
+			files = after
+			fmt.Fprintln(os.Stderr, "latexmk: selected files changed during compilation; scheduling another immutable compile")
+			if !waitForContext(ctx, opts.watchDebounce) {
+				fmt.Fprintln(os.Stderr, "latexmk: watch stopped")
+				return 0
+			}
+			continue
+		}
+		files = after
+		tracker, trackErr := projectwatch.New(watchTargets(opts, files), opts.watchInterval, opts.watchDebounce)
+		if trackErr != nil {
+			return fail(trackErr)
+		}
+		changed, waitErr := tracker.Wait(ctx)
+		if waitErr != nil {
+			if ctx.Err() != nil {
+				fmt.Fprintln(os.Stderr, "latexmk: watch stopped")
+				return 0
+			}
+			return fail(waitErr)
+		}
+		fmt.Fprintln(os.Stderr, "latexmk: change detected:", strings.Join(changed, ", "))
+	}
+}
+
+func selectedFilesChanged(before, after []projectarchive.File) bool {
+	current := make(map[string]string, len(after))
+	for _, file := range after {
+		current[file.Path] = file.SHA256
+	}
+	for _, file := range before {
+		if current[file.Path] != file.SHA256 {
+			return true
+		}
+	}
+	return false
+}
+
+func watchTargets(opts compileOptions, files []projectarchive.File) []projectwatch.Target {
+	targets := make([]projectwatch.Target, 0, len(files)+8)
+	for _, file := range files {
+		targets = append(targets, projectwatch.Target{Name: file.Path, Path: file.Source})
+	}
+	if opts.manifestFile != "" {
+		if clean, err := dependency.NormalizeExplicitManifestPath(opts.manifestFile); err == nil {
+			targets = append(targets, projectwatch.Target{Name: "dependency manifest " + clean, Path: filepath.Join(opts.projectRoot, filepath.FromSlash(clean))})
+		}
+	}
+	if !opts.gitIgnore {
+		return targets
+	}
+	repoRoot, err := config.FindGitRoot(opts.projectRoot)
+	if err != nil {
+		return targets
+	}
+	policyPaths := make(map[string]struct{})
+	for _, file := range files {
+		for dir := filepath.Dir(file.Source); ; dir = filepath.Dir(dir) {
+			policyPaths[filepath.Join(dir, ".gitignore")] = struct{}{}
+			if dir == repoRoot || filepath.Dir(dir) == dir {
+				break
+			}
+		}
+	}
+	policyPaths[filepath.Join(repoRoot, ".git", "info", "exclude")] = struct{}{}
+	for policyPath := range policyPaths {
+		label, relErr := filepath.Rel(opts.projectRoot, policyPath)
+		if relErr != nil {
+			label = policyPath
+		}
+		targets = append(targets, projectwatch.Target{Name: "Git policy " + filepath.ToSlash(label), Path: policyPath})
+	}
+	return targets
+}
+
+func waitForContext(ctx context.Context, duration time.Duration) bool {
+	if duration <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func parseCompileArgs(args []string, opts *compileOptions) error {
@@ -348,6 +490,26 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 			opts.jsonOutput = true
 		case a == "--dry-run":
 			opts.dryRun = true
+		case a == "--watch":
+			opts.watch = true
+		case a == "--watch-interval" || strings.HasPrefix(a, "--watch-interval="):
+			v, err := value("--watch-interval")
+			if err != nil {
+				return err
+			}
+			opts.watchInterval, err = time.ParseDuration(v)
+			if err != nil {
+				return err
+			}
+		case a == "--watch-debounce" || strings.HasPrefix(a, "--watch-debounce="):
+			v, err := value("--watch-debounce")
+			if err != nil {
+				return err
+			}
+			opts.watchDebounce, err = time.ParseDuration(v)
+			if err != nil {
+				return err
+			}
 		case a == "--insecure-skip-verify":
 			opts.insecure = true
 		case a == "--version":
@@ -366,6 +528,12 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 	}
 	if opts.timeout <= 0 {
 		return errors.New("timeout must be positive")
+	}
+	if opts.watch && opts.watchInterval <= 0 {
+		return errors.New("watch interval must be positive")
+	}
+	if opts.watch && opts.watchDebounce < 0 {
+		return errors.New("watch debounce cannot be negative")
 	}
 	return nil
 }
@@ -654,6 +822,7 @@ func usage() {
 
 Usage:
   latexmk compile [options] <main.tex>
+  latexmk watch [options] <main.tex>
   latexmk [latex-compatible-options] <main.tex>
   latexmk meta [--json]
   latexmk doctor
@@ -681,6 +850,9 @@ Compile options:
   --no-synctex                 Disable SyncTeX
   --json                       Print machine-readable result
   --dry-run                    Print the upload manifest without contacting the server
+  --watch                      Recompile after selected dependency changes
+  --watch-interval 500ms       Poll only selected files at this interval
+  --watch-debounce 500ms       Wait for rapid edits to settle before compiling
 
 The executable may be symlinked as xelatex, lualatex, or pdflatex.
 Configuration is read from the user config, .latexmk.json, and environment variables.

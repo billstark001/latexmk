@@ -181,8 +181,23 @@ latexmk --dry-run main.tex
 latexmk files --upload-mode all main.tex
 ```
 
+Continuously compile the same policy-filtered dependency set:
+
+```sh
+latexmk watch main.tex
+latexmk watch --watch-interval 500ms --watch-debounce 500ms main.tex
+```
+
+After each compile the watcher refreshes static, recorder, explicit-manifest,
+and validated `needsFiles` dependencies. Edits made while a remote compile is
+running schedule another immutable compile. Compile failures do not terminate
+the watcher; fix a watched input to retry. `--json` emits one JSON result per
+compile. Restart the watcher after changing `.latexmk.json`, user configuration,
+environment variables, or command-line options.
+
 ```sh
 latexmk compile --engine xelatex main.tex
+latexmk watch main.tex
 latexmk main.tex
 latexmk meta
 latexmk doctor

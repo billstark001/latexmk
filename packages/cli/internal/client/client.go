@@ -358,6 +358,12 @@ func (c *Client) projectManifest(entry, engine string) ([]projectarchive.File, [
 	return c.projectManifestWithAdditional(entry, engine, nil)
 }
 
+// Manifest returns the exact files a new compile would select before any
+// server-assisted missing-file retries. Callers must not add other files.
+func (c *Client) Manifest(entry, engine string) ([]projectarchive.File, []string, error) {
+	return c.projectManifest(entry, engine)
+}
+
 func (c *Client) policyManifest() ([]projectarchive.File, string, error) {
 	if c.ProjectRoot == "" {
 		return nil, "", errors.New("project root is not configured")

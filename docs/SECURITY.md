@@ -30,6 +30,10 @@ at the application and deployment layers.
   normalized relative requests. The client can accept them only from its
   current policy-filtered manifest, with bounded rounds, file count, and bytes;
   every retry creates a new immutable snapshot and job.
+- The dependency watcher polls selected files and explicit/Git policy controls,
+  not the whole project tree. Every event reruns the full client upload policy
+  and submits a new immutable snapshot; a new unrelated file does not trigger
+  compilation or become uploadable merely because watch mode is active.
 - Explicit manifests contain exact project-relative files only. They cannot
   override Git-ignore, denylist, root-boundary, or symlink checks; manifest
   files are client policy and are denied from upload by default.

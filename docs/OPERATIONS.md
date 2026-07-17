@@ -105,6 +105,21 @@ docker build \
 
 Use `latexmk meta` to verify the remote toolchain actually running the image.
 
+## Compose watcher
+
+The root Compose file includes an optional long-running client:
+
+```sh
+docker compose --profile watch up -d client-watch
+docker compose logs -f client-watch
+```
+
+Set `LATEXMK_PROJECT_DIR`, `LATEXMK_CLIENT_ENTRY`,
+`LATEXMK_CLIENT_WATCH_INTERVAL`, and `LATEXMK_CLIENT_WATCH_DEBOUNCE` in `.env`.
+On Linux, also set `LATEXMK_CLIENT_UID` and `LATEXMK_CLIENT_GID` so returned
+artifacts are writable by the host user. Restart `client-watch` after changing
+client configuration or environment variables.
+
 ## PostgreSQL and PGlite
 
 The server uses GORM/pgx over the PostgreSQL protocol and creates its tables and

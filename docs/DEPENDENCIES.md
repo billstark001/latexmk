@@ -177,3 +177,35 @@ protocol. It helps when recorder history is stale or an unsupported dynamic
 reference reaches the remote compiler. It cannot bootstrap a first compile
 when local static selection has already failed before network access. Use an
 explicit manifest or reviewed `all` mode for that first compile.
+
+## Dependency watcher
+
+`latexmk watch main.tex` performs one compile immediately, then polls only the
+selected dependency set. The default interval and debounce are both 500 ms and
+can be changed with `--watch-interval` and `--watch-debounce`. Polling is used so
+the same implementation works for native paths and Docker bind mounts.
+
+The watch set contains:
+
+- files selected by static discovery, recorder history, and explicit inputs;
+- the configured explicit manifest, which is watched but never uploaded;
+- `.gitignore` files on relevant paths and the repository-local
+  `.git/info/exclude`, which are watched as policy inputs and never uploaded.
+
+Unrelated project files and directories are not polled. Creating a random new
+file therefore does not trigger a compile or expand the upload set. When a
+selected TeX file changes, the client runs complete dependency selection again,
+so a new literal dependency can join only after passing the normal policy. A
+successful remote compile can also refresh recorder dependencies, and bounded
+`needsFiles` retries remain available in `auto` mode.
+
+Each event is a normal compile submission with a new immutable snapshot. Rapid
+edits are coalesced. If an input changes while compilation is in progress, the
+watcher schedules another compile instead of assuming the finished result is
+current. TeX, selection, and network failures are reported but the process
+continues so a later edit can recover it.
+
+Project/user configuration and environment variables are resolved once at
+startup. Restart the watcher after changing them. Git's global excludes are
+applied whenever selection runs, but changes to the global excludes file alone
+are not a watched event.
