@@ -167,6 +167,9 @@ func (r *Runner) Run(parent context.Context, workspace string, req api.CompileRe
 			result.InputFiles = inputFiles
 		}
 	}
+	if req.DetectMissingFiles && !result.Success {
+		result.NeedsFiles = detectMissingFiles(stdout.Bytes(), stderr.Bytes(), files)
+	}
 	result.StdoutTruncated = stdout.Truncated()
 	result.StderrTruncated = stderr.Truncated()
 	result.DurationMS = time.Since(started).Milliseconds()

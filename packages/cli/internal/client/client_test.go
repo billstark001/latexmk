@@ -8,12 +8,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -381,6 +383,162 @@ func TestCompileLegacyArchiveExcludesUnrelatedFiles(t *testing.T) {
 	if receivedRequest.RecordInputs {
 		t.Fatal("client sent recordInputs to a server that did not advertise it")
 	}
+	if receivedRequest.DetectMissingFiles {
+		t.Fatal("client sent detectMissingFiles to a server that did not advertise it")
+	}
+}
+
+func TestCompileRetriesMissingFilesWithNewAllowedManifest(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"main.tex":             "main",
+		"needed.tex":           "needed",
+		"unrelated-secret.txt": "secret",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	responses := [][]byte{
+		buildResultArchive(t, []tarEntry{{name: "result.json", payload: []byte(`{"protocolVersion":1,"requestId":"req_first","success":false,"exitCode":12,"needsFiles":["needed.tex"]}`)}}),
+		buildResultArchive(t, []tarEntry{{name: "result.json", payload: []byte(`{"protocolVersion":1,"requestId":"req_second","success":true,"exitCode":0}`)}}),
+	}
+	var uploads [][]string
+	var requests []protocol.CompileRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/meta":
+			_ = json.NewEncoder(w).Encode(protocol.Metadata{ProtocolVersion: 1, Capabilities: protocol.Capabilities{NeedsFiles: true}})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/compile":
+			req, files, err := readCompileMultipart(r)
+			if err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			requests = append(requests, req)
+			uploads = append(uploads, files)
+			if len(uploads) > len(responses) {
+				t.Errorf("unexpected extra compile request")
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/vnd.latexmk.result+tar.gz")
+			_, _ = w.Write(responses[len(uploads)-1])
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "", 3*time.Second, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.ProjectRoot = root
+	output, err := c.Compile(context.Background(), protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex"}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !output.Result.Success || len(uploads) != 2 {
+		t.Fatalf("compile result=%#v uploads=%#v", output.Result, uploads)
+	}
+	if got := strings.Join(uploads[0], ","); got != "main.tex" {
+		t.Fatalf("first snapshot = %q", got)
+	}
+	if got := strings.Join(uploads[1], ","); got != "main.tex,needed.tex" {
+		t.Fatalf("retry snapshot = %q", got)
+	}
+	if len(requests) != 2 || !requests[0].DetectMissingFiles || !requests[1].DetectMissingFiles {
+		t.Fatalf("missing-file capability was not negotiated: %#v", requests)
+	}
+	if got := strings.Join(output.Warnings, "\n"); !strings.Contains(got, "new immutable snapshot") {
+		t.Fatalf("retry warning = %q", got)
+	}
+}
+
+func TestCompileRefusesMissingFileOutsideLocalPolicy(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte("main"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("SECRET=value"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	response := buildResultArchive(t, []tarEntry{{name: "result.json", payload: []byte(`{"protocolVersion":1,"requestId":"req_failed","success":false,"exitCode":12,"needsFiles":[".env"]}`)}})
+	compileCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/meta":
+			_ = json.NewEncoder(w).Encode(protocol.Metadata{ProtocolVersion: 1, Capabilities: protocol.Capabilities{NeedsFiles: true}})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/compile":
+			compileCalls++
+			w.Header().Set("Content-Type", "application/vnd.latexmk.result+tar.gz")
+			_, _ = w.Write(response)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "", 3*time.Second, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.ProjectRoot = root
+	c.Exclude = []string{".env"}
+	output, err := c.Compile(context.Background(), protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex"}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Result.Success || compileCalls != 1 {
+		t.Fatalf("result=%#v compile calls=%d", output.Result, compileCalls)
+	}
+	if got := strings.Join(output.Warnings, "\n"); !strings.Contains(got, "ignored, or denied") {
+		t.Fatalf("policy refusal warning = %q", got)
+	}
+}
+
+func TestCompileManifestModeDoesNotNegotiateMissingFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte("main"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	response := buildResultArchive(t, []tarEntry{{name: "result.json", payload: []byte(`{"protocolVersion":1,"requestId":"req_failed","success":false,"exitCode":12,"needsFiles":["extra.tex"]}`)}})
+	compileCalls := 0
+	var received protocol.CompileRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/meta":
+			_ = json.NewEncoder(w).Encode(protocol.Metadata{ProtocolVersion: 1, Capabilities: protocol.Capabilities{NeedsFiles: true}})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/compile":
+			compileCalls++
+			var err error
+			received, _, err = readCompileMultipart(r)
+			if err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/vnd.latexmk.result+tar.gz")
+			_, _ = w.Write(response)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "", 3*time.Second, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.ProjectRoot = root
+	c.UploadMode = "manifest"
+	output, err := c.Compile(context.Background(), protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex"}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Result.Success || compileCalls != 1 || received.DetectMissingFiles {
+		t.Fatalf("manifest result=%#v calls=%d request=%#v", output.Result, compileCalls, received)
+	}
 }
 
 func TestCompileRejectsIncompleteDependenciesBeforeNetwork(t *testing.T) {
@@ -465,4 +623,61 @@ func buildResultArchive(t *testing.T, entries []tarEntry) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+func readCompileMultipart(r *http.Request) (protocol.CompileRequest, []string, error) {
+	var request protocol.CompileRequest
+	var files []string
+	reader, err := r.MultipartReader()
+	if err != nil {
+		return request, nil, err
+	}
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return request, nil, err
+		}
+		switch part.FormName() {
+		case "request":
+			if err := json.NewDecoder(part).Decode(&request); err != nil {
+				_ = part.Close()
+				return request, nil, err
+			}
+		case "project":
+			gz, err := gzip.NewReader(part)
+			if err != nil {
+				_ = part.Close()
+				return request, nil, err
+			}
+			tr := tar.NewReader(gz)
+			for {
+				header, err := tr.Next()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					_ = gz.Close()
+					_ = part.Close()
+					return request, nil, err
+				}
+				files = append(files, header.Name)
+			}
+			if err := gz.Close(); err != nil {
+				_ = part.Close()
+				return request, nil, err
+			}
+		default:
+			if _, err := io.Copy(io.Discard, part); err != nil {
+				_ = part.Close()
+				return request, nil, err
+			}
+		}
+		if err := part.Close(); err != nil {
+			return request, nil, fmt.Errorf("close multipart part: %w", err)
+		}
+	}
+	return request, files, nil
 }

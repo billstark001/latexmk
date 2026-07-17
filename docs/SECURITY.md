@@ -26,6 +26,10 @@ at the application and deployment layers.
 - Recorder INPUT history contains normalized workspace-relative paths only.
   System TeX paths and paths outside the compile workspace are discarded, and
   cached paths must pass the client's current upload policy again.
+- Missing-file diagnostics are capability-negotiated and returned only as
+  normalized relative requests. The client can accept them only from its
+  current policy-filtered manifest, with bounded rounds, file count, and bytes;
+  every retry creates a new immutable snapshot and job.
 - Explicit manifests contain exact project-relative files only. They cannot
   override Git-ignore, denylist, root-boundary, or symlink checks; manifest
   files are client policy and are denied from upload by default.

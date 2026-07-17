@@ -44,7 +44,9 @@ Example `request`:
   "shellEscape": false,
   "jobName": "",
   "force": false,
-  "quiet": false
+  "quiet": false,
+  "recordInputs": true,
+  "detectMissingFiles": true
 }
 ```
 
@@ -75,6 +77,15 @@ Live system files or absolute server paths. Servers advertise this additive
 field with `capabilities.dependencyInputs`. A new client requests it by adding
 `"recordInputs": true` only after observing that capability. This keeps result
 JSON compatible with older clients that reject unknown fields.
+
+On a failed compile, `result.json` may also include `needsFiles`, a sorted list
+of conservative missing-file diagnostics extracted from TeX output and `.log`
+artifacts. The server returns this field only when the client sent
+`"detectMissingFiles": true`, and clients send that request only after seeing
+`capabilities.needsFiles`. Values are normalized relative paths; absolute,
+traversing, malformed, and control-character paths are discarded. A client
+must treat the list as untrusted input and apply its complete local upload
+policy before deciding whether to create a new snapshot.
 
 Clients must validate every returned path is below their local output root and
 should write through a temporary file followed by rename.
@@ -115,6 +126,10 @@ to retry.
 Verifies the complete snapshot and queues it. Returns `202 Accepted`, a job
 object, and `Location: /v1/jobs/{id}`. New jobs include a `snapshotId` derived
 from the authenticated owner, project ID, and canonical file manifest.
+
+If a client accepts a `needsFiles` request, it submits another upload plan and
+queues another job. The original snapshot and job are immutable and are never
+resumed with changed source files.
 
 ### `GET /v1/jobs`, `GET /v1/jobs/{id}`, and `DELETE /v1/jobs/{id}`
 

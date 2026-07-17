@@ -46,6 +46,12 @@ type CompileOutput struct {
 	Warnings []string
 }
 
+const (
+	maxNeedsFileRounds = 3
+	maxNeedsFiles      = 64
+	maxNeedsFileBytes  = 64 << 20
+)
+
 func New(baseURL, token string, timeout time.Duration, insecure bool) (*Client, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	parsed, err := url.Parse(baseURL)
@@ -114,7 +120,87 @@ func (c *Client) Compile(ctx context.Context, request protocol.CompileRequest, o
 		return CompileOutput{}, err
 	}
 	request.RecordInputs = meta.Capabilities.DependencyInputs
+	request.DetectMissingFiles = meta.Capabilities.NeedsFiles && (c.UploadMode == "" || c.UploadMode == "auto")
+	output, err := c.compileOnce(ctx, request, outputRoot, files, meta)
+	warnings := append([]string(nil), selectionWarnings...)
+	if err != nil {
+		output.Warnings = append(output.Warnings, warnings...)
+		return output, err
+	}
+
+	selected := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		selected[file.Path] = struct{}{}
+	}
+	additional := make([]string, 0)
+	totalAddedFiles := 0
+	var totalAddedBytes int64
+	for round := 0; request.DetectMissingFiles && !output.Result.Success && len(output.Result.NeedsFiles) > 0; round++ {
+		if round >= maxNeedsFileRounds {
+			warnings = append(warnings, fmt.Sprintf("missing-file retry stopped after %d rounds", maxNeedsFileRounds))
+			break
+		}
+		candidates, _, manifestErr := c.policyManifest()
+		if manifestErr != nil {
+			warnings = append(warnings, "missing-file retry refused: "+manifestErr.Error())
+			break
+		}
+		requestedFiles, resolveErr := dependency.ResolveRequestedFiles(output.Result.NeedsFiles, candidates)
+		if resolveErr != nil {
+			warnings = append(warnings, "missing-file retry refused: "+resolveErr.Error())
+			break
+		}
+		newFiles := make([]projectarchive.File, 0, len(requestedFiles))
+		for _, file := range requestedFiles {
+			if _, exists := selected[file.Path]; !exists {
+				newFiles = append(newFiles, file)
+			}
+		}
+		if len(newFiles) == 0 {
+			warnings = append(warnings, "missing-file retry stopped because the server requested no new allowed files")
+			break
+		}
+		var newBytes int64
+		for _, file := range newFiles {
+			newBytes += file.Size
+		}
+		if totalAddedFiles+len(newFiles) > maxNeedsFiles || totalAddedBytes+newBytes > maxNeedsFileBytes {
+			warnings = append(warnings, fmt.Sprintf("missing-file retry refused: additions exceed %d files or %d bytes", maxNeedsFiles, maxNeedsFileBytes))
+			break
+		}
+		paths := make([]string, 0, len(newFiles))
+		for _, file := range newFiles {
+			selected[file.Path] = struct{}{}
+			additional = append(additional, file.Path)
+			paths = append(paths, file.Path)
+		}
+		totalAddedFiles += len(newFiles)
+		totalAddedBytes += newBytes
+		retryFiles, retryWarnings, manifestErr := c.projectManifestWithAdditional(request.Entry, request.Engine, additional)
+		if manifestErr != nil {
+			warnings = append(warnings, "missing-file retry refused: "+manifestErr.Error())
+			break
+		}
+		warnings = append(warnings, retryWarnings...)
+		warnings = append(warnings, "server reported missing files; creating a new immutable snapshot with: "+strings.Join(paths, ", "))
+		output, err = c.compileOnce(ctx, request, outputRoot, retryFiles, meta)
+		if err != nil {
+			output.Warnings = append(output.Warnings, warnings...)
+			return output, err
+		}
+	}
+	output.Warnings = append(output.Warnings, warnings...)
+	if output.Result.Success && len(output.Result.InputFiles) > 0 {
+		if cacheErr := dependency.SaveCachedInputs(c.ProjectRoot, request.Entry, request.Engine, output.Result.InputFiles); cacheErr != nil {
+			output.Warnings = append(output.Warnings, "could not update dependency cache: "+cacheErr.Error())
+		}
+	}
+	return output, nil
+}
+
+func (c *Client) compileOnce(ctx context.Context, request protocol.CompileRequest, outputRoot string, files []projectarchive.File, meta protocol.Metadata) (CompileOutput, error) {
 	var output CompileOutput
+	var err error
 	if meta.Capabilities.IncrementalUpload && meta.Capabilities.QueuedJobs {
 		output, err = c.compileQueued(ctx, request, outputRoot, files)
 	} else {
@@ -123,17 +209,7 @@ func (c *Client) Compile(ctx context.Context, request protocol.CompileRequest, o
 		}
 		output, err = c.compileLegacy(ctx, request, outputRoot, files)
 	}
-	if err != nil {
-		output.Warnings = append(output.Warnings, selectionWarnings...)
-		return output, err
-	}
-	output.Warnings = append(output.Warnings, selectionWarnings...)
-	if output.Result.Success && len(output.Result.InputFiles) > 0 {
-		if cacheErr := dependency.SaveCachedInputs(c.ProjectRoot, request.Entry, request.Engine, output.Result.InputFiles); cacheErr != nil {
-			output.Warnings = append(output.Warnings, "could not update dependency cache: "+cacheErr.Error())
-		}
-	}
-	return output, nil
+	return output, err
 }
 
 func (c *Client) compileLegacy(ctx context.Context, request protocol.CompileRequest, outputRoot string, files []projectarchive.File) (CompileOutput, error) {
@@ -279,8 +355,12 @@ func (c *Client) makeMultipart(request protocol.CompileRequest, files []projecta
 }
 
 func (c *Client) projectManifest(entry, engine string) ([]projectarchive.File, []string, error) {
+	return c.projectManifestWithAdditional(entry, engine, nil)
+}
+
+func (c *Client) policyManifest() ([]projectarchive.File, string, error) {
 	if c.ProjectRoot == "" {
-		return nil, nil, errors.New("project root is not configured")
+		return nil, "", errors.New("project root is not configured")
 	}
 	exclude := append([]string(nil), c.Exclude...)
 	manifestPath := ""
@@ -288,7 +368,7 @@ func (c *Client) projectManifest(entry, engine string) ([]projectarchive.File, [
 		var err error
 		manifestPath, err = dependency.NormalizeExplicitManifestPath(c.ManifestFile)
 		if err != nil {
-			return nil, nil, fmt.Errorf("manifest path: %w", err)
+			return nil, "", fmt.Errorf("manifest path: %w", err)
 		}
 		exclude = append(exclude, manifestPath)
 	}
@@ -296,10 +376,19 @@ func (c *Client) projectManifest(entry, engine string) ([]projectarchive.File, [
 		Root: c.ProjectRoot, Exclude: exclude, RespectGitIgnore: c.RespectGitIgnore, MaxFiles: 20_000, MaxBytes: 2 << 30,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("build project manifest: %w", err)
+		return nil, "", fmt.Errorf("build project manifest: %w", err)
+	}
+	return candidates, manifestPath, nil
+}
+
+func (c *Client) projectManifestWithAdditional(entry, engine string, additional []string) ([]projectarchive.File, []string, error) {
+	candidates, manifestPath, err := c.policyManifest()
+	if err != nil {
+		return nil, nil, err
 	}
 	var cached []string
 	explicit := append([]string(nil), c.IncludeFiles...)
+	explicit = append(explicit, additional...)
 	historyAvailable := false
 	if c.UploadMode != "all" {
 		manifestFiles, manifestErr := dependency.LoadExplicitManifest(c.ProjectRoot, manifestPath)

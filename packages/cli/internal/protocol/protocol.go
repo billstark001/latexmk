@@ -5,18 +5,19 @@ import "time"
 const Version = 2
 
 type CompileRequest struct {
-	ProtocolVersion int    `json:"protocolVersion"`
-	Entry           string `json:"entry"`
-	Engine          string `json:"engine"`
-	Interaction     string `json:"interaction"`
-	Synctex         bool   `json:"synctex"`
-	HaltOnError     bool   `json:"haltOnError"`
-	FileLineError   bool   `json:"fileLineError"`
-	ShellEscape     bool   `json:"shellEscape"`
-	JobName         string `json:"jobName,omitempty"`
-	Force           bool   `json:"force,omitempty"`
-	Quiet           bool   `json:"quiet,omitempty"`
-	RecordInputs    bool   `json:"recordInputs,omitempty"`
+	ProtocolVersion    int    `json:"protocolVersion"`
+	Entry              string `json:"entry"`
+	Engine             string `json:"engine"`
+	Interaction        string `json:"interaction"`
+	Synctex            bool   `json:"synctex"`
+	HaltOnError        bool   `json:"haltOnError"`
+	FileLineError      bool   `json:"fileLineError"`
+	ShellEscape        bool   `json:"shellEscape"`
+	JobName            string `json:"jobName,omitempty"`
+	Force              bool   `json:"force,omitempty"`
+	Quiet              bool   `json:"quiet,omitempty"`
+	RecordInputs       bool   `json:"recordInputs,omitempty"`
+	DetectMissingFiles bool   `json:"detectMissingFiles,omitempty"`
 }
 
 type Artifact struct {
@@ -38,6 +39,7 @@ type CompileResult struct {
 	ImageProfile    string     `json:"imageProfile"`
 	Artifacts       []Artifact `json:"artifacts"`
 	InputFiles      []string   `json:"inputFiles,omitempty"`
+	NeedsFiles      []string   `json:"needsFiles,omitempty"`
 	StdoutTruncated bool       `json:"stdoutTruncated"`
 	StderrTruncated bool       `json:"stderrTruncated"`
 	Error           string     `json:"error,omitempty"`
@@ -102,6 +104,7 @@ type Capabilities struct {
 	IncrementalUpload   bool     `json:"incrementalUpload"`
 	QueuedJobs          bool     `json:"queuedJobs"`
 	DependencyInputs    bool     `json:"dependencyInputs"`
+	NeedsFiles          bool     `json:"needsFiles"`
 	MaxQueuedJobs       int      `json:"maxQueuedJobs"`
 	MaxStateBytes       int64    `json:"maxStateBytes"`
 	MaxUploadSessions   int      `json:"maxUploadSessions"`

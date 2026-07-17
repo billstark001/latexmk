@@ -148,6 +148,32 @@ The client never silently falls back to `all`. A corrupt cache blocks `auto`
 with an explicit error; reviewed `manifest` and `all` modes remain available
 and do not read the cache.
 
-The next layer is a bounded server `needs_files` protocol. It will handle a new
-dynamic dependency that is absent from stale history without uploading the
-whole project.
+## Bounded missing-file retries
+
+When the server advertises `capabilities.needsFiles`, `auto` mode asks it to
+extract conservative missing-file diagnostics from failed TeX output and log
+files. A result can contain project-relative `needsFiles` such as
+`sections/new.tex`. Absolute paths and traversal are discarded by the server.
+
+The server response is only a request. The client rebuilds its normal
+policy-filtered candidate manifest and accepts an exact path only if it still
+passes Git-ignore, denylist, project-root, regular-file, size, and symlink
+checks. An extensionless request may select one unique common TeX or graphics
+extension. Zero or multiple matches are refused. A refused request is shown as
+a warning and the original TeX failure remains the result.
+
+Each accepted retry creates a new upload plan, immutable snapshot, and compile
+job. A running or finished job is never mutated. The client stops after 3 retry
+rounds, 64 newly added files, or 64 MiB of newly added content. It also stops if
+the server asks for a file already present. There is no hidden `all` fallback.
+
+This mechanism is intentionally enabled only in `auto`. `manifest` is a strict
+user allowlist and never accepts server additions; `all` already includes every
+policy-allowed file. Capability negotiation keeps new request and result fields
+away from strict older clients.
+
+Missing-file parsing is diagnostic-based, not a general TeX file-discovery
+protocol. It helps when recorder history is stale or an unsupported dynamic
+reference reaches the remote compiler. It cannot bootstrap a first compile
+when local static selection has already failed before network access. Use an
+explicit manifest or reviewed `all` mode for that first compile.

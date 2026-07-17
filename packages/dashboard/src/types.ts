@@ -10,6 +10,7 @@ export interface CapabilitySet {
   incrementalUpload: boolean;
   queuedJobs: boolean;
   dependencyInputs: boolean;
+  needsFiles: boolean;
   maxQueuedJobs: number;
   maxStateBytes: number;
   maxUploadSessions: number;
@@ -40,6 +41,7 @@ export interface CompileResult {
   error?: string;
   artifacts: { path: string; size: number; sha256: string }[];
   inputFiles?: string[];
+  needsFiles?: string[];
 }
 
 export interface Job {

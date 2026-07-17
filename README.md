@@ -132,6 +132,14 @@ still pass the current Git-ignore and deny policies. When history covers a
 dynamic reference, the CLI warns because the path set may be stale; it never
 falls back to `all` automatically.
 
+If stale history misses a file and the server reports a recognized TeX
+missing-file diagnostic, `auto` mode can make a bounded retry. The client
+resolves the exact request only inside its current policy-filtered manifest and
+creates a new immutable snapshot. It never lets the server bypass Git-ignore,
+the denylist, root checks, or symlink checks. Retries stop after 3 rounds, 64
+new files, or 64 MiB. `manifest` mode remains strict and never adds files this
+way.
+
 Use `includeFiles`, repeatable `--include-file`, or a line-based
 `manifestFile`/`--manifest` to add exact project-relative dependencies. In
 `auto` mode they supplement static discovery. `uploadMode: "manifest"` selects
