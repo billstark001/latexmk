@@ -26,12 +26,13 @@ import (
 )
 
 type Client struct {
-	BaseURL     string
-	Token       string
-	HTTP        *http.Client
-	UserAgent   string
-	ProjectRoot string
-	Exclude     []string
+	BaseURL          string
+	Token            string
+	HTTP             *http.Client
+	UserAgent        string
+	ProjectRoot      string
+	Exclude          []string
+	RespectGitIgnore bool
 }
 
 type CompileOutput struct {
@@ -52,10 +53,11 @@ func New(baseURL, token string, timeout time.Duration, insecure bool) (*Client, 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: insecure} //nolint:gosec -- explicit user option
 	return &Client{
-		BaseURL:   baseURL,
-		Token:     token,
-		HTTP:      &http.Client{Timeout: timeout, Transport: transport},
-		UserAgent: "latexmk-cli/0.1.0",
+		BaseURL:          baseURL,
+		Token:            token,
+		HTTP:             &http.Client{Timeout: timeout, Transport: transport},
+		UserAgent:        "latexmk-cli/0.1.0",
+		RespectGitIgnore: true,
 	}, nil
 }
 
@@ -161,7 +163,7 @@ func (c *Client) compileQueued(ctx context.Context, request protocol.CompileRequ
 		return out, errors.New("project root is not configured")
 	}
 	files, _, err := projectarchive.Manifest(projectarchive.Options{
-		Root: c.ProjectRoot, Exclude: c.Exclude, MaxFiles: 20_000, MaxBytes: 2 << 30,
+		Root: c.ProjectRoot, Exclude: c.Exclude, RespectGitIgnore: c.RespectGitIgnore, MaxFiles: 20_000, MaxBytes: 2 << 30,
 	})
 	if err != nil {
 		return out, fmt.Errorf("build project manifest: %w", err)
@@ -248,10 +250,11 @@ func (c *Client) makeMultipart(request protocol.CompileRequest) (*os.File, strin
 		return cleanup(err)
 	}
 	if _, err := projectarchive.Create(projectPart, projectarchive.Options{
-		Root:     c.ProjectRoot,
-		Exclude:  c.Exclude,
-		MaxFiles: 20_000,
-		MaxBytes: 2 << 30,
+		Root:             c.ProjectRoot,
+		Exclude:          c.Exclude,
+		RespectGitIgnore: c.RespectGitIgnore,
+		MaxFiles:         20_000,
+		MaxBytes:         2 << 30,
 	}); err != nil {
 		return cleanup(fmt.Errorf("archive project: %w", err))
 	}

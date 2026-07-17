@@ -82,3 +82,18 @@ func TestLoadKeepsDefaultDenyWhenProjectReplacesExcludes(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadRespectsExplicitGitIgnoreSetting(t *testing.T) {
+	root := t.TempDir()
+	configJSON := `{"server":"http://127.0.0.1:8080","respectGitignore":false}`
+	if err := os.WriteFile(filepath.Join(root, FileName), []byte(configJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RespectGitIgnore {
+		t.Fatal("respectGitignore = true, want false")
+	}
+}

@@ -96,6 +96,7 @@ The CLI searches upward for `.latexmk.json`:
 {
   "server": "https://latex.example.edu",
   "rootMode": "entry",
+  "respectGitignore": true,
   "engine": "xelatex",
   "timeout": "3m",
   "exclude": [".git", "node_modules", ".latexmk-cache", "*.aux", "*.fdb_latexmk", "*.fls", "*.log", "*.synctex.gz", "*.xdv"]
@@ -116,7 +117,10 @@ export LATEXMK_TOKEN='lm_...'
 
 The client does not upload `.latexmk.json`, `.latexmkignore`, `.env` files, or
 common private-key files by default, even when a project replaces the ordinary
-exclude list. Add further exclusions in `.latexmkignore`. Symlinks are not
+exclude list. In a Git work tree it selects tracked files plus untracked files
+that are not ignored, using Git's own nested, repository-local, and global
+exclude rules. Use `--no-gitignore` only when ignored files are intentional
+compile inputs. Add further exclusions in `.latexmkignore`. Symlinks are not
 followed; the client fails when it encounters one so files outside the project
 root cannot be uploaded.
 

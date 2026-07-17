@@ -27,6 +27,7 @@ type compileOptions struct {
 	token         string
 	projectRoot   string
 	rootMode      string
+	gitIgnore     bool
 	engine        string
 	outDir        string
 	timeout       time.Duration
@@ -105,6 +106,7 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		token:         cfg.Token,
 		projectRoot:   cfg.ProjectRoot,
 		rootMode:      cfg.RootMode,
+		gitIgnore:     cfg.RespectGitIgnore,
 		engine:        cfg.Engine,
 		outDir:        "",
 		timeout:       cfg.Timeout,
@@ -141,6 +143,7 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 	}
 	c.ProjectRoot = opts.projectRoot
 	c.Exclude = opts.exclude
+	c.RespectGitIgnore = opts.gitIgnore
 	request := protocol.CompileRequest{
 		ProtocolVersion: protocol.Version,
 		Entry:           opts.entry,
@@ -234,6 +237,10 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 				return fmt.Errorf("--root-mode must be entry or git, got %q", v)
 			}
 			opts.rootMode = v
+		case a == "--gitignore":
+			opts.gitIgnore = true
+		case a == "--no-gitignore":
+			opts.gitIgnore = false
 		case a == "--out-dir" || strings.HasPrefix(a, "--out-dir=") || a == "-output-directory" || strings.HasPrefix(a, "-output-directory="):
 			v, err := value("--out-dir")
 			if err != nil {
@@ -391,7 +398,7 @@ type manifestView struct {
 
 func printManifest(opts compileOptions) int {
 	files, stats, err := projectarchive.Manifest(projectarchive.Options{
-		Root: opts.projectRoot, Exclude: opts.exclude, MaxFiles: 20_000, MaxBytes: 2 << 30,
+		Root: opts.projectRoot, Exclude: opts.exclude, RespectGitIgnore: opts.gitIgnore, MaxFiles: 20_000, MaxBytes: 2 << 30,
 	})
 	if err != nil {
 		return fail(fmt.Errorf("build project manifest: %w", err))
@@ -565,6 +572,8 @@ Compile options:
   --token TOKEN                Bearer token (prefer LATEXMK_TOKEN)
   --project-root DIR           Root directory uploaded to the server
   --root-mode entry|git        Default root when --project-root is absent
+  --gitignore                  Respect Git ignore rules (default)
+  --no-gitignore               Include Git-ignored files unless otherwise excluded
   --out-dir DIR                Local root for returned artifacts
   --engine xelatex|lualatex|pdflatex
   --timeout 3m                 End-to-end request timeout

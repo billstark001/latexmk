@@ -3,22 +3,25 @@ package archive
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
 )
 
 type Options struct {
-	Root     string
-	Exclude  []string
-	MaxFiles int
-	MaxBytes int64
+	Root             string
+	Exclude          []string
+	RespectGitIgnore bool
+	MaxFiles         int
+	MaxBytes         int64
 }
 
 type Stats struct {
@@ -99,6 +102,10 @@ func Manifest(opts Options) ([]File, Stats, error) {
 	if err != nil {
 		return nil, stats, err
 	}
+	selection, err := loadGitSelection(opts.Root, opts.RespectGitIgnore)
+	if err != nil {
+		return nil, stats, err
+	}
 	files := make([]File, 0)
 	walkErr := filepath.WalkDir(opts.Root, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -118,15 +125,25 @@ func Manifest(opts Options) ([]File, Stats, error) {
 			}
 			return nil
 		}
+		if d.IsDir() {
+			if selection.Enabled {
+				if _, ok := selection.Directories[rel]; !ok {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if selection.Enabled {
+			if _, ok := selection.Files[rel]; !ok {
+				return nil
+			}
+		}
 		info, err := d.Info()
 		if err != nil {
 			return err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("symlinks are not supported: %s", rel)
-		}
-		if d.IsDir() {
-			return nil
 		}
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("unsupported file type: %s", rel)
@@ -150,6 +167,77 @@ func Manifest(opts Options) ([]File, Stats, error) {
 		return nil, stats, walkErr
 	}
 	return files, stats, nil
+}
+
+type gitSelection struct {
+	Enabled     bool
+	Files       map[string]struct{}
+	Directories map[string]struct{}
+}
+
+func loadGitSelection(root string, enabled bool) (gitSelection, error) {
+	selection := gitSelection{}
+	if !enabled || !hasGitMarker(root) {
+		return selection, nil
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return selection, fmt.Errorf("resolve project root path: %w", err)
+	}
+	repoOutput, err := exec.Command("git", "-C", root, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return selection, fmt.Errorf("resolve Git root for %s: %w", root, err)
+	}
+	repoRoot := strings.TrimSpace(string(repoOutput))
+	repoRoot, err = filepath.EvalSymlinks(repoRoot)
+	if err != nil {
+		return selection, fmt.Errorf("resolve Git root path: %w", err)
+	}
+	output, err := exec.Command(
+		"git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--full-name", "--", ".",
+	).Output()
+	if err != nil {
+		return selection, fmt.Errorf("list Git project files: %w", err)
+	}
+	selection.Enabled = true
+	selection.Files = make(map[string]struct{})
+	selection.Directories = make(map[string]struct{})
+	for _, raw := range bytes.Split(output, []byte{0}) {
+		if len(raw) == 0 {
+			continue
+		}
+		absolute := filepath.Join(repoRoot, filepath.FromSlash(string(raw)))
+		rel, err := filepath.Rel(resolvedRoot, absolute)
+		if err != nil {
+			return gitSelection{}, err
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		rel = filepath.ToSlash(rel)
+		selection.Files[rel] = struct{}{}
+		for dir := path.Dir(rel); dir != "."; dir = path.Dir(dir) {
+			selection.Directories[dir] = struct{}{}
+		}
+	}
+	return selection, nil
+}
+
+func hasGitMarker(root string) bool {
+	dir, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false
+		}
+		dir = parent
+	}
 }
 
 func fileSHA256(path string) (string, error) {

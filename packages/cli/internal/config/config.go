@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -16,6 +17,7 @@ type FileConfig struct {
 	Token              string   `json:"token,omitempty"`
 	ProjectRoot        string   `json:"projectRoot,omitempty"`
 	RootMode           string   `json:"rootMode,omitempty"`
+	RespectGitIgnore   *bool    `json:"respectGitignore,omitempty"`
 	Engine             string   `json:"engine,omitempty"`
 	Timeout            string   `json:"timeout,omitempty"`
 	Exclude            []string `json:"exclude,omitempty"`
@@ -27,6 +29,7 @@ type Resolved struct {
 	Token              string
 	ProjectRoot        string
 	RootMode           string
+	RespectGitIgnore   bool
 	Engine             string
 	Timeout            time.Duration
 	Exclude            []string
@@ -39,6 +42,7 @@ type Resolved struct {
 func DefaultExcludes() []string {
 	return []string{
 		".git",
+		".gitignore",
 		"node_modules",
 		".latexmk-cache",
 		"*.aux",
@@ -68,12 +72,14 @@ func DefaultDeny() []string {
 }
 
 func Load(start string) (Resolved, error) {
+	respectGitIgnore := true
 	cfg := FileConfig{
-		Server:   "http://127.0.0.1:8080",
-		RootMode: "entry",
-		Engine:   "xelatex",
-		Timeout:  "3m",
-		Exclude:  DefaultExcludes(),
+		Server:           "http://127.0.0.1:8080",
+		RootMode:         "entry",
+		RespectGitIgnore: &respectGitIgnore,
+		Engine:           "xelatex",
+		Timeout:          "3m",
+		Exclude:          DefaultExcludes(),
 	}
 	path, err := findConfig(start)
 	if err != nil {
@@ -101,6 +107,13 @@ func Load(start string) (Resolved, error) {
 	}
 	if v := os.Getenv("LATEXMK_ROOT_MODE"); v != "" {
 		cfg.RootMode = v
+	}
+	if v := os.Getenv("LATEXMK_RESPECT_GITIGNORE"); v != "" {
+		parsed, err := strconv.ParseBool(v)
+		if err != nil {
+			return Resolved{}, fmt.Errorf("invalid LATEXMK_RESPECT_GITIGNORE %q: %w", v, err)
+		}
+		cfg.RespectGitIgnore = &parsed
 	}
 	if cfg.RootMode != "entry" && cfg.RootMode != "git" {
 		return Resolved{}, fmt.Errorf("invalid rootMode %q; expected entry or git", cfg.RootMode)
@@ -133,11 +146,13 @@ func Load(start string) (Resolved, error) {
 	if root != "" {
 		resolvedRoot = filepath.Clean(root)
 	}
+	respectGitIgnore = cfg.RespectGitIgnore == nil || *cfg.RespectGitIgnore
 	return Resolved{
 		Server:             cfg.Server,
 		Token:              cfg.Token,
 		ProjectRoot:        resolvedRoot,
 		RootMode:           cfg.RootMode,
+		RespectGitIgnore:   respectGitIgnore,
 		Engine:             cfg.Engine,
 		Timeout:            timeout,
 		Exclude:            cfg.Exclude,
@@ -171,6 +186,10 @@ func Write(path string, cfg FileConfig) error {
 	}
 	if cfg.RootMode == "" {
 		cfg.RootMode = "entry"
+	}
+	if cfg.RespectGitIgnore == nil {
+		value := true
+		cfg.RespectGitIgnore = &value
 	}
 	if cfg.Timeout == "" {
 		cfg.Timeout = "3m"
