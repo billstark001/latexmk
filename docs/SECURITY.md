@@ -12,6 +12,9 @@ at the application and deployment layers.
 - `latexmk -norc` prevents system, user, and project latexmk rc files from
   executing Perl configuration.
 - Shell escape is disabled by default.
+- LuaLaTeX runs with LuaTeX `--safer` and `--nosocket` in addition to disabled
+  shell escape. These options reduce Lua file/process/network capabilities but
+  do not make LuaLaTeX a high-assurance sandbox.
 - Every compile has a fresh temporary directory, private HOME/TEXMF trees, and
   a small environment whitelist. Host credentials, proxy configuration, and
   arbitrary TeX path overrides are not inherited.

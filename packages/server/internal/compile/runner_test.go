@@ -47,6 +47,38 @@ func TestValidJobName(t *testing.T) {
 	}
 }
 
+func TestCommandArgsHardensLuaLaTeX(t *testing.T) {
+	args := commandArgs(api.CompileRequest{
+		Entry:       "main.tex",
+		Engine:      "lualatex",
+		Interaction: "nonstopmode",
+	})
+	joined := strings.Join(args, "\n")
+	for _, required := range []string{
+		"-lualatex",
+		"-pdflualatex=lualatex --safer --nosocket %O %S",
+		"-no-shell-escape",
+	} {
+		if !strings.Contains(joined, required) {
+			t.Errorf("LuaLaTeX args missing %q: %v", required, args)
+		}
+	}
+}
+
+func TestCommandArgsDoesNotAddLuaOptionsToOtherEngines(t *testing.T) {
+	for _, engine := range []string{"xelatex", "pdflatex"} {
+		args := commandArgs(api.CompileRequest{
+			Entry:       "main.tex",
+			Engine:      engine,
+			Interaction: "nonstopmode",
+		})
+		joined := strings.Join(args, "\n")
+		if strings.Contains(joined, "--safer") || strings.Contains(joined, "--nosocket") {
+			t.Errorf("%s unexpectedly received Lua options: %v", engine, args)
+		}
+	}
+}
+
 func TestCollectArtifactsIncludesXdvipdfmxPDF(t *testing.T) {
 	root := t.TempDir()
 	files := map[string]string{

@@ -166,7 +166,7 @@ func commandArgs(req api.CompileRequest) []string {
 	case "xelatex":
 		args = append(args, "-xelatex")
 	case "lualatex":
-		args = append(args, "-lualatex")
+		args = append(args, "-lualatex", "-pdflualatex=lualatex --safer --nosocket %O %S")
 	case "pdflatex":
 		args = append(args, "-pdf")
 	}
