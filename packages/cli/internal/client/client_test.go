@@ -115,6 +115,9 @@ func TestCompileUsesQueuedIncrementalProtocol(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte("hello"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "unrelated-secret.txt"), []byte("do not upload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	var planned protocol.UploadPlanRequest
 	var uploaded []byte
 	resultArchive := buildResultArchive(t, []tarEntry{{name: "result.json", payload: []byte(`{"protocolVersion":2,"requestId":"job_test","success":true,"exitCode":0}`)}})
@@ -156,6 +159,111 @@ func TestCompileUsesQueuedIncrementalProtocol(t *testing.T) {
 	}
 	if !output.Result.Success || string(uploaded) != "hello" || len(planned.Files) != 1 {
 		t.Fatalf("queued compile result=%#v upload=%q plan=%#v", output.Result, uploaded, planned)
+	}
+}
+
+func TestCompileLegacyArchiveExcludesUnrelatedFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "unrelated-secret.txt"), []byte("do not upload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var uploaded []string
+	resultArchive := buildResultArchive(t, []tarEntry{{name: "result.json", payload: []byte(`{"protocolVersion":1,"requestId":"req_test","success":true,"exitCode":0}`)}})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/meta":
+			_ = json.NewEncoder(w).Encode(protocol.Metadata{ProtocolVersion: 1})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/compile":
+			reader, err := r.MultipartReader()
+			if err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			for {
+				part, err := reader.NextPart()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if part.FormName() != "project" {
+					_, _ = io.Copy(io.Discard, part)
+					_ = part.Close()
+					continue
+				}
+				gz, err := gzip.NewReader(part)
+				if err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				tarReader := tar.NewReader(gz)
+				for {
+					header, err := tarReader.Next()
+					if err == io.EOF {
+						break
+					}
+					if err != nil {
+						t.Error(err)
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					uploaded = append(uploaded, header.Name)
+				}
+				_ = gz.Close()
+				_ = part.Close()
+			}
+			w.Header().Set("Content-Type", "application/vnd.latexmk.result+tar.gz")
+			_, _ = w.Write(resultArchive)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "", 3*time.Second, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.ProjectRoot = root
+	output, err := c.Compile(context.Background(), protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex"}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !output.Result.Success || len(uploaded) != 1 || uploaded[0] != "main.tex" {
+		t.Fatalf("legacy compile result=%#v uploaded=%#v", output.Result, uploaded)
+	}
+}
+
+func TestCompileRejectsIncompleteDependenciesBeforeNetwork(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte(`\input{\dynamicfile}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "", 3*time.Second, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.ProjectRoot = root
+	_, err = c.Compile(context.Background(), protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex"}, root)
+	if err == nil {
+		t.Fatal("expected dynamic dependency to block compilation")
+	}
+	if requests != 0 {
+		t.Fatalf("client contacted server %d times before dependency validation", requests)
 	}
 }
 

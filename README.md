@@ -101,6 +101,7 @@ The CLI first reads the user config at `$XDG_CONFIG_HOME/latexmk/config.json`
 {
   "server": "https://latex.example.edu",
   "rootMode": "entry",
+  "uploadMode": "auto",
   "respectGitignore": true,
   "engine": "xelatex",
   "timeout": "3m",
@@ -112,6 +113,18 @@ Without an explicit `projectRoot`, the project root is the directory containing
 the entry TeX file. This prevents a command run in a subdirectory from silently
 uploading its parent Git repository. Set `rootMode` to `git`, pass
 `--root-mode git`, or set `--project-root` to request a wider root explicitly.
+
+`uploadMode: "auto"` selects the entry file and supported literal LaTeX
+dependencies after Git-ignore and deny rules have been applied. It reports
+unresolved recognized dependencies before contacting the server. Missing,
+ignored, and denied references share one `unavailable` diagnostic because the
+scanner does not inspect filtered file contents. `--upload-mode all` uploads
+every policy-allowed candidate and is an explicit compatibility fallback; it
+still does not override the denylist.
+Static scanning cannot prove that custom macros or unsupported packages do not
+load more files. Always inspect `latexmk files` for a sensitive project. See
+[`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md) for supported commands and
+limitations.
 
 The project config may contain a `token` for a private, single-user setup. A
 user config, environment variable, or token file is safer when the paper
@@ -143,6 +156,7 @@ Inspect the exact content-addressed manifest without contacting the server:
 latexmk files main.tex
 latexmk files --json main.tex
 latexmk --dry-run main.tex
+latexmk files --upload-mode all main.tex
 ```
 
 ```sh

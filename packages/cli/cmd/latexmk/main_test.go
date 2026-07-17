@@ -108,3 +108,16 @@ func TestParseCompileArgsReadsTokenFile(t *testing.T) {
 		t.Fatalf("token = %q, want file-token", opts.token)
 	}
 }
+
+func TestParseCompileArgsUploadMode(t *testing.T) {
+	opts := compileOptions{timeout: time.Minute, uploadMode: "auto"}
+	if err := parseCompileArgs([]string{"--upload-mode", "all", "main.tex"}, &opts); err != nil {
+		t.Fatal(err)
+	}
+	if opts.uploadMode != "all" {
+		t.Fatalf("upload mode = %q, want all", opts.uploadMode)
+	}
+	if err := parseCompileArgs([]string{"--upload-mode", "legacy", "main.tex"}, &opts); err == nil {
+		t.Fatal("expected unsupported upload mode to fail")
+	}
+}

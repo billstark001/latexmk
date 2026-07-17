@@ -21,6 +21,7 @@ type FileConfig struct {
 	Token              string   `json:"token,omitempty"`
 	ProjectRoot        string   `json:"projectRoot,omitempty"`
 	RootMode           string   `json:"rootMode,omitempty"`
+	UploadMode         string   `json:"uploadMode,omitempty"`
 	RespectGitIgnore   *bool    `json:"respectGitignore,omitempty"`
 	Engine             string   `json:"engine,omitempty"`
 	Timeout            string   `json:"timeout,omitempty"`
@@ -33,6 +34,7 @@ type Resolved struct {
 	Token              string
 	ProjectRoot        string
 	RootMode           string
+	UploadMode         string
 	RespectGitIgnore   bool
 	Engine             string
 	Timeout            time.Duration
@@ -81,6 +83,7 @@ func Load(start string) (Resolved, error) {
 	cfg := FileConfig{
 		Server:           "http://127.0.0.1:8080",
 		RootMode:         "entry",
+		UploadMode:       "auto",
 		RespectGitIgnore: &respectGitIgnore,
 		Engine:           "xelatex",
 		Timeout:          "3m",
@@ -130,6 +133,9 @@ func Load(start string) (Resolved, error) {
 	if v := os.Getenv("LATEXMK_ROOT_MODE"); v != "" {
 		cfg.RootMode = v
 	}
+	if v := os.Getenv("LATEXMK_UPLOAD_MODE"); v != "" {
+		cfg.UploadMode = v
+	}
 	if v := os.Getenv("LATEXMK_RESPECT_GITIGNORE"); v != "" {
 		parsed, err := strconv.ParseBool(v)
 		if err != nil {
@@ -139,6 +145,9 @@ func Load(start string) (Resolved, error) {
 	}
 	if cfg.RootMode != "entry" && cfg.RootMode != "git" {
 		return Resolved{}, fmt.Errorf("invalid rootMode %q; expected entry or git", cfg.RootMode)
+	}
+	if cfg.UploadMode != "auto" && cfg.UploadMode != "all" {
+		return Resolved{}, fmt.Errorf("invalid uploadMode %q; expected auto or all", cfg.UploadMode)
 	}
 
 	timeout, err := time.ParseDuration(cfg.Timeout)
@@ -174,6 +183,7 @@ func Load(start string) (Resolved, error) {
 		Token:              cfg.Token,
 		ProjectRoot:        resolvedRoot,
 		RootMode:           cfg.RootMode,
+		UploadMode:         cfg.UploadMode,
 		RespectGitIgnore:   respectGitIgnore,
 		Engine:             cfg.Engine,
 		Timeout:            timeout,
@@ -270,6 +280,9 @@ func Write(path string, cfg FileConfig) error {
 	}
 	if cfg.RootMode == "" {
 		cfg.RootMode = "entry"
+	}
+	if cfg.UploadMode == "" {
+		cfg.UploadMode = "auto"
 	}
 	if cfg.RespectGitIgnore == nil {
 		value := true

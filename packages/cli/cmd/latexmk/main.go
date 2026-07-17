@@ -13,6 +13,7 @@ import (
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
+	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
 	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
 )
 
@@ -27,6 +28,7 @@ type compileOptions struct {
 	token         string
 	projectRoot   string
 	rootMode      string
+	uploadMode    string
 	gitIgnore     bool
 	engine        string
 	outDir        string
@@ -106,6 +108,7 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		token:         cfg.Token,
 		projectRoot:   cfg.ProjectRoot,
 		rootMode:      cfg.RootMode,
+		uploadMode:    cfg.UploadMode,
 		gitIgnore:     cfg.RespectGitIgnore,
 		engine:        cfg.Engine,
 		outDir:        "",
@@ -144,6 +147,7 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 	c.ProjectRoot = opts.projectRoot
 	c.Exclude = opts.exclude
 	c.RespectGitIgnore = opts.gitIgnore
+	c.UploadMode = opts.uploadMode
 	request := protocol.CompileRequest{
 		ProtocolVersion: protocol.Version,
 		Entry:           opts.entry,
@@ -246,6 +250,15 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 				return fmt.Errorf("--root-mode must be entry or git, got %q", v)
 			}
 			opts.rootMode = v
+		case a == "--upload-mode" || strings.HasPrefix(a, "--upload-mode="):
+			v, err := value("--upload-mode")
+			if err != nil {
+				return err
+			}
+			if v != "auto" && v != "all" {
+				return fmt.Errorf("--upload-mode must be auto or all, got %q", v)
+			}
+			opts.uploadMode = v
 		case a == "--gitignore":
 			opts.gitIgnore = true
 		case a == "--no-gitignore":
@@ -399,29 +412,46 @@ func normalizeCompilePaths(opts *compileOptions, cwd string) error {
 }
 
 type manifestView struct {
-	ProjectRoot string                `json:"projectRoot"`
-	Entry       string                `json:"entry"`
-	Files       []projectarchive.File `json:"files"`
-	Stats       projectarchive.Stats  `json:"stats"`
+	ProjectRoot string                  `json:"projectRoot"`
+	Entry       string                  `json:"entry"`
+	UploadMode  string                  `json:"uploadMode"`
+	Resolved    bool                    `json:"resolved"`
+	Files       []projectarchive.File   `json:"files"`
+	Stats       projectarchive.Stats    `json:"stats"`
+	Diagnostics []dependency.Diagnostic `json:"diagnostics,omitempty"`
 }
 
 func printManifest(opts compileOptions) int {
-	files, stats, err := projectarchive.Manifest(projectarchive.Options{
+	candidates, _, err := projectarchive.Manifest(projectarchive.Options{
 		Root: opts.projectRoot, Exclude: opts.exclude, RespectGitIgnore: opts.gitIgnore, MaxFiles: 20_000, MaxBytes: 2 << 30,
 	})
 	if err != nil {
 		return fail(fmt.Errorf("build project manifest: %w", err))
 	}
+	result, err := dependency.Select(opts.entry, opts.uploadMode, candidates)
+	if err != nil {
+		return fail(fmt.Errorf("select project dependencies: %w", err))
+	}
 	if opts.jsonOutput {
-		view := manifestView{ProjectRoot: opts.projectRoot, Entry: opts.entry, Files: files, Stats: stats}
+		view := manifestView{ProjectRoot: opts.projectRoot, Entry: opts.entry, UploadMode: opts.uploadMode, Resolved: result.Resolved, Files: result.Files, Stats: result.Stats, Diagnostics: result.Diagnostics}
 		if err := json.NewEncoder(os.Stdout).Encode(view); err != nil {
 			return fail(err)
 		}
+		if !result.Resolved {
+			return 1
+		}
 		return 0
 	}
-	fmt.Printf("project root: %s\nentry: %s\nfiles: %d\nbytes: %d\n", opts.projectRoot, opts.entry, stats.Files, stats.Bytes)
-	for _, file := range files {
-		fmt.Printf("%10d  %s  %s\n", file.Size, file.SHA256, file.Path)
+	fmt.Printf("project root: %s\nentry: %s\nupload mode: %s\nresolved: %t\nfiles: %d\nbytes: %d\n", opts.projectRoot, opts.entry, opts.uploadMode, result.Resolved, result.Stats.Files, result.Stats.Bytes)
+	for _, file := range result.Files {
+		fmt.Printf("%10d  %s  %s  (%s)\n", file.Size, file.SHA256, file.Path, file.Reason)
+	}
+	for _, diagnostic := range result.Diagnostics {
+		fmt.Fprintf(os.Stderr, "latexmk: dependency: %s\n", dependency.FormatDiagnostic(diagnostic))
+	}
+	if !result.Resolved {
+		fmt.Fprintln(os.Stderr, "latexmk: dependency discovery has unresolved references; fix them or review --upload-mode all")
+		return 1
 	}
 	return 0
 }
@@ -591,6 +621,7 @@ Compile options:
   --token-file FILE            Read the bearer token from a file
   --project-root DIR           Root directory uploaded to the server
   --root-mode entry|git        Default root when --project-root is absent
+  --upload-mode auto|all       Upload literal dependencies (default) or all allowed files
   --gitignore                  Respect Git ignore rules (default)
   --no-gitignore               Include Git-ignored files unless otherwise excluded
   --out-dir DIR                Local root for returned artifacts

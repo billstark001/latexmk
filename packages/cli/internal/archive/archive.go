@@ -37,63 +37,73 @@ type File struct {
 	Source string `json:"-"`
 	SHA256 string `json:"sha256"`
 	Size   int64  `json:"size"`
+	Reason string `json:"reason,omitempty"`
 }
 
 func Create(dst io.Writer, opts Options) (Stats, error) {
-	gz := gzip.NewWriter(dst)
-	tw := tar.NewWriter(gz)
 	files, stats, err := Manifest(opts)
 	if err != nil {
 		return stats, err
 	}
+	if err := CreateFiles(dst, files); err != nil {
+		return stats, err
+	}
+	return stats, nil
+}
+
+// CreateFiles writes a previously validated manifest. This keeps preview,
+// incremental upload, and legacy archive upload on the same selected file set.
+func CreateFiles(dst io.Writer, files []File) error {
+	gz := gzip.NewWriter(dst)
+	tw := tar.NewWriter(gz)
 	for _, file := range files {
 		info, err := os.Stat(file.Source)
 		if err != nil {
 			_ = tw.Close()
 			_ = gz.Close()
-			return stats, err
+			return err
 		}
 		hdr, err := tar.FileInfoHeader(info, "")
 		if err != nil {
 			_ = tw.Close()
 			_ = gz.Close()
-			return stats, err
+			return err
 		}
 		hdr.Name = file.Path
 		hdr.Mode = 0o644
 		if err := tw.WriteHeader(hdr); err != nil {
 			_ = tw.Close()
 			_ = gz.Close()
-			return stats, err
+			return err
 		}
 		f, err := os.Open(file.Source)
 		if err != nil {
 			_ = tw.Close()
 			_ = gz.Close()
-			return stats, err
+			return err
 		}
 		_, copyErr := io.Copy(tw, f)
 		closeErr := f.Close()
 		if copyErr != nil {
 			_ = tw.Close()
 			_ = gz.Close()
-			return stats, copyErr
+			return copyErr
 		}
 		if closeErr != nil {
 			_ = tw.Close()
 			_ = gz.Close()
-			return stats, closeErr
+			return closeErr
 		}
 	}
 	if err := tw.Close(); err != nil {
 		_ = tw.Close()
 		_ = gz.Close()
-		return stats, err
+		return err
 	}
 	if err := gz.Close(); err != nil {
-		return stats, err
+		return err
 	}
-	return stats, nil
+	return nil
 }
 
 func Manifest(opts Options) ([]File, Stats, error) {

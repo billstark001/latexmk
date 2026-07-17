@@ -22,6 +22,7 @@ import (
 	"time"
 
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
+	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
 	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
 )
 
@@ -33,6 +34,7 @@ type Client struct {
 	ProjectRoot      string
 	Exclude          []string
 	RespectGitIgnore bool
+	UploadMode       string
 }
 
 type CompileOutput struct {
@@ -100,25 +102,29 @@ func (c *Client) Health(ctx context.Context) error {
 }
 
 func (c *Client) Compile(ctx context.Context, request protocol.CompileRequest, outputRoot string) (CompileOutput, error) {
+	files, err := c.projectManifest(request.Entry)
+	if err != nil {
+		return CompileOutput{}, err
+	}
 	meta, err := c.Metadata(ctx)
 	if err != nil {
 		return CompileOutput{}, err
 	}
 	if meta.Capabilities.IncrementalUpload && meta.Capabilities.QueuedJobs {
-		return c.compileQueued(ctx, request, outputRoot)
+		return c.compileQueued(ctx, request, outputRoot, files)
 	}
 	if meta.ProtocolVersion == 1 {
 		request.ProtocolVersion = 1
 	}
-	return c.compileLegacy(ctx, request, outputRoot)
+	return c.compileLegacy(ctx, request, outputRoot, files)
 }
 
-func (c *Client) compileLegacy(ctx context.Context, request protocol.CompileRequest, outputRoot string) (CompileOutput, error) {
+func (c *Client) compileLegacy(ctx context.Context, request protocol.CompileRequest, outputRoot string, files []projectarchive.File) (CompileOutput, error) {
 	var out CompileOutput
 	if c.ProjectRoot == "" {
 		return out, errors.New("project root is not configured")
 	}
-	bodyFile, contentType, err := c.makeMultipart(request)
+	bodyFile, contentType, err := c.makeMultipart(request, files)
 	if err != nil {
 		return out, err
 	}
@@ -157,16 +163,10 @@ func (c *Client) compileLegacy(ctx context.Context, request protocol.CompileRequ
 	return out, nil
 }
 
-func (c *Client) compileQueued(ctx context.Context, request protocol.CompileRequest, outputRoot string) (CompileOutput, error) {
+func (c *Client) compileQueued(ctx context.Context, request protocol.CompileRequest, outputRoot string, files []projectarchive.File) (CompileOutput, error) {
 	var out CompileOutput
 	if c.ProjectRoot == "" {
 		return out, errors.New("project root is not configured")
-	}
-	files, _, err := projectarchive.Manifest(projectarchive.Options{
-		Root: c.ProjectRoot, Exclude: c.Exclude, RespectGitIgnore: c.RespectGitIgnore, MaxFiles: 20_000, MaxBytes: 2 << 30,
-	})
-	if err != nil {
-		return out, fmt.Errorf("build project manifest: %w", err)
 	}
 	projectID, err := stableProjectID(c.ProjectRoot)
 	if err != nil {
@@ -226,7 +226,7 @@ func (c *Client) compileQueued(ctx context.Context, request protocol.CompileRequ
 	return out, nil
 }
 
-func (c *Client) makeMultipart(request protocol.CompileRequest) (*os.File, string, error) {
+func (c *Client) makeMultipart(request protocol.CompileRequest, files []projectarchive.File) (*os.File, string, error) {
 	f, err := os.CreateTemp("", "latexmk-request-*.multipart")
 	if err != nil {
 		return nil, "", err
@@ -249,13 +249,7 @@ func (c *Client) makeMultipart(request protocol.CompileRequest) (*os.File, strin
 	if err != nil {
 		return cleanup(err)
 	}
-	if _, err := projectarchive.Create(projectPart, projectarchive.Options{
-		Root:             c.ProjectRoot,
-		Exclude:          c.Exclude,
-		RespectGitIgnore: c.RespectGitIgnore,
-		MaxFiles:         20_000,
-		MaxBytes:         2 << 30,
-	}); err != nil {
+	if err := projectarchive.CreateFiles(projectPart, files); err != nil {
 		return cleanup(fmt.Errorf("archive project: %w", err))
 	}
 	if err := mw.Close(); err != nil {
@@ -265,6 +259,30 @@ func (c *Client) makeMultipart(request protocol.CompileRequest) (*os.File, strin
 		return cleanup(err)
 	}
 	return f, mw.FormDataContentType(), nil
+}
+
+func (c *Client) projectManifest(entry string) ([]projectarchive.File, error) {
+	if c.ProjectRoot == "" {
+		return nil, errors.New("project root is not configured")
+	}
+	candidates, _, err := projectarchive.Manifest(projectarchive.Options{
+		Root: c.ProjectRoot, Exclude: c.Exclude, RespectGitIgnore: c.RespectGitIgnore, MaxFiles: 20_000, MaxBytes: 2 << 30,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build project manifest: %w", err)
+	}
+	result, err := dependency.Select(entry, c.UploadMode, candidates)
+	if err != nil {
+		return nil, fmt.Errorf("select project dependencies: %w", err)
+	}
+	if !result.Resolved {
+		message := "dependency discovery has unresolved references"
+		if len(result.Diagnostics) > 0 {
+			message += ": " + dependency.FormatDiagnostic(result.Diagnostics[0])
+		}
+		return nil, fmt.Errorf("%s; inspect with 'latexmk files' or use --upload-mode all after reviewing the manifest", message)
+	}
+	return result.Files, nil
 }
 
 func (c *Client) jsonRequest(ctx context.Context, method, path string, body any, output any) error {
