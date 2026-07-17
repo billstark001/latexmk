@@ -95,21 +95,38 @@ The CLI searches upward for `.latexmk.json`:
 ```json
 {
   "server": "https://latex.example.edu",
-  "projectRoot": ".",
+  "rootMode": "entry",
   "engine": "xelatex",
   "timeout": "3m",
   "exclude": [".git", "node_modules", ".latexmk-cache", "*.aux", "*.fdb_latexmk", "*.fls", "*.log", "*.synctex.gz", "*.xdv"]
 }
 ```
 
-Use an environment variable instead of committing an access token:
+Without an explicit `projectRoot`, the project root is the directory containing
+the entry TeX file. This prevents a command run in a subdirectory from silently
+uploading its parent Git repository. Set `rootMode` to `git`, pass
+`--root-mode git`, or set `--project-root` to request a wider root explicitly.
+
+The project config may contain a `token` for a private, single-user setup. An
+environment variable is safer when the paper directory is committed or shared:
 
 ```sh
 export LATEXMK_TOKEN='lm_...'
 ```
 
-Add exclusions in `.latexmkignore`. Symlinks are not followed; the client fails
-when it encounters one so files outside the project root cannot be uploaded.
+The client does not upload `.latexmk.json`, `.latexmkignore`, `.env` files, or
+common private-key files by default, even when a project replaces the ordinary
+exclude list. Add further exclusions in `.latexmkignore`. Symlinks are not
+followed; the client fails when it encounters one so files outside the project
+root cannot be uploaded.
+
+Inspect the exact content-addressed manifest without contacting the server:
+
+```sh
+latexmk files main.tex
+latexmk files --json main.tex
+latexmk --dry-run main.tex
+```
 
 ```sh
 latexmk compile --engine xelatex main.tex

@@ -22,18 +22,18 @@ type Options struct {
 }
 
 type Stats struct {
-	Files int
-	Bytes int64
+	Files int   `json:"files"`
+	Bytes int64 `json:"bytes"`
 }
 
 // File is a validated, content-addressed project member. Manifest exposes the
 // same selection rules as Create so incremental uploads cannot accidentally
 // include a file that the legacy archive path would exclude.
 type File struct {
-	Path   string
-	Source string
-	SHA256 string
-	Size   int64
+	Path   string `json:"path"`
+	Source string `json:"-"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
 }
 
 func Create(dst io.Writer, opts Options) (Stats, error) {

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
 	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
@@ -25,6 +26,7 @@ type compileOptions struct {
 	server        string
 	token         string
 	projectRoot   string
+	rootMode      string
 	engine        string
 	outDir        string
 	timeout       time.Duration
@@ -37,6 +39,7 @@ type compileOptions struct {
 	force         bool
 	quiet         bool
 	jsonOutput    bool
+	dryRun        bool
 	insecure      bool
 	entry         string
 	exclude       []string
@@ -69,6 +72,8 @@ func run(args []string) int {
 			return runMeta(argv[1:], true)
 		case "clean":
 			return runClean(argv[1:])
+		case "files":
+			return runCompile(argv[1:], "", true)
 		case "compile":
 			argv = argv[1:]
 		}
@@ -83,10 +88,10 @@ func run(args []string) int {
 	case "pdflatex", "pdflatex.exe":
 		forcedEngine = "pdflatex"
 	}
-	return runCompile(argv, forcedEngine)
+	return runCompile(argv, forcedEngine, false)
 }
 
-func runCompile(args []string, forcedEngine string) int {
+func runCompile(args []string, forcedEngine string, listOnly bool) int {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fail(err)
@@ -99,6 +104,7 @@ func runCompile(args []string, forcedEngine string) int {
 		server:        cfg.Server,
 		token:         cfg.Token,
 		projectRoot:   cfg.ProjectRoot,
+		rootMode:      cfg.RootMode,
 		engine:        cfg.Engine,
 		outDir:        "",
 		timeout:       cfg.Timeout,
@@ -109,6 +115,7 @@ func runCompile(args []string, forcedEngine string) int {
 		insecure:      cfg.InsecureSkipVerify,
 		exclude:       cfg.Exclude,
 		configPath:    cfg.ConfigPath,
+		dryRun:        listOnly,
 	}
 	if forcedEngine != "" {
 		opts.engine = forcedEngine
@@ -123,6 +130,9 @@ func runCompile(args []string, forcedEngine string) int {
 	}
 	if err := normalizeCompilePaths(&opts, cwd); err != nil {
 		return fail(err)
+	}
+	if opts.dryRun {
+		return printManifest(opts)
 	}
 
 	c, err := client.New(opts.server, opts.token, opts.timeout, opts.insecure)
@@ -215,6 +225,15 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 				return err
 			}
 			opts.projectRoot = v
+		case a == "--root-mode" || strings.HasPrefix(a, "--root-mode="):
+			v, err := value("--root-mode")
+			if err != nil {
+				return err
+			}
+			if v != "entry" && v != "git" {
+				return fmt.Errorf("--root-mode must be entry or git, got %q", v)
+			}
+			opts.rootMode = v
 		case a == "--out-dir" || strings.HasPrefix(a, "--out-dir=") || a == "-output-directory" || strings.HasPrefix(a, "-output-directory="):
 			v, err := value("--out-dir")
 			if err != nil {
@@ -277,6 +296,8 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 			opts.quiet = true
 		case a == "--json":
 			opts.jsonOutput = true
+		case a == "--dry-run":
+			opts.dryRun = true
 		case a == "--insecure-skip-verify":
 			opts.insecure = true
 		case a == "--version":
@@ -300,19 +321,11 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 }
 
 func normalizeCompilePaths(opts *compileOptions, cwd string) error {
-	root, err := filepath.Abs(opts.projectRoot)
-	if err != nil {
-		return err
-	}
-	root, err = filepath.EvalSymlinks(root)
-	if err != nil {
-		return fmt.Errorf("project root: %w", err)
-	}
 	entryAbs := opts.entry
 	if !filepath.IsAbs(entryAbs) {
 		entryAbs = filepath.Join(cwd, entryAbs)
 	}
-	entryAbs, err = filepath.Abs(entryAbs)
+	entryAbs, err := filepath.Abs(entryAbs)
 	if err != nil {
 		return err
 	}
@@ -320,19 +333,42 @@ func normalizeCompilePaths(opts *compileOptions, cwd string) error {
 	if err != nil {
 		return fmt.Errorf("entry file: %w", err)
 	}
-	rel, err := filepath.Rel(root, entryAbs)
-	if err != nil {
-		return err
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("entry %s is outside project root %s", entryAbs, root)
-	}
 	st, err := os.Stat(entryAbs)
 	if err != nil {
 		return fmt.Errorf("entry file: %w", err)
 	}
 	if !st.Mode().IsRegular() {
 		return errors.New("entry is not a regular file")
+	}
+
+	root := opts.projectRoot
+	if root == "" {
+		switch opts.rootMode {
+		case "", "entry":
+			root = filepath.Dir(entryAbs)
+		case "git":
+			root, err = config.FindGitRoot(filepath.Dir(entryAbs))
+			if err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("invalid root mode %q", opts.rootMode)
+		}
+	}
+	root, err = filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("project root: %w", err)
+	}
+	rel, err := filepath.Rel(root, entryAbs)
+	if err != nil {
+		return err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("entry %s is outside project root %s", entryAbs, root)
 	}
 	opts.projectRoot = root
 	opts.entry = filepath.ToSlash(rel)
@@ -344,6 +380,34 @@ func normalizeCompilePaths(opts *compileOptions, cwd string) error {
 	}
 	opts.outDir, err = filepath.Abs(opts.outDir)
 	return err
+}
+
+type manifestView struct {
+	ProjectRoot string                `json:"projectRoot"`
+	Entry       string                `json:"entry"`
+	Files       []projectarchive.File `json:"files"`
+	Stats       projectarchive.Stats  `json:"stats"`
+}
+
+func printManifest(opts compileOptions) int {
+	files, stats, err := projectarchive.Manifest(projectarchive.Options{
+		Root: opts.projectRoot, Exclude: opts.exclude, MaxFiles: 20_000, MaxBytes: 2 << 30,
+	})
+	if err != nil {
+		return fail(fmt.Errorf("build project manifest: %w", err))
+	}
+	if opts.jsonOutput {
+		view := manifestView{ProjectRoot: opts.projectRoot, Entry: opts.entry, Files: files, Stats: stats}
+		if err := json.NewEncoder(os.Stdout).Encode(view); err != nil {
+			return fail(err)
+		}
+		return 0
+	}
+	fmt.Printf("project root: %s\nentry: %s\nfiles: %d\nbytes: %d\n", opts.projectRoot, opts.entry, stats.Files, stats.Bytes)
+	for _, file := range files {
+		fmt.Printf("%10d  %s  %s\n", file.Size, file.SHA256, file.Path)
+	}
+	return 0
 }
 
 func runMeta(args []string, doctor bool) int {
@@ -493,12 +557,14 @@ Usage:
   latexmk doctor
   latexmk init [--server URL]
   latexmk clean [main.tex]
+  latexmk files [options] <main.tex>
   latexmk version
 
 Compile options:
   --server URL                 Remote server URL
   --token TOKEN                Bearer token (prefer LATEXMK_TOKEN)
   --project-root DIR           Root directory uploaded to the server
+  --root-mode entry|git        Default root when --project-root is absent
   --out-dir DIR                Local root for returned artifacts
   --engine xelatex|lualatex|pdflatex
   --timeout 3m                 End-to-end request timeout
@@ -506,6 +572,7 @@ Compile options:
   --jobname NAME               TeX job name
   --no-synctex                 Disable SyncTeX
   --json                       Print machine-readable result
+  --dry-run                    Print the upload manifest without contacting the server
 
 The executable may be symlinked as xelatex, lualatex, or pdflatex.
 Configuration is read from .latexmk.json and environment variables.

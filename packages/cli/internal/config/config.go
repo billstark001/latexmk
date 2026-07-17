@@ -15,6 +15,7 @@ type FileConfig struct {
 	Server             string   `json:"server"`
 	Token              string   `json:"token,omitempty"`
 	ProjectRoot        string   `json:"projectRoot,omitempty"`
+	RootMode           string   `json:"rootMode,omitempty"`
 	Engine             string   `json:"engine,omitempty"`
 	Timeout            string   `json:"timeout,omitempty"`
 	Exclude            []string `json:"exclude,omitempty"`
@@ -25,6 +26,7 @@ type Resolved struct {
 	Server             string
 	Token              string
 	ProjectRoot        string
+	RootMode           string
 	Engine             string
 	Timeout            time.Duration
 	Exclude            []string
@@ -32,12 +34,46 @@ type Resolved struct {
 	ConfigPath         string
 }
 
+// DefaultExcludes returns files that should not be uploaded without an
+// explicit configuration override.
+func DefaultExcludes() []string {
+	return []string{
+		".git",
+		"node_modules",
+		".latexmk-cache",
+		"*.aux",
+		"*.fdb_latexmk",
+		"*.fls",
+		"*.log",
+		"*.synctex.gz",
+		"*.xdv",
+	}
+}
+
+// DefaultDeny returns local configuration and credential patterns that remain
+// excluded even when a project replaces the ordinary exclude list.
+func DefaultDeny() []string {
+	return []string{
+		FileName,
+		".latexmkignore",
+		".env",
+		".env.*",
+		"*.key",
+		"*.pem",
+		"*.p12",
+		"*.pfx",
+		"id_rsa",
+		"id_ed25519",
+	}
+}
+
 func Load(start string) (Resolved, error) {
 	cfg := FileConfig{
-		Server:  "http://127.0.0.1:8080",
-		Engine:  "xelatex",
-		Timeout: "3m",
-		Exclude: []string{".git", "node_modules", ".latexmk-cache", "*.aux", "*.fdb_latexmk", "*.fls", "*.log", "*.synctex.gz", "*.xdv"},
+		Server:   "http://127.0.0.1:8080",
+		RootMode: "entry",
+		Engine:   "xelatex",
+		Timeout:  "3m",
+		Exclude:  DefaultExcludes(),
 	}
 	path, err := findConfig(start)
 	if err != nil {
@@ -52,6 +88,7 @@ func Load(start string) (Resolved, error) {
 			return Resolved{}, fmt.Errorf("parse %s: %w", path, err)
 		}
 	}
+	cfg.Exclude = mergePatterns(cfg.Exclude, DefaultDeny())
 
 	if v := os.Getenv("LATEXMK_SERVER"); v != "" {
 		cfg.Server = v
@@ -61,6 +98,12 @@ func Load(start string) (Resolved, error) {
 	}
 	if v := os.Getenv("LATEXMK_ENGINE"); v != "" {
 		cfg.Engine = v
+	}
+	if v := os.Getenv("LATEXMK_ROOT_MODE"); v != "" {
+		cfg.RootMode = v
+	}
+	if cfg.RootMode != "entry" && cfg.RootMode != "git" {
+		return Resolved{}, fmt.Errorf("invalid rootMode %q; expected entry or git", cfg.RootMode)
 	}
 
 	timeout, err := time.ParseDuration(cfg.Timeout)
@@ -72,33 +115,51 @@ func Load(start string) (Resolved, error) {
 	}
 
 	root := cfg.ProjectRoot
-	if root == "" {
-		root, err = findGitRoot(start)
-		if err != nil {
-			return Resolved{}, err
-		}
-	} else if !filepath.IsAbs(root) {
+	if root != "" && !filepath.IsAbs(root) {
 		base := start
 		if path != "" {
 			base = filepath.Dir(path)
 		}
 		root = filepath.Join(base, root)
 	}
-	root, err = filepath.Abs(root)
-	if err != nil {
-		return Resolved{}, err
+	if root != "" {
+		root, err = filepath.Abs(root)
+		if err != nil {
+			return Resolved{}, err
+		}
 	}
 
+	resolvedRoot := ""
+	if root != "" {
+		resolvedRoot = filepath.Clean(root)
+	}
 	return Resolved{
 		Server:             cfg.Server,
 		Token:              cfg.Token,
-		ProjectRoot:        filepath.Clean(root),
+		ProjectRoot:        resolvedRoot,
+		RootMode:           cfg.RootMode,
 		Engine:             cfg.Engine,
 		Timeout:            timeout,
 		Exclude:            cfg.Exclude,
 		InsecureSkipVerify: cfg.InsecureSkipVerify,
 		ConfigPath:         path,
 	}, nil
+}
+
+func mergePatterns(base, required []string) []string {
+	result := append([]string{}, base...)
+	seen := make(map[string]struct{}, len(result))
+	for _, pattern := range result {
+		seen[pattern] = struct{}{}
+	}
+	for _, pattern := range required {
+		if _, ok := seen[pattern]; ok {
+			continue
+		}
+		result = append(result, pattern)
+		seen[pattern] = struct{}{}
+	}
+	return result
 }
 
 func Write(path string, cfg FileConfig) error {
@@ -108,12 +169,16 @@ func Write(path string, cfg FileConfig) error {
 	if cfg.Engine == "" {
 		cfg.Engine = "xelatex"
 	}
+	if cfg.RootMode == "" {
+		cfg.RootMode = "entry"
+	}
 	if cfg.Timeout == "" {
 		cfg.Timeout = "3m"
 	}
 	if len(cfg.Exclude) == 0 {
-		cfg.Exclude = []string{".git", "node_modules", ".latexmk-cache", "*.aux", "*.fdb_latexmk", "*.fls", "*.log", "*.synctex.gz", "*.xdv"}
+		cfg.Exclude = DefaultExcludes()
 	}
+	cfg.Exclude = mergePatterns(cfg.Exclude, DefaultDeny())
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -140,19 +205,19 @@ func findConfig(start string) (string, error) {
 	}
 }
 
-func findGitRoot(start string) (string, error) {
+// FindGitRoot returns the nearest Git work tree root above start.
+func FindGitRoot(start string) (string, error) {
 	dir, err := filepath.Abs(start)
 	if err != nil {
 		return "", err
 	}
-	original := dir
 	for {
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 			return dir, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return original, nil
+			return "", fmt.Errorf("no Git root found from %s", start)
 		}
 		dir = parent
 	}
