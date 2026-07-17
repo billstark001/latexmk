@@ -9,6 +9,7 @@ export interface CapabilitySet {
   shellEscapeAllowed: boolean;
   incrementalUpload: boolean;
   queuedJobs: boolean;
+  dependencyInputs: boolean;
   maxQueuedJobs: number;
   maxStateBytes: number;
   maxUploadSessions: number;
@@ -38,6 +39,7 @@ export interface CompileResult {
   engine: string;
   error?: string;
   artifacts: { path: string; size: number; sha256: string }[];
+  inputFiles?: string[];
 }
 
 export interface Job {

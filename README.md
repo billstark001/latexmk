@@ -126,6 +126,12 @@ load more files. Always inspect `latexmk files` for a sensitive project. See
 [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md) for supported commands and
 limitations.
 
+Successful compiles cache workspace-local `.fls` INPUT paths in
+`.latexmk-cache/dependencies.json`, keyed by entry and engine. Cached paths must
+still pass the current Git-ignore and deny policies. When history covers a
+dynamic reference, the CLI warns because the path set may be stale; it never
+falls back to `all` automatically.
+
 The project config may contain a `token` for a private, single-user setup. A
 user config, environment variable, or token file is safer when the paper
 directory is committed or shared:

@@ -67,6 +67,42 @@ performed by an unsupported command or package. `resolved: true` means all
 recognized references were resolved; it is not a proof that the dependency set
 is complete.
 
-The next layers are cached `.fls` INPUT records and a bounded server
-`needs_files` protocol. They will cover more dynamic cases without silently
-falling back to whole-project upload.
+## Recorder cache
+
+The server runs `latexmk` with `-recorder`. It parses `.fls` `INPUT` records
+after compilation and returns only normalized paths for regular files inside
+the disposable project workspace. TeX Live system paths, absolute container
+paths, paths outside the workspace, and symlink escapes are not returned.
+
+After a successful compile, the client stores these relative paths in:
+
+```text
+.latexmk-cache/dependencies.json
+```
+
+The cache is keyed by entry file and engine, written atomically with mode 0600
+where supported, and excluded from uploads by default. A cached path is selected
+only if it is also present in the current Git-ignore/denylist-filtered manifest.
+Changing policy therefore cannot make an old cache restore a denied file.
+
+History may cover a dynamic reference that the static scanner cannot expand.
+The CLI reports this as a warning because the path set can be stale. Missing
+literal references, malformed supported commands, and out-of-root paths still
+fail closed even when history exists. A first compile with dynamic dependencies
+can be bootstrapped only after reviewing the full manifest explicitly:
+
+```sh
+latexmk files --upload-mode all main.tex
+latexmk --upload-mode all main.tex
+# A successful compile records project-local INPUT paths.
+latexmk files main.tex
+latexmk main.tex
+```
+
+The client never silently falls back to `all`. A corrupt cache blocks `auto`
+with an explicit error; reviewed `--upload-mode all` remains available and does
+not read the cache.
+
+The next layer is a bounded server `needs_files` protocol. It will handle a new
+dynamic dependency that is absent from stale history without uploading the
+whole project.

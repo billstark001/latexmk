@@ -23,6 +23,9 @@ at the application and deployment layers.
 - Automatic dependency selection runs only on the manifest that already passed
   Git-ignore, denylist, path, and symlink policy. It cannot request or restore a
   filtered file.
+- Recorder INPUT history contains normalized workspace-relative paths only.
+  System TeX paths and paths outside the compile workspace are discarded, and
+  cached paths must pass the client's current upload policy again.
 - Upload blobs, logs, artifacts, concurrent compiles, queued jobs, state bytes,
   and upload sessions have hard limits.
 - A state sweeper expires results, project snapshots, and orphaned blobs. It

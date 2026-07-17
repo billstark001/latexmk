@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,5 +104,38 @@ func TestCollectArtifactsIncludesXdvipdfmxPDF(t *testing.T) {
 	}
 	if !foundPDF {
 		t.Fatal("main.pdf was not collected")
+	}
+}
+
+func TestCollectRecordedInputsOnlyReturnsWorkspaceFiles(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.tex")
+	for name, content := range map[string]string{
+		"main.tex":          "main",
+		"sections/body.tex": "body",
+		"main.aux":          "generated",
+	} {
+		file := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fls := fmt.Sprintf("PWD %s\nINPUT main.tex\nINPUT sections/body.tex\nINPUT main.aux\nINPUT %s\nINPUT /usr/share/texmf/system.sty\n", root, outside)
+	if err := os.WriteFile(filepath.Join(root, "main.fls"), []byte(fls), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := collectRecordedInputs(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(inputs, ",")
+	if got != "main.aux,main.tex,sections/body.tex" {
+		t.Fatalf("recorded inputs = %q", got)
 	}
 }

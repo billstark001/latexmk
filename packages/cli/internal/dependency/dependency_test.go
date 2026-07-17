@@ -155,6 +155,51 @@ func TestSelectAllKeepsEveryPolicyAllowedCandidate(t *testing.T) {
 	}
 }
 
+func TestCachedInputsCoverDynamicReferencesWithoutBypassingPolicy(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "main.tex", `\input{\chapterfile}`)
+	writeFile(t, root, "chapter.tex", "chapter")
+	writeFile(t, root, "private.tex", "secret")
+	candidates, _, err := projectarchive.Manifest(projectarchive.Options{Root: root, Exclude: []string{"private.tex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := SelectWithCachedInputs("main.tex", "auto", candidates, []string{"main.tex", "chapter.tex", "private.tex"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Resolved {
+		t.Fatalf("cached result unresolved: %#v", result.Diagnostics)
+	}
+	got := make(map[string]bool)
+	for _, file := range result.Files {
+		got[file.Path] = true
+	}
+	if !got["main.tex"] || !got["chapter.tex"] || got["private.tex"] {
+		t.Fatalf("cached selection = %#v", result.Files)
+	}
+	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Resolution == "" {
+		t.Fatalf("cached diagnostic = %#v", result.Diagnostics)
+	}
+}
+
+func TestCachedInputsDoNotCoverMissingLiteralReferences(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "main.tex", `\input{missing}`)
+	writeFile(t, root, "old-chapter.tex", "old")
+	candidates, _, err := projectarchive.Manifest(projectarchive.Options{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := SelectWithCachedInputs("main.tex", "auto", candidates, []string{"main.tex", "old-chapter.tex"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Resolved {
+		t.Fatalf("missing literal was covered by stale cache: %#v", result)
+	}
+}
+
 func writeFile(t *testing.T, root, name, content string) {
 	t.Helper()
 	file := filepath.Join(root, filepath.FromSlash(name))

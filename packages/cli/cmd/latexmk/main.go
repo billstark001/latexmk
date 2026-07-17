@@ -167,6 +167,9 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 	if err != nil {
 		return fail(err)
 	}
+	for _, warning := range out.Warnings {
+		fmt.Fprintln(os.Stderr, "latexmk: warning:", warning)
+	}
 	if opts.jsonOutput {
 		_ = json.NewEncoder(os.Stdout).Encode(out.Result)
 	} else {
@@ -428,7 +431,15 @@ func printManifest(opts compileOptions) int {
 	if err != nil {
 		return fail(fmt.Errorf("build project manifest: %w", err))
 	}
-	result, err := dependency.Select(opts.entry, opts.uploadMode, candidates)
+	var cached []string
+	historyAvailable := false
+	if opts.uploadMode != "all" {
+		cached, historyAvailable, err = dependency.LoadCachedInputs(opts.projectRoot, opts.entry, opts.engine)
+		if err != nil {
+			return fail(fmt.Errorf("load dependency cache: %w", err))
+		}
+	}
+	result, err := dependency.SelectWithCachedInputs(opts.entry, opts.uploadMode, candidates, cached, historyAvailable)
 	if err != nil {
 		return fail(fmt.Errorf("select project dependencies: %w", err))
 	}

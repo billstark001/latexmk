@@ -154,6 +154,19 @@ func (r *Runner) Run(parent context.Context, workspace string, req api.CompileRe
 	for _, f := range files {
 		result.Artifacts = append(result.Artifacts, api.Artifact{Path: f.RelativePath, Size: f.Size, SHA256: f.SHA256})
 	}
+	if req.RecordInputs {
+		inputFiles, inputErr := collectRecordedInputs(workspace)
+		if inputErr != nil {
+			if result.Error == "" {
+				result.Error = inputErr.Error()
+			} else {
+				result.Error += "; input collection: " + inputErr.Error()
+			}
+			result.Success = false
+		} else {
+			result.InputFiles = inputFiles
+		}
+	}
 	result.StdoutTruncated = stdout.Truncated()
 	result.StderrTruncated = stderr.Truncated()
 	result.DurationMS = time.Since(started).Milliseconds()
@@ -339,6 +352,98 @@ func parseFLS(root, flsPath string, candidates map[string]struct{}) error {
 		candidates[filepath.ToSlash(rel)] = struct{}{}
 	}
 	return s.Err()
+}
+
+func collectRecordedInputs(root string) ([]string, error) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	rootResolved, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace for input collection: %w", err)
+	}
+	inputs := make(map[string]struct{})
+	err = filepath.WalkDir(rootAbs, func(filePath string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() || !strings.HasSuffix(strings.ToLower(d.Name()), ".fls") {
+			return nil
+		}
+		return parseRecordedInputs(rootResolved, filePath, inputs)
+	})
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(inputs))
+	for input := range inputs {
+		paths = append(paths, input)
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+func parseRecordedInputs(root, flsPath string, inputs map[string]struct{}) error {
+	f, err := os.Open(flsPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	pwd := root
+	s := bufio.NewScanner(io.LimitReader(f, 16<<20))
+	s.Buffer(make([]byte, 64<<10), 1<<20)
+	for s.Scan() {
+		line := s.Text()
+		if strings.HasPrefix(line, "PWD ") {
+			candidate := strings.TrimSpace(strings.TrimPrefix(line, "PWD "))
+			if resolved, ok := recordedPath(root, root, candidate); ok {
+				pwd = resolved
+			}
+			continue
+		}
+		if !strings.HasPrefix(line, "INPUT ") {
+			continue
+		}
+		value := strings.TrimSpace(strings.TrimPrefix(line, "INPUT "))
+		resolved, ok := recordedPath(root, pwd, value)
+		if !ok {
+			continue
+		}
+		info, err := os.Stat(resolved)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		resolved, err = filepath.EvalSymlinks(resolved)
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(root, resolved)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		inputs[filepath.ToSlash(rel)] = struct{}{}
+	}
+	return s.Err()
+}
+
+func recordedPath(root, base, value string) (string, bool) {
+	if value == "" || strings.ContainsRune(value, '\x00') {
+		return "", false
+	}
+	candidate := filepath.FromSlash(value)
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(base, candidate)
+	}
+	candidate, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return candidate, true
 }
 
 func allowedArtifact(path string) bool {

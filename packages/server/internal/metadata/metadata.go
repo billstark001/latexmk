@@ -65,6 +65,7 @@ func Collect(cfg config.Config, build BuildInfo) api.Metadata {
 			PersistentWorkspace: true,
 			IncrementalUpload:   true,
 			QueuedJobs:          true,
+			DependencyInputs:    true,
 			MaxQueuedJobs:       cfg.MaxQueuedJobs,
 			MaxStateBytes:       cfg.MaxStateBytes,
 			MaxUploadSessions:   cfg.MaxUploadSessions,

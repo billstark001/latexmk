@@ -38,9 +38,10 @@ type Client struct {
 }
 
 type CompileOutput struct {
-	Result protocol.CompileResult
-	Stdout []byte
-	Stderr []byte
+	Result   protocol.CompileResult
+	Stdout   []byte
+	Stderr   []byte
+	Warnings []string
 }
 
 func New(baseURL, token string, timeout time.Duration, insecure bool) (*Client, error) {
@@ -102,7 +103,7 @@ func (c *Client) Health(ctx context.Context) error {
 }
 
 func (c *Client) Compile(ctx context.Context, request protocol.CompileRequest, outputRoot string) (CompileOutput, error) {
-	files, err := c.projectManifest(request.Entry)
+	files, selectionWarnings, err := c.projectManifest(request.Entry, request.Engine)
 	if err != nil {
 		return CompileOutput{}, err
 	}
@@ -110,13 +111,27 @@ func (c *Client) Compile(ctx context.Context, request protocol.CompileRequest, o
 	if err != nil {
 		return CompileOutput{}, err
 	}
+	request.RecordInputs = meta.Capabilities.DependencyInputs
+	var output CompileOutput
 	if meta.Capabilities.IncrementalUpload && meta.Capabilities.QueuedJobs {
-		return c.compileQueued(ctx, request, outputRoot, files)
+		output, err = c.compileQueued(ctx, request, outputRoot, files)
+	} else {
+		if meta.ProtocolVersion == 1 {
+			request.ProtocolVersion = 1
+		}
+		output, err = c.compileLegacy(ctx, request, outputRoot, files)
 	}
-	if meta.ProtocolVersion == 1 {
-		request.ProtocolVersion = 1
+	if err != nil {
+		output.Warnings = append(output.Warnings, selectionWarnings...)
+		return output, err
 	}
-	return c.compileLegacy(ctx, request, outputRoot, files)
+	output.Warnings = append(output.Warnings, selectionWarnings...)
+	if output.Result.Success && len(output.Result.InputFiles) > 0 {
+		if cacheErr := dependency.SaveCachedInputs(c.ProjectRoot, request.Entry, request.Engine, output.Result.InputFiles); cacheErr != nil {
+			output.Warnings = append(output.Warnings, "could not update dependency cache: "+cacheErr.Error())
+		}
+	}
+	return output, nil
 }
 
 func (c *Client) compileLegacy(ctx context.Context, request protocol.CompileRequest, outputRoot string, files []projectarchive.File) (CompileOutput, error) {
@@ -261,28 +276,42 @@ func (c *Client) makeMultipart(request protocol.CompileRequest, files []projecta
 	return f, mw.FormDataContentType(), nil
 }
 
-func (c *Client) projectManifest(entry string) ([]projectarchive.File, error) {
+func (c *Client) projectManifest(entry, engine string) ([]projectarchive.File, []string, error) {
 	if c.ProjectRoot == "" {
-		return nil, errors.New("project root is not configured")
+		return nil, nil, errors.New("project root is not configured")
 	}
 	candidates, _, err := projectarchive.Manifest(projectarchive.Options{
 		Root: c.ProjectRoot, Exclude: c.Exclude, RespectGitIgnore: c.RespectGitIgnore, MaxFiles: 20_000, MaxBytes: 2 << 30,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("build project manifest: %w", err)
+		return nil, nil, fmt.Errorf("build project manifest: %w", err)
 	}
-	result, err := dependency.Select(entry, c.UploadMode, candidates)
+	var cached []string
+	historyAvailable := false
+	if c.UploadMode != "all" {
+		cached, historyAvailable, err = dependency.LoadCachedInputs(c.ProjectRoot, entry, engine)
+		if err != nil {
+			return nil, nil, fmt.Errorf("load dependency cache: %w", err)
+		}
+	}
+	result, err := dependency.SelectWithCachedInputs(entry, c.UploadMode, candidates, cached, historyAvailable)
 	if err != nil {
-		return nil, fmt.Errorf("select project dependencies: %w", err)
+		return nil, nil, fmt.Errorf("select project dependencies: %w", err)
 	}
 	if !result.Resolved {
 		message := "dependency discovery has unresolved references"
 		if len(result.Diagnostics) > 0 {
 			message += ": " + dependency.FormatDiagnostic(result.Diagnostics[0])
 		}
-		return nil, fmt.Errorf("%s; inspect with 'latexmk files' or use --upload-mode all after reviewing the manifest", message)
+		return nil, nil, fmt.Errorf("%s; inspect with 'latexmk files' or use --upload-mode all after reviewing the manifest", message)
 	}
-	return result.Files, nil
+	warnings := make([]string, 0)
+	for _, diagnostic := range result.Diagnostics {
+		if diagnostic.Resolution != "" {
+			warnings = append(warnings, "dependency history used: "+dependency.FormatDiagnostic(diagnostic))
+		}
+	}
+	return result.Files, warnings, nil
 }
 
 func (c *Client) jsonRequest(ctx context.Context, method, path string, body any, output any) error {

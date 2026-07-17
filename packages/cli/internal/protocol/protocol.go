@@ -16,6 +16,7 @@ type CompileRequest struct {
 	JobName         string `json:"jobName,omitempty"`
 	Force           bool   `json:"force,omitempty"`
 	Quiet           bool   `json:"quiet,omitempty"`
+	RecordInputs    bool   `json:"recordInputs,omitempty"`
 }
 
 type Artifact struct {
@@ -36,6 +37,7 @@ type CompileResult struct {
 	ServerVersion   string     `json:"serverVersion"`
 	ImageProfile    string     `json:"imageProfile"`
 	Artifacts       []Artifact `json:"artifacts"`
+	InputFiles      []string   `json:"inputFiles,omitempty"`
 	StdoutTruncated bool       `json:"stdoutTruncated"`
 	StderrTruncated bool       `json:"stderrTruncated"`
 	Error           string     `json:"error,omitempty"`
@@ -99,6 +101,7 @@ type Capabilities struct {
 	PersistentWorkspace bool     `json:"persistentWorkspace"`
 	IncrementalUpload   bool     `json:"incrementalUpload"`
 	QueuedJobs          bool     `json:"queuedJobs"`
+	DependencyInputs    bool     `json:"dependencyInputs"`
 	MaxQueuedJobs       int      `json:"maxQueuedJobs"`
 	MaxStateBytes       int64    `json:"maxStateBytes"`
 	MaxUploadSessions   int      `json:"maxUploadSessions"`

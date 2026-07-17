@@ -69,6 +69,13 @@ stderr.log
 artifacts/<relative path>
 ```
 
+`result.json` may include `inputFiles`, a sorted list of `.fls` INPUT paths that
+resolved to regular files inside the compile workspace. It never includes TeX
+Live system files or absolute server paths. Servers advertise this additive
+field with `capabilities.dependencyInputs`. A new client requests it by adding
+`"recordInputs": true` only after observing that capability. This keeps result
+JSON compatible with older clients that reject unknown fields.
+
 Clients must validate every returned path is below their local output root and
 should write through a temporary file followed by rename.
 

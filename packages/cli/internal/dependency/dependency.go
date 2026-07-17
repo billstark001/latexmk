@@ -16,12 +16,13 @@ import (
 const maxParsedFileSize = 8 << 20
 
 type Diagnostic struct {
-	File      string `json:"file"`
-	Line      int    `json:"line"`
-	Command   string `json:"command"`
-	Reference string `json:"reference,omitempty"`
-	Kind      string `json:"kind"`
-	Message   string `json:"message"`
+	File       string `json:"file"`
+	Line       int    `json:"line"`
+	Command    string `json:"command"`
+	Reference  string `json:"reference,omitempty"`
+	Kind       string `json:"kind"`
+	Message    string `json:"message"`
+	Resolution string `json:"resolution,omitempty"`
 }
 
 type Result struct {
@@ -50,6 +51,63 @@ func Select(entry, mode string, candidates []projectarchive.File) (Result, error
 	}
 }
 
+// SelectWithCachedInputs adds project-local INPUT records from a previous
+// successful compile. Cached paths still have to exist in the current
+// policy-filtered manifest. History can cover dynamic references, but never
+// missing literal paths, malformed commands, or paths outside the project.
+func SelectWithCachedInputs(entry, mode string, candidates []projectarchive.File, cached []string, historyAvailable bool) (Result, error) {
+	result, err := Select(entry, mode, candidates)
+	if err != nil || mode == "all" {
+		return result, err
+	}
+	byPath := make(map[string]projectarchive.File, len(candidates))
+	selected := make(map[string]projectarchive.File, len(result.Files)+len(cached))
+	for _, file := range candidates {
+		byPath[file.Path] = file
+	}
+	for _, file := range result.Files {
+		selected[file.Path] = file
+	}
+	acceptedHistory := false
+	for _, cachedPath := range cached {
+		file, ok := byPath[cachedPath]
+		if !ok {
+			continue
+		}
+		if cachedPath != cleanProjectPath(entry) {
+			acceptedHistory = true
+		}
+		if _, exists := selected[cachedPath]; exists {
+			continue
+		}
+		file.Reason = "previous successful compile (.fls INPUT)"
+		selected[cachedPath] = file
+	}
+	if historyAvailable && acceptedHistory {
+		for i := range result.Diagnostics {
+			if result.Diagnostics[i].Kind == "dynamic" {
+				result.Diagnostics[i].Resolution = "previous successful compile (.fls INPUT)"
+			}
+		}
+	}
+	result.Files = result.Files[:0]
+	result.Stats = projectarchive.Stats{}
+	for _, file := range selected {
+		result.Files = append(result.Files, file)
+		result.Stats.Files++
+		result.Stats.Bytes += file.Size
+	}
+	sort.Slice(result.Files, func(i, j int) bool { return result.Files[i].Path < result.Files[j].Path })
+	result.Resolved = true
+	for _, diagnostic := range result.Diagnostics {
+		if diagnostic.Resolution == "" {
+			result.Resolved = false
+			break
+		}
+	}
+	return result, nil
+}
+
 func FormatDiagnostic(diagnostic Diagnostic) string {
 	location := diagnostic.File
 	if diagnostic.Line > 0 {
@@ -59,10 +117,14 @@ func FormatDiagnostic(diagnostic Diagnostic) string {
 	if diagnostic.Command != "" {
 		reference = "\\" + diagnostic.Command + "{" + diagnostic.Reference + "}"
 	}
-	if reference != "" {
-		return fmt.Sprintf("%s: %s: %s", location, reference, diagnostic.Message)
+	message := diagnostic.Message
+	if diagnostic.Resolution != "" {
+		message += "; covered by " + diagnostic.Resolution
 	}
-	return fmt.Sprintf("%s: %s", location, diagnostic.Message)
+	if reference != "" {
+		return fmt.Sprintf("%s: %s: %s", location, reference, message)
+	}
+	return fmt.Sprintf("%s: %s", location, message)
 }
 
 type commandSpec struct {

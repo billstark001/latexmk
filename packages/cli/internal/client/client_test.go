@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
 	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
 )
 
@@ -120,11 +121,11 @@ func TestCompileUsesQueuedIncrementalProtocol(t *testing.T) {
 	}
 	var planned protocol.UploadPlanRequest
 	var uploaded []byte
-	resultArchive := buildResultArchive(t, []tarEntry{{name: "result.json", payload: []byte(`{"protocolVersion":2,"requestId":"job_test","success":true,"exitCode":0}`)}})
+	resultArchive := buildResultArchive(t, []tarEntry{{name: "result.json", payload: []byte(`{"protocolVersion":2,"requestId":"job_test","success":true,"exitCode":0,"inputFiles":["main.tex"]}`)}})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/meta":
-			_ = json.NewEncoder(w).Encode(protocol.Metadata{ProtocolVersion: 2, Capabilities: protocol.Capabilities{IncrementalUpload: true, QueuedJobs: true}})
+			_ = json.NewEncoder(w).Encode(protocol.Metadata{ProtocolVersion: 2, Capabilities: protocol.Capabilities{IncrementalUpload: true, QueuedJobs: true, DependencyInputs: true}})
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/uploads/plans":
 			if err := json.NewDecoder(r.Body).Decode(&planned); err != nil {
 				t.Error(err)
@@ -160,6 +161,68 @@ func TestCompileUsesQueuedIncrementalProtocol(t *testing.T) {
 	if !output.Result.Success || string(uploaded) != "hello" || len(planned.Files) != 1 {
 		t.Fatalf("queued compile result=%#v upload=%q plan=%#v", output.Result, uploaded, planned)
 	}
+	if !planned.Request.RecordInputs {
+		t.Fatal("client did not negotiate recorder INPUT results")
+	}
+	if _, err := os.Stat(filepath.Join(root, ".latexmk-cache", "dependencies.json")); err != nil {
+		t.Fatalf("dependency cache was not saved: %v", err)
+	}
+}
+
+func TestProjectManifestUsesCachedInputsForDynamicReferences(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte(`\input{\chapterfile}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "chapter.tex"), []byte("chapter"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := dependency.SaveCachedInputs(root, "main.tex", "xelatex", []string{"main.tex", "chapter.tex"}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := New("http://127.0.0.1:1", "", time.Second, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.ProjectRoot = root
+	files, warnings, err := c.projectManifest("main.tex", "xelatex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files[0].Path != "chapter.tex" || files[1].Path != "main.tex" {
+		t.Fatalf("cached manifest = %#v", files)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("cached manifest warnings = %#v", warnings)
+	}
+}
+
+func TestProjectManifestAllModeCanBypassBrokenCache(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte("main"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := filepath.Join(root, ".latexmk-cache")
+	if err := os.Mkdir(cacheDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "dependencies.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := New("http://127.0.0.1:1", "", time.Second, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.ProjectRoot = root
+	c.Exclude = []string{".latexmk-cache"}
+	c.UploadMode = "all"
+	files, _, err := c.projectManifest("main.tex", "xelatex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Path != "main.tex" {
+		t.Fatalf("all-mode manifest = %#v", files)
+	}
 }
 
 func TestCompileLegacyArchiveExcludesUnrelatedFiles(t *testing.T) {
@@ -171,6 +234,7 @@ func TestCompileLegacyArchiveExcludesUnrelatedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	var uploaded []string
+	var receivedRequest protocol.CompileRequest
 	resultArchive := buildResultArchive(t, []tarEntry{{name: "result.json", payload: []byte(`{"protocolVersion":1,"requestId":"req_test","success":true,"exitCode":0}`)}})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -192,6 +256,15 @@ func TestCompileLegacyArchiveExcludesUnrelatedFiles(t *testing.T) {
 					t.Error(err)
 					w.WriteHeader(http.StatusBadRequest)
 					return
+				}
+				if part.FormName() == "request" {
+					if err := json.NewDecoder(part).Decode(&receivedRequest); err != nil {
+						t.Error(err)
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					_ = part.Close()
+					continue
 				}
 				if part.FormName() != "project" {
 					_, _ = io.Copy(io.Discard, part)
@@ -239,6 +312,9 @@ func TestCompileLegacyArchiveExcludesUnrelatedFiles(t *testing.T) {
 	}
 	if !output.Result.Success || len(uploaded) != 1 || uploaded[0] != "main.tex" {
 		t.Fatalf("legacy compile result=%#v uploaded=%#v", output.Result, uploaded)
+	}
+	if receivedRequest.RecordInputs {
+		t.Fatal("client sent recordInputs to a server that did not advertise it")
 	}
 }
 
