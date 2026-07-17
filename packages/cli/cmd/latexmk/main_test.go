@@ -121,3 +121,17 @@ func TestParseCompileArgsUploadMode(t *testing.T) {
 		t.Fatal("expected unsupported upload mode to fail")
 	}
 }
+
+func TestParseCompileArgsManifestFiles(t *testing.T) {
+	opts := compileOptions{timeout: time.Minute, uploadMode: "auto"}
+	args := []string{"--upload-mode", "manifest", "--manifest", ".latexmk-files", "--include-file", "chapter.tex", "--include-file=figure.pdf", "main.tex"}
+	if err := parseCompileArgs(args, &opts); err != nil {
+		t.Fatal(err)
+	}
+	if opts.uploadMode != "manifest" || opts.manifestFile != ".latexmk-files" {
+		t.Fatalf("manifest options = %#v", opts)
+	}
+	if len(opts.includeFiles) != 2 || opts.includeFiles[0] != "chapter.tex" || opts.includeFiles[1] != "figure.pdf" {
+		t.Fatalf("include files = %#v", opts.includeFiles)
+	}
+}

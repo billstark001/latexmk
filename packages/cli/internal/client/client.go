@@ -35,6 +35,8 @@ type Client struct {
 	Exclude          []string
 	RespectGitIgnore bool
 	UploadMode       string
+	ManifestFile     string
+	IncludeFiles     []string
 }
 
 type CompileOutput struct {
@@ -280,21 +282,39 @@ func (c *Client) projectManifest(entry, engine string) ([]projectarchive.File, [
 	if c.ProjectRoot == "" {
 		return nil, nil, errors.New("project root is not configured")
 	}
+	exclude := append([]string(nil), c.Exclude...)
+	manifestPath := ""
+	if c.ManifestFile != "" {
+		var err error
+		manifestPath, err = dependency.NormalizeExplicitManifestPath(c.ManifestFile)
+		if err != nil {
+			return nil, nil, fmt.Errorf("manifest path: %w", err)
+		}
+		exclude = append(exclude, manifestPath)
+	}
 	candidates, _, err := projectarchive.Manifest(projectarchive.Options{
-		Root: c.ProjectRoot, Exclude: c.Exclude, RespectGitIgnore: c.RespectGitIgnore, MaxFiles: 20_000, MaxBytes: 2 << 30,
+		Root: c.ProjectRoot, Exclude: exclude, RespectGitIgnore: c.RespectGitIgnore, MaxFiles: 20_000, MaxBytes: 2 << 30,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("build project manifest: %w", err)
 	}
 	var cached []string
+	explicit := append([]string(nil), c.IncludeFiles...)
 	historyAvailable := false
 	if c.UploadMode != "all" {
+		manifestFiles, manifestErr := dependency.LoadExplicitManifest(c.ProjectRoot, manifestPath)
+		if manifestErr != nil {
+			return nil, nil, fmt.Errorf("load explicit manifest: %w", manifestErr)
+		}
+		explicit = append(explicit, manifestFiles...)
+	}
+	if c.UploadMode == "auto" || c.UploadMode == "" {
 		cached, historyAvailable, err = dependency.LoadCachedInputs(c.ProjectRoot, entry, engine)
 		if err != nil {
 			return nil, nil, fmt.Errorf("load dependency cache: %w", err)
 		}
 	}
-	result, err := dependency.SelectWithCachedInputs(entry, c.UploadMode, candidates, cached, historyAvailable)
+	result, err := dependency.SelectWithOptions(entry, candidates, dependency.SelectionOptions{Mode: c.UploadMode, ExplicitFiles: explicit, CachedFiles: cached, HistoryAvailable: historyAvailable})
 	if err != nil {
 		return nil, nil, fmt.Errorf("select project dependencies: %w", err)
 	}
@@ -308,7 +328,7 @@ func (c *Client) projectManifest(entry, engine string) ([]projectarchive.File, [
 	warnings := make([]string, 0)
 	for _, diagnostic := range result.Diagnostics {
 		if diagnostic.Resolution != "" {
-			warnings = append(warnings, "dependency history used: "+dependency.FormatDiagnostic(diagnostic))
+			warnings = append(warnings, "dependency reference covered: "+dependency.FormatDiagnostic(diagnostic))
 		}
 	}
 	return result.Files, warnings, nil

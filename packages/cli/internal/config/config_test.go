@@ -13,6 +13,7 @@ func isolateUserConfig(t *testing.T) string {
 	t.Setenv("LATEXMK_TOKEN", "")
 	t.Setenv("LATEXMK_TOKEN_FILE", "")
 	t.Setenv("LATEXMK_UPLOAD_MODE", "")
+	t.Setenv("LATEXMK_MANIFEST_FILE", "")
 	return dir
 }
 
@@ -35,6 +36,22 @@ func TestLoadRejectsUnknownUploadMode(t *testing.T) {
 	}
 	if _, err := Load(root); err == nil {
 		t.Fatal("expected invalid uploadMode to fail")
+	}
+}
+
+func TestLoadManifestConfiguration(t *testing.T) {
+	isolateUserConfig(t)
+	root := t.TempDir()
+	configJSON := `{"uploadMode":"manifest","manifestFile":".latexmk-files","includeFiles":["chapter.tex"]}`
+	if err := os.WriteFile(filepath.Join(root, FileName), []byte(configJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UploadMode != "manifest" || cfg.ManifestFile != ".latexmk-files" || len(cfg.IncludeFiles) != 1 || cfg.IncludeFiles[0] != "chapter.tex" {
+		t.Fatalf("manifest config = %#v", cfg)
 	}
 }
 
@@ -80,7 +97,7 @@ func TestFindGitRoot(t *testing.T) {
 }
 
 func TestDefaultDenyIncludesSensitiveLocalConfiguration(t *testing.T) {
-	want := map[string]bool{".latexmk.json": false, ".env": false, "*.key": false, "*.pem": false}
+	want := map[string]bool{".latexmk.json": false, ".latexmk-files": false, ".env": false, "*.key": false, "*.pem": false}
 	for _, pattern := range DefaultDeny() {
 		if _, ok := want[pattern]; ok {
 			want[pattern] = true

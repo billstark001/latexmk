@@ -132,6 +132,14 @@ still pass the current Git-ignore and deny policies. When history covers a
 dynamic reference, the CLI warns because the path set may be stale; it never
 falls back to `all` automatically.
 
+Use `includeFiles`, repeatable `--include-file`, or a line-based
+`manifestFile`/`--manifest` to add exact project-relative dependencies. In
+`auto` mode they supplement static discovery. `uploadMode: "manifest"` selects
+only the entry file and those explicit files, without reading recorder history
+or inferring any other dependency. Explicit files still must pass Git-ignore,
+denylist, root-boundary, and symlink policy. See
+[`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md).
+
 The project config may contain a `token` for a private, single-user setup. A
 user config, environment variable, or token file is safer when the paper
 directory is committed or shared:

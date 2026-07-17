@@ -59,6 +59,51 @@ latexmk --upload-mode all main.tex
 other upload-policy exclusions. Use `--no-gitignore` separately only when an
 ignored file is an intentional compile input.
 
+## Explicit manifest
+
+An exact file list can supplement `auto` discovery without uploading every
+allowed project file:
+
+```sh
+latexmk files --manifest .latexmk-files main.tex
+latexmk --include-file generated/table.tex main.tex
+```
+
+The manifest format is UTF-8 text with one project-relative file per line.
+Blank lines and lines beginning with `#` are ignored. Entries are exact paths;
+globs and directory expansion are intentionally unsupported. The manifest path
+must itself stay inside the project root and cannot contain symlink components.
+`.latexmk-files` is denied from upload by default because it is client policy,
+not a TeX input.
+
+Equivalent project configuration is:
+
+```json
+{
+  "manifestFile": ".latexmk-files",
+  "includeFiles": ["generated/table.tex"]
+}
+```
+
+In `auto`, explicit files are merged with static and recorder dependencies. A
+dynamic reference covered this way is shown as a resolved diagnostic so the
+override remains visible. An explicit file that is missing, Git-ignored,
+denied, outside the root, or otherwise absent from the policy-filtered manifest
+causes selection to fail.
+
+For a strict user-maintained allowlist:
+
+```sh
+latexmk files --upload-mode manifest --manifest .latexmk-files main.tex
+latexmk --upload-mode manifest --manifest .latexmk-files main.tex
+```
+
+`manifest` uploads only the entry and exact explicit files. It does not run the
+static scanner or read `.fls` history. `resolved: true` in this mode means the
+declared list is valid, not that it is a complete TeX dependency closure. A
+missing declaration therefore becomes a normal remote compile failure rather
+than an automatic wider upload.
+
 ## Limits
 
 This is a static scanner, not TeX. It can include extra files referenced inside
@@ -100,8 +145,8 @@ latexmk main.tex
 ```
 
 The client never silently falls back to `all`. A corrupt cache blocks `auto`
-with an explicit error; reviewed `--upload-mode all` remains available and does
-not read the cache.
+with an explicit error; reviewed `manifest` and `all` modes remain available
+and do not read the cache.
 
 The next layer is a bounded server `needs_files` protocol. It will handle a new
 dynamic dependency that is absent from stale history without uploading the

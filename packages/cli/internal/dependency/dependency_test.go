@@ -200,6 +200,62 @@ func TestCachedInputsDoNotCoverMissingLiteralReferences(t *testing.T) {
 	}
 }
 
+func TestExplicitManifestCoversDynamicReference(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "main.tex", `\input{\chapterfile}`)
+	writeFile(t, root, "chapter.tex", "chapter")
+	writeFile(t, root, "unrelated-secret.txt", "secret")
+	candidates, _, err := projectarchive.Manifest(projectarchive.Options{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := SelectWithOptions("main.tex", candidates, SelectionOptions{Mode: "auto", ExplicitFiles: []string{"chapter.tex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Resolved || len(result.Diagnostics) != 1 || result.Diagnostics[0].Resolution != "explicit manifest" {
+		t.Fatalf("explicit auto result = %#v", result)
+	}
+	if len(result.Files) != 2 || result.Files[0].Path != "chapter.tex" || result.Files[1].Path != "main.tex" {
+		t.Fatalf("explicit auto files = %#v", result.Files)
+	}
+}
+
+func TestManifestModeUsesOnlyExactDeclaredFiles(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "main.tex", `\input{static}`)
+	writeFile(t, root, "static.tex", "static")
+	writeFile(t, root, "declared.dat", "declared")
+	candidates, _, err := projectarchive.Manifest(projectarchive.Options{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := SelectWithOptions("main.tex", candidates, SelectionOptions{Mode: "manifest", ExplicitFiles: []string{"declared.dat"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Resolved || len(result.Files) != 2 || result.Files[0].Path != "declared.dat" || result.Files[1].Path != "main.tex" {
+		t.Fatalf("manifest-only result = %#v", result)
+	}
+}
+
+func TestExplicitManifestCannotRestoreFilteredFile(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "main.tex", "main")
+	writeFile(t, root, "private.tex", "secret")
+	candidates, _, err := projectarchive.Manifest(projectarchive.Options{Root: root, Exclude: []string{"private.tex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := SelectWithOptions("main.tex", candidates, SelectionOptions{Mode: "manifest", ExplicitFiles: []string{"private.tex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Resolved || len(result.Files) != 1 || len(result.Diagnostics) != 1 || result.Diagnostics[0].Kind != "explicit" {
+		t.Fatalf("filtered explicit result = %#v", result)
+	}
+}
+
 func writeFile(t *testing.T, root, name, content string) {
 	t.Helper()
 	file := filepath.Join(root, filepath.FromSlash(name))

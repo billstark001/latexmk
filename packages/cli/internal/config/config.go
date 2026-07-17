@@ -22,6 +22,8 @@ type FileConfig struct {
 	ProjectRoot        string   `json:"projectRoot,omitempty"`
 	RootMode           string   `json:"rootMode,omitempty"`
 	UploadMode         string   `json:"uploadMode,omitempty"`
+	ManifestFile       string   `json:"manifestFile,omitempty"`
+	IncludeFiles       []string `json:"includeFiles,omitempty"`
 	RespectGitIgnore   *bool    `json:"respectGitignore,omitempty"`
 	Engine             string   `json:"engine,omitempty"`
 	Timeout            string   `json:"timeout,omitempty"`
@@ -35,6 +37,8 @@ type Resolved struct {
 	ProjectRoot        string
 	RootMode           string
 	UploadMode         string
+	ManifestFile       string
+	IncludeFiles       []string
 	RespectGitIgnore   bool
 	Engine             string
 	Timeout            time.Duration
@@ -67,6 +71,7 @@ func DefaultDeny() []string {
 	return []string{
 		FileName,
 		".latexmkignore",
+		".latexmk-files",
 		".env",
 		".env.*",
 		"*.key",
@@ -136,6 +141,9 @@ func Load(start string) (Resolved, error) {
 	if v := os.Getenv("LATEXMK_UPLOAD_MODE"); v != "" {
 		cfg.UploadMode = v
 	}
+	if v := os.Getenv("LATEXMK_MANIFEST_FILE"); v != "" {
+		cfg.ManifestFile = v
+	}
 	if v := os.Getenv("LATEXMK_RESPECT_GITIGNORE"); v != "" {
 		parsed, err := strconv.ParseBool(v)
 		if err != nil {
@@ -146,8 +154,8 @@ func Load(start string) (Resolved, error) {
 	if cfg.RootMode != "entry" && cfg.RootMode != "git" {
 		return Resolved{}, fmt.Errorf("invalid rootMode %q; expected entry or git", cfg.RootMode)
 	}
-	if cfg.UploadMode != "auto" && cfg.UploadMode != "all" {
-		return Resolved{}, fmt.Errorf("invalid uploadMode %q; expected auto or all", cfg.UploadMode)
+	if cfg.UploadMode != "auto" && cfg.UploadMode != "manifest" && cfg.UploadMode != "all" {
+		return Resolved{}, fmt.Errorf("invalid uploadMode %q; expected auto, manifest, or all", cfg.UploadMode)
 	}
 
 	timeout, err := time.ParseDuration(cfg.Timeout)
@@ -184,6 +192,8 @@ func Load(start string) (Resolved, error) {
 		ProjectRoot:        resolvedRoot,
 		RootMode:           cfg.RootMode,
 		UploadMode:         cfg.UploadMode,
+		ManifestFile:       cfg.ManifestFile,
+		IncludeFiles:       append([]string(nil), cfg.IncludeFiles...),
 		RespectGitIgnore:   respectGitIgnore,
 		Engine:             cfg.Engine,
 		Timeout:            timeout,

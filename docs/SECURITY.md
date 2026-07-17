@@ -26,6 +26,9 @@ at the application and deployment layers.
 - Recorder INPUT history contains normalized workspace-relative paths only.
   System TeX paths and paths outside the compile workspace are discarded, and
   cached paths must pass the client's current upload policy again.
+- Explicit manifests contain exact project-relative files only. They cannot
+  override Git-ignore, denylist, root-boundary, or symlink checks; manifest
+  files are client policy and are denied from upload by default.
 - Upload blobs, logs, artifacts, concurrent compiles, queued jobs, state bytes,
   and upload sessions have hard limits.
 - A state sweeper expires results, project snapshots, and orphaned blobs. It

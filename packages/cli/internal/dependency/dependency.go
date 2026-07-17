@@ -32,12 +32,38 @@ type Result struct {
 	Resolved    bool
 }
 
+type SelectionOptions struct {
+	Mode             string
+	ExplicitFiles    []string
+	CachedFiles      []string
+	HistoryAvailable bool
+}
+
 // Select applies an upload mode to a policy-filtered candidate manifest.
 func Select(entry, mode string, candidates []projectarchive.File) (Result, error) {
-	switch mode {
-	case "", "auto":
-		return Discover(entry, candidates)
-	case "all":
+	return SelectWithOptions(entry, candidates, SelectionOptions{Mode: mode})
+}
+
+// SelectWithCachedInputs adds project-local INPUT records from a previous
+// successful compile. Cached paths still have to exist in the current
+// policy-filtered manifest. History can cover dynamic references, but never
+// missing literal paths, malformed commands, or paths outside the project.
+func SelectWithCachedInputs(entry, mode string, candidates []projectarchive.File, cached []string, historyAvailable bool) (Result, error) {
+	return SelectWithOptions(entry, candidates, SelectionOptions{Mode: mode, CachedFiles: cached, HistoryAvailable: historyAvailable})
+}
+
+// SelectWithOptions combines static discovery, explicit files, and recorder
+// history without letting any layer restore a file absent from candidates.
+func SelectWithOptions(entry string, candidates []projectarchive.File, options SelectionOptions) (Result, error) {
+	entry = cleanProjectPath(entry)
+	if entry == "" {
+		return Result{}, errors.New("entry path is outside the project root")
+	}
+	mode := options.Mode
+	if mode == "" {
+		mode = "auto"
+	}
+	if mode == "all" {
 		files := append([]projectarchive.File(nil), candidates...)
 		stats := projectarchive.Stats{}
 		for i := range files {
@@ -46,48 +72,81 @@ func Select(entry, mode string, candidates []projectarchive.File) (Result, error
 			stats.Bytes += files[i].Size
 		}
 		return Result{Files: files, Stats: stats, Resolved: true}, nil
-	default:
+	}
+	if mode != "auto" && mode != "manifest" {
 		return Result{}, fmt.Errorf("unsupported upload mode %q", mode)
 	}
-}
 
-// SelectWithCachedInputs adds project-local INPUT records from a previous
-// successful compile. Cached paths still have to exist in the current
-// policy-filtered manifest. History can cover dynamic references, but never
-// missing literal paths, malformed commands, or paths outside the project.
-func SelectWithCachedInputs(entry, mode string, candidates []projectarchive.File, cached []string, historyAvailable bool) (Result, error) {
-	result, err := Select(entry, mode, candidates)
-	if err != nil || mode == "all" {
-		return result, err
-	}
 	byPath := make(map[string]projectarchive.File, len(candidates))
-	selected := make(map[string]projectarchive.File, len(result.Files)+len(cached))
 	for _, file := range candidates {
 		byPath[file.Path] = file
 	}
+	if _, ok := byPath[entry]; !ok {
+		return Result{}, fmt.Errorf("entry %q is missing, ignored, or denied by the upload policy", entry)
+	}
+	var result Result
+	if mode == "auto" {
+		var err error
+		result, err = Discover(entry, candidates)
+		if err != nil {
+			return Result{}, err
+		}
+	} else {
+		file := byPath[entry]
+		file.Reason = "entry file"
+		result = Result{Files: []projectarchive.File{file}, Resolved: true}
+	}
+	selected := make(map[string]projectarchive.File, len(result.Files)+len(options.ExplicitFiles)+len(options.CachedFiles))
 	for _, file := range result.Files {
 		selected[file.Path] = file
 	}
-	acceptedHistory := false
-	for _, cachedPath := range cached {
-		file, ok := byPath[cachedPath]
+	acceptedExplicit := false
+	for _, explicitPath := range options.ExplicitFiles {
+		clean := cleanProjectPath(explicitPath)
+		if clean == "" {
+			result.Diagnostics = append(result.Diagnostics, Diagnostic{File: entry, Reference: explicitPath, Kind: "explicit", Message: "explicit file path escapes the project root"})
+			continue
+		}
+		file, ok := byPath[clean]
 		if !ok {
+			result.Diagnostics = append(result.Diagnostics, Diagnostic{File: entry, Reference: clean, Kind: "explicit", Message: "explicit file is missing, ignored by Git, or denied by the upload policy"})
 			continue
 		}
-		if cachedPath != cleanProjectPath(entry) {
-			acceptedHistory = true
+		if clean != entry {
+			acceptedExplicit = true
 		}
-		if _, exists := selected[cachedPath]; exists {
+		if _, exists := selected[clean]; exists {
 			continue
 		}
-		file.Reason = "previous successful compile (.fls INPUT)"
-		selected[cachedPath] = file
+		file.Reason = "explicit manifest"
+		selected[clean] = file
 	}
-	if historyAvailable && acceptedHistory {
-		for i := range result.Diagnostics {
-			if result.Diagnostics[i].Kind == "dynamic" {
-				result.Diagnostics[i].Resolution = "previous successful compile (.fls INPUT)"
+	acceptedHistory := false
+	if mode == "auto" {
+		for _, cachedPath := range options.CachedFiles {
+			file, ok := byPath[cachedPath]
+			if !ok {
+				continue
 			}
+			if cachedPath != entry {
+				acceptedHistory = true
+			}
+			if _, exists := selected[cachedPath]; exists {
+				continue
+			}
+			file.Reason = "previous successful compile (.fls INPUT)"
+			selected[cachedPath] = file
+		}
+	}
+	for i := range result.Diagnostics {
+		if result.Diagnostics[i].Kind != "dynamic" || result.Diagnostics[i].Resolution != "" {
+			continue
+		}
+		switch {
+		case acceptedExplicit:
+			result.Diagnostics[i].Resolution = "explicit manifest"
+		case options.HistoryAvailable && acceptedHistory:
+			result.Diagnostics[i].Resolution = "previous successful compile (.fls INPUT)"
 		}
 	}
 	result.Files = result.Files[:0]

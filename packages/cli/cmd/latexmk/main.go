@@ -29,6 +29,8 @@ type compileOptions struct {
 	projectRoot   string
 	rootMode      string
 	uploadMode    string
+	manifestFile  string
+	includeFiles  []string
 	gitIgnore     bool
 	engine        string
 	outDir        string
@@ -109,6 +111,8 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		projectRoot:   cfg.ProjectRoot,
 		rootMode:      cfg.RootMode,
 		uploadMode:    cfg.UploadMode,
+		manifestFile:  cfg.ManifestFile,
+		includeFiles:  append([]string(nil), cfg.IncludeFiles...),
 		gitIgnore:     cfg.RespectGitIgnore,
 		engine:        cfg.Engine,
 		outDir:        "",
@@ -148,6 +152,8 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 	c.Exclude = opts.exclude
 	c.RespectGitIgnore = opts.gitIgnore
 	c.UploadMode = opts.uploadMode
+	c.ManifestFile = opts.manifestFile
+	c.IncludeFiles = append([]string(nil), opts.includeFiles...)
 	request := protocol.CompileRequest{
 		ProtocolVersion: protocol.Version,
 		Entry:           opts.entry,
@@ -258,10 +264,22 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 			if err != nil {
 				return err
 			}
-			if v != "auto" && v != "all" {
-				return fmt.Errorf("--upload-mode must be auto or all, got %q", v)
+			if v != "auto" && v != "manifest" && v != "all" {
+				return fmt.Errorf("--upload-mode must be auto, manifest, or all, got %q", v)
 			}
 			opts.uploadMode = v
+		case a == "--manifest" || strings.HasPrefix(a, "--manifest="):
+			v, err := value("--manifest")
+			if err != nil {
+				return err
+			}
+			opts.manifestFile = v
+		case a == "--include-file" || strings.HasPrefix(a, "--include-file="):
+			v, err := value("--include-file")
+			if err != nil {
+				return err
+			}
+			opts.includeFiles = append(opts.includeFiles, v)
 		case a == "--gitignore":
 			opts.gitIgnore = true
 		case a == "--no-gitignore":
@@ -425,21 +443,39 @@ type manifestView struct {
 }
 
 func printManifest(opts compileOptions) int {
+	exclude := append([]string(nil), opts.exclude...)
+	manifestPath := ""
+	if opts.manifestFile != "" {
+		var err error
+		manifestPath, err = dependency.NormalizeExplicitManifestPath(opts.manifestFile)
+		if err != nil {
+			return fail(fmt.Errorf("manifest path: %w", err))
+		}
+		exclude = append(exclude, manifestPath)
+	}
 	candidates, _, err := projectarchive.Manifest(projectarchive.Options{
-		Root: opts.projectRoot, Exclude: opts.exclude, RespectGitIgnore: opts.gitIgnore, MaxFiles: 20_000, MaxBytes: 2 << 30,
+		Root: opts.projectRoot, Exclude: exclude, RespectGitIgnore: opts.gitIgnore, MaxFiles: 20_000, MaxBytes: 2 << 30,
 	})
 	if err != nil {
 		return fail(fmt.Errorf("build project manifest: %w", err))
 	}
 	var cached []string
+	explicit := append([]string(nil), opts.includeFiles...)
 	historyAvailable := false
 	if opts.uploadMode != "all" {
+		manifestFiles, manifestErr := dependency.LoadExplicitManifest(opts.projectRoot, manifestPath)
+		if manifestErr != nil {
+			return fail(fmt.Errorf("load explicit manifest: %w", manifestErr))
+		}
+		explicit = append(explicit, manifestFiles...)
+	}
+	if opts.uploadMode == "auto" || opts.uploadMode == "" {
 		cached, historyAvailable, err = dependency.LoadCachedInputs(opts.projectRoot, opts.entry, opts.engine)
 		if err != nil {
 			return fail(fmt.Errorf("load dependency cache: %w", err))
 		}
 	}
-	result, err := dependency.SelectWithCachedInputs(opts.entry, opts.uploadMode, candidates, cached, historyAvailable)
+	result, err := dependency.SelectWithOptions(opts.entry, candidates, dependency.SelectionOptions{Mode: opts.uploadMode, ExplicitFiles: explicit, CachedFiles: cached, HistoryAvailable: historyAvailable})
 	if err != nil {
 		return fail(fmt.Errorf("select project dependencies: %w", err))
 	}
@@ -632,7 +668,9 @@ Compile options:
   --token-file FILE            Read the bearer token from a file
   --project-root DIR           Root directory uploaded to the server
   --root-mode entry|git        Default root when --project-root is absent
-  --upload-mode auto|all       Upload literal dependencies (default) or all allowed files
+  --upload-mode MODE           auto (default), manifest, or all
+  --manifest FILE              Read exact project-relative files, one per line
+  --include-file FILE          Add one exact project-relative file (repeatable)
   --gitignore                  Respect Git ignore rules (default)
   --no-gitignore               Include Git-ignored files unless otherwise excluded
   --out-dir DIR                Local root for returned artifacts

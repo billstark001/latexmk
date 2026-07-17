@@ -197,7 +197,40 @@ func TestProjectManifestUsesCachedInputsForDynamicReferences(t *testing.T) {
 	}
 }
 
-func TestProjectManifestAllModeCanBypassBrokenCache(t *testing.T) {
+func TestProjectManifestUsesExplicitManifestWithoutHistory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte(`\input{\chapterfile}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "chapter.tex"), []byte("chapter"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "unrelated-secret.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".latexmk-files"), []byte("chapter.tex\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := New("http://127.0.0.1:1", "", time.Second, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.ProjectRoot = root
+	c.Exclude = []string{".latexmk-files"}
+	c.ManifestFile = ".latexmk-files"
+	files, warnings, err := c.projectManifest("main.tex", "xelatex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files[0].Path != "chapter.tex" || files[1].Path != "main.tex" {
+		t.Fatalf("explicit manifest files = %#v", files)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("explicit manifest warnings = %#v", warnings)
+	}
+}
+
+func TestProjectManifestExplicitModesCanBypassBrokenCache(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte("main"), 0o600); err != nil {
 		t.Fatal(err)
@@ -222,6 +255,38 @@ func TestProjectManifestAllModeCanBypassBrokenCache(t *testing.T) {
 	}
 	if len(files) != 1 || files[0].Path != "main.tex" {
 		t.Fatalf("all-mode manifest = %#v", files)
+	}
+	c.UploadMode = "manifest"
+	files, _, err = c.projectManifest("main.tex", "xelatex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Path != "main.tex" {
+		t.Fatalf("manifest-mode files = %#v", files)
+	}
+}
+
+func TestProjectManifestNeverUploadsConfiguredManifestFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte("main"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "policy.list"), []byte("main.tex\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := New("http://127.0.0.1:1", "", time.Second, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.ProjectRoot = root
+	c.UploadMode = "all"
+	c.ManifestFile = "policy.list"
+	files, _, err := c.projectManifest("main.tex", "xelatex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Path != "main.tex" {
+		t.Fatalf("all-mode files = %#v", files)
 	}
 }
 
