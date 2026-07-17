@@ -28,9 +28,15 @@ image and instance size.
 
 The server still enforces `LATEXMK_MAX_STATE_BYTES` synchronously. The periodic
 sweeper bounds normal cache growth: result archives expire first, project
-snapshots expire next, and blobs are deleted only when no live upload or current
-snapshot refers to them. A result whose retention period has elapsed remains in
-job history but can no longer be downloaded.
+snapshots expire next, and blobs are deleted only when no live upload, current
+project snapshot, or queued/running job snapshot refers to them. A result whose
+retention period has elapsed remains in job history but can no longer be
+downloaded.
+
+Database migration adds immutable snapshot fields to queued jobs. Historical
+finished jobs from older versions remain readable. An old `queued` or `running`
+job without a stored manifest is marked failed during startup and must be
+submitted again; the server never substitutes the current project version.
 
 For Railway Serverless, the state directory is deliberately in `/tmp`; cache
 reuse lasts only for the running instance. For Lightsail and always-on Railway,

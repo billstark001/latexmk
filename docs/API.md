@@ -106,14 +106,16 @@ to retry.
 ### `POST /v1/uploads/{uploadId}/commit`
 
 Verifies the complete snapshot and queues it. Returns `202 Accepted`, a job
-object, and `Location: /v1/jobs/{id}`.
+object, and `Location: /v1/jobs/{id}`. New jobs include a `snapshotId` derived
+from the authenticated owner, project ID, and canonical file manifest.
 
 ### `GET /v1/jobs`, `GET /v1/jobs/{id}`, and `DELETE /v1/jobs/{id}`
 
 Returns or cancels jobs of the authenticated principal. Only `queued` jobs can
 be cancelled. Status is `queued`, `running`, `succeeded`, `failed`, or
 `cancelled`. Successful jobs and TeX failures keep result archives until
-`LATEXMK_RESULT_RETENTION` expires.
+`LATEXMK_RESULT_RETENTION` expires. The optional `snapshotId` is absent only on
+historical finished jobs created before immutable snapshots were introduced.
 
 ### `GET /v1/jobs/{id}/result`
 

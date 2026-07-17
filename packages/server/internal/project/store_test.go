@@ -66,6 +66,25 @@ func TestPlanOnlyRequestsMissingContentAndMaterializesSnapshot(t *testing.T) {
 	}
 }
 
+func TestSnapshotIDUsesCanonicalManifestOrder(t *testing.T) {
+	a := api.ProjectFile{Path: "a.tex", SHA256: strings.Repeat("a", 64), Size: 1}
+	b := api.ProjectFile{Path: "b.tex", SHA256: strings.Repeat("b", 64), Size: 2}
+	first, err := NewSnapshot("member", "paper", []api.ProjectFile{b, a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewSnapshot("member", "paper", []api.ProjectFile{a, b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID {
+		t.Fatalf("snapshot IDs differ by input order: %q != %q", first.ID, second.ID)
+	}
+	if first.Files[0].Path != "a.tex" {
+		t.Fatalf("snapshot files are not canonical: %#v", first.Files)
+	}
+}
+
 func TestPutBlobRejectsExtraData(t *testing.T) {
 	m, err := New(config.Config{StateDir: t.TempDir(), MaxFiles: 10, MaxExpandedBytes: 1024, MaxStateBytes: 1024}, nil)
 	if err != nil {
@@ -182,5 +201,61 @@ func TestPruneKeepsReferencedBlobsAndRemovesExpiredCache(t *testing.T) {
 	}
 	if _, err := os.Stat(result); !os.IsNotExist(err) {
 		t.Fatalf("expired result still exists: %v", err)
+	}
+}
+
+func TestPruneKeepsBlobPinnedByOlderQueuedSnapshot(t *testing.T) {
+	cfg := config.Config{
+		StateDir: t.TempDir(), MaxFiles: 10, MaxUploadBytes: 1024,
+		MaxExpandedBytes: 1024, MaxStateBytes: 4096,
+		SnapshotRetention: time.Hour, BlobRetention: time.Hour,
+	}
+	m, err := New(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := func(content string) Snapshot {
+		t.Helper()
+		digest := sha256.Sum256([]byte(content))
+		sha := hex.EncodeToString(digest[:])
+		plan, err := m.Plan("member", api.UploadPlanRequest{ProjectID: "paper", Files: []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(plan.Missing) > 0 {
+			if err := m.PutBlob("member", plan.UploadID, sha, strings.NewReader(content)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		snapshot, _, err := m.Commit(context.Background(), "member", plan.UploadID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return snapshot
+	}
+
+	first := commit("first")
+	if err := m.PinSnapshot(first); err != nil {
+		t.Fatal(err)
+	}
+	_ = commit("second")
+	firstBlob := m.blobPath("member", first.Files[0].SHA256)
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(firstBlob, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Prune(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(firstBlob); err != nil {
+		t.Fatalf("queued snapshot blob was removed: %v", err)
+	}
+
+	m.ReleaseSnapshot(first.ID)
+	if _, err := m.Prune(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(firstBlob); !os.IsNotExist(err) {
+		t.Fatalf("released old snapshot blob still exists: %v", err)
 	}
 }

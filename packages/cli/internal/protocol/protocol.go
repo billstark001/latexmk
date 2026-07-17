@@ -62,6 +62,7 @@ type UploadPlan struct {
 type Job struct {
 	ID         string         `json:"id"`
 	ProjectID  string         `json:"projectId"`
+	SnapshotID string         `json:"snapshotId,omitempty"`
 	Status     string         `json:"status"`
 	CreatedAt  time.Time      `json:"createdAt"`
 	StartedAt  *time.Time     `json:"startedAt,omitempty"`

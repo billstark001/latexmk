@@ -18,7 +18,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/billstark001/latexmk/packages/server/internal/api"
 	projectarchive "github.com/billstark001/latexmk/packages/server/internal/archive"
 	"github.com/billstark001/latexmk/packages/server/internal/auth"
@@ -28,6 +27,7 @@ import (
 	"github.com/billstark001/latexmk/packages/server/internal/project"
 	"github.com/billstark001/latexmk/packages/server/internal/resultarchive"
 	"github.com/billstark001/latexmk/packages/server/internal/store"
+	"github.com/gin-gonic/gin"
 )
 
 // Server owns the Gin engine and keeps the legacy synchronous endpoint beside
@@ -244,7 +244,7 @@ func (s *Server) commitUpload(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	job, err := s.jobs.Enqueue(c.Request.Context(), principal.ID, snapshot.ProjectID, request)
+	job, err := s.jobs.Enqueue(c.Request.Context(), principal.ID, snapshot, request)
 	if err != nil {
 		writeError(c, http.StatusTooManyRequests, err.Error())
 		return

@@ -24,9 +24,10 @@ import (
 )
 
 type record struct {
-	Job     api.Job
-	OwnerID string
-	Request api.CompileRequest
+	Job      api.Job
+	OwnerID  string
+	Request  api.CompileRequest
+	Snapshot project.Snapshot
 }
 
 type Manager struct {
@@ -63,10 +64,27 @@ func (m *Manager) Start(ctx context.Context) {
 			m.logger.Error("could not recover queued jobs", "error", err)
 		} else {
 			for _, job := range pending {
+				rec, decodeErr := recordFromRow(job)
+				if decodeErr != nil {
+					now := time.Now().UTC()
+					_ = m.db.UpdateJob(ctx, job.ID, map[string]any{"status": "failed", "error": "queued job has no valid immutable snapshot; submit it again", "finished_at": &now})
+					m.logger.Warn("discarded queued job without immutable snapshot", "job_id", job.ID, "error", decodeErr)
+					continue
+				}
+				if err := m.projects.PinSnapshot(rec.Snapshot); err != nil {
+					now := time.Now().UTC()
+					_ = m.db.UpdateJob(ctx, job.ID, map[string]any{"status": "failed", "error": "queued job snapshot is invalid; submit it again", "finished_at": &now})
+					m.logger.Warn("discarded queued job with invalid snapshot", "job_id", job.ID, "error", err)
+					continue
+				}
 				// A crash may leave a job marked running. It is safe to retry:
 				// every execution gets a new isolated workspace and archive.
 				if job.Status == "running" {
-					_ = m.db.UpdateJob(ctx, job.ID, map[string]any{"status": "queued", "started_at": nil})
+					if err := m.db.UpdateJob(ctx, job.ID, map[string]any{"status": "queued", "started_at": nil}); err != nil {
+						m.projects.ReleaseSnapshot(rec.Snapshot.ID)
+						m.logger.Error("could not reset running job for recovery", "job_id", job.ID, "error", err)
+						continue
+					}
 				}
 				recoverIDs = append(recoverIDs, job.ID)
 			}
@@ -86,13 +104,22 @@ func (m *Manager) Start(ctx context.Context) {
 	}()
 }
 
-func (m *Manager) Enqueue(ctx context.Context, ownerID, projectID string, request api.CompileRequest) (api.Job, error) {
+func (m *Manager) Enqueue(ctx context.Context, ownerID string, snapshot project.Snapshot, request api.CompileRequest) (api.Job, error) {
 	if err := m.runner.ValidateRequest(request); err != nil {
 		return api.Job{}, err
 	}
-	if _, err := m.projects.Snapshot(ctx, ownerID, projectID); err != nil {
-		return api.Job{}, err
+	if snapshot.OwnerID != ownerID {
+		return api.Job{}, errors.New("snapshot owner does not match authenticated owner")
 	}
+	if err := m.projects.PinSnapshot(snapshot); err != nil {
+		return api.Job{}, fmt.Errorf("pin project snapshot: %w", err)
+	}
+	pinned := true
+	defer func() {
+		if pinned {
+			m.projects.ReleaseSnapshot(snapshot.ID)
+		}
+	}()
 	// Counting, persisting, and publishing a queued job must be one admission
 	// operation. Without this guard a burst can observe the same remaining slot
 	// and exceed MaxQueuedJobs before any worker gets a chance to run.
@@ -112,18 +139,20 @@ func (m *Manager) Enqueue(ctx context.Context, ownerID, projectID string, reques
 		return api.Job{}, err
 	}
 	now := time.Now().UTC()
-	rec := record{Job: api.Job{ID: id, ProjectID: projectID, Status: "queued", CreatedAt: now}, OwnerID: ownerID, Request: request}
+	rec := record{Job: api.Job{ID: id, ProjectID: snapshot.ProjectID, SnapshotID: snapshot.ID, Status: "queued", CreatedAt: now}, OwnerID: ownerID, Request: request, Snapshot: snapshot}
 	if err := m.save(ctx, rec); err != nil {
 		m.admissionMu.Unlock()
 		return api.Job{}, err
 	}
 	select {
 	case m.queue <- id:
+		pinned = false
 		m.admissionMu.Unlock()
 		return rec.Job, nil
 	default:
 		m.admissionMu.Unlock()
 		// Do not retain a row which cannot ever be scheduled.
+		pinned = false
 		_ = m.cancel(ctx, id, "compile queue is full")
 		return api.Job{}, errors.New("compile queue is full")
 	}
@@ -274,12 +303,7 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 		m.finish(ctx, rec, nil, "could not initialize compile workspace")
 		return
 	}
-	snapshot, err := m.projects.Snapshot(ctx, rec.OwnerID, rec.Job.ProjectID)
-	if err != nil {
-		m.finish(ctx, rec, nil, "project snapshot is unavailable")
-		return
-	}
-	if err := m.projects.Materialize(snapshot, workspace); err != nil {
+	if err := m.projects.Materialize(rec.Snapshot, workspace); err != nil {
 		m.finish(ctx, rec, nil, "could not materialize project: "+err.Error())
 		return
 	}
@@ -306,7 +330,9 @@ func (m *Manager) finish(ctx context.Context, rec record, result *api.CompileRes
 	}
 	if err := m.save(ctx, rec); err != nil {
 		m.logger.Error("finish compile job", "job_id", rec.Job.ID, "error", err)
+		return
 	}
+	m.projects.ReleaseSnapshot(rec.Snapshot.ID)
 	m.logger.Info("compile job finished", "job_id", rec.Job.ID, "status", rec.Job.Status, "duration_ms", resultDuration(result))
 }
 
@@ -317,7 +343,11 @@ func (m *Manager) cancel(ctx context.Context, id, message string) error {
 	}
 	now := time.Now().UTC()
 	rec.Job.Status, rec.Job.Error, rec.Job.FinishedAt = "cancelled", message, &now
-	return m.save(ctx, rec)
+	if err := m.save(ctx, rec); err != nil {
+		return err
+	}
+	m.projects.ReleaseSnapshot(rec.Snapshot.ID)
+	return nil
 }
 
 func (m *Manager) load(ctx context.Context, id string) (record, error) {
@@ -348,6 +378,10 @@ func (m *Manager) save(ctx context.Context, rec record) error {
 	if err != nil {
 		return err
 	}
+	snapshot, err := json.Marshal(rec.Snapshot)
+	if err != nil {
+		return err
+	}
 	var result []byte
 	if rec.Job.Result != nil {
 		result, err = json.Marshal(rec.Job.Result)
@@ -356,7 +390,7 @@ func (m *Manager) save(ctx context.Context, rec record) error {
 		}
 	}
 	if _, err := m.db.GetJob(ctx, rec.Job.ID); err != nil {
-		return m.db.CreateJob(ctx, store.CompileJob{ID: rec.Job.ID, OwnerID: rec.OwnerID, ProjectID: rec.Job.ProjectID, Status: rec.Job.Status, Request: request, Result: result, Error: rec.Job.Error, CreatedAt: rec.Job.CreatedAt, StartedAt: rec.Job.StartedAt, FinishedAt: rec.Job.FinishedAt})
+		return m.db.CreateJob(ctx, store.CompileJob{ID: rec.Job.ID, OwnerID: rec.OwnerID, ProjectID: rec.Job.ProjectID, SnapshotID: rec.Snapshot.ID, SnapshotManifest: snapshot, Status: rec.Job.Status, Request: request, Result: result, Error: rec.Job.Error, CreatedAt: rec.Job.CreatedAt, StartedAt: rec.Job.StartedAt, FinishedAt: rec.Job.FinishedAt})
 	}
 	return m.db.UpdateJob(ctx, rec.Job.ID, map[string]any{"status": rec.Job.Status, "result": result, "error": rec.Job.Error, "started_at": rec.Job.StartedAt, "finished_at": rec.Job.FinishedAt})
 }
@@ -374,7 +408,27 @@ func recordFromRow(row store.CompileJob) (record, error) {
 		}
 		job.Result = &result
 	}
-	return record{Job: job, OwnerID: row.OwnerID, Request: request}, nil
+	if len(row.SnapshotManifest) == 0 {
+		if row.Status == "queued" || row.Status == "running" {
+			return record{}, errors.New("active job is missing its immutable snapshot")
+		}
+		return record{Job: job, OwnerID: row.OwnerID, Request: request}, nil
+	}
+	var snapshot project.Snapshot
+	if err := json.Unmarshal(row.SnapshotManifest, &snapshot); err != nil {
+		return record{}, fmt.Errorf("decode queued job snapshot: %w", err)
+	}
+	if err := project.ValidateSnapshot(snapshot); err != nil {
+		return record{}, fmt.Errorf("validate queued job snapshot: %w", err)
+	}
+	if row.SnapshotID != "" && row.SnapshotID != snapshot.ID {
+		return record{}, errors.New("queued job snapshot ID does not match its manifest")
+	}
+	if row.OwnerID != snapshot.OwnerID || row.ProjectID != snapshot.ProjectID {
+		return record{}, errors.New("queued job snapshot scope does not match its job")
+	}
+	job.SnapshotID = snapshot.ID
+	return record{Job: job, OwnerID: row.OwnerID, Request: request, Snapshot: snapshot}, nil
 }
 
 func resultDuration(result *api.CompileResult) int64 {

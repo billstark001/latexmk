@@ -69,20 +69,22 @@ type ProjectSnapshot struct {
 	UpdatedAt time.Time `gorm:"index"`
 }
 
-// CompileJob is intentionally small. Logs and compiled artifacts remain in a
-// state-volume archive rather than growing Postgres/PGlite rows.
+// CompileJob stores the immutable source manifest required for an exact retry.
+// Source bytes, logs, and compiled artifacts remain on the state volume.
 type CompileJob struct {
-	ID         string     `gorm:"primaryKey;size:40"`
-	OwnerID    string     `gorm:"not null;index"`
-	ProjectID  string     `gorm:"not null;index;size:128"`
-	Status     string     `gorm:"not null;index;size:16"`
-	Request    []byte     `gorm:"type:bytea;not null"`
-	Result     []byte     `gorm:"type:bytea"`
-	Error      string     `gorm:"type:text"`
-	ArchiveKey string     `gorm:"size:255"`
-	CreatedAt  time.Time  `gorm:"index"`
-	StartedAt  *time.Time `gorm:"index"`
-	FinishedAt *time.Time `gorm:"index"`
+	ID               string     `gorm:"primaryKey;size:40"`
+	OwnerID          string     `gorm:"not null;index"`
+	ProjectID        string     `gorm:"not null;index;size:128"`
+	SnapshotID       string     `gorm:"index;size:40"`
+	SnapshotManifest []byte     `gorm:"type:bytea"`
+	Status           string     `gorm:"not null;index;size:16"`
+	Request          []byte     `gorm:"type:bytea;not null"`
+	Result           []byte     `gorm:"type:bytea"`
+	Error            string     `gorm:"type:text"`
+	ArchiveKey       string     `gorm:"size:255"`
+	CreatedAt        time.Time  `gorm:"index"`
+	StartedAt        *time.Time `gorm:"index"`
+	FinishedAt       *time.Time `gorm:"index"`
 }
 
 func Open(ctx context.Context, databaseURL string) (*Postgres, error) {
@@ -333,6 +335,31 @@ func (p *Postgres) ListPendingJobs(ctx context.Context) ([]CompileJob, error) {
 		return nil, err
 	}
 	return jobs, nil
+}
+
+// VisitActiveJobSnapshots exposes only immutable manifests referenced by jobs
+// that may still need their source blobs after a server restart.
+func (p *Postgres) VisitActiveJobSnapshots(ctx context.Context, batchSize int, visit func([]byte) error) error {
+	if batchSize < 1 {
+		batchSize = 100
+	}
+	var jobs []CompileJob
+	result := p.db.WithContext(ctx).
+		Select("id", "snapshot_manifest").
+		Where("status IN ? AND snapshot_manifest IS NOT NULL", []string{"queued", "running"}).
+		Order("id ASC").
+		FindInBatches(&jobs, batchSize, func(_ *gorm.DB, _ int) error {
+			for _, job := range jobs {
+				if len(job.SnapshotManifest) == 0 {
+					continue
+				}
+				if err := visit(job.SnapshotManifest); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	return result.Error
 }
 
 func (p *Postgres) UpdateJob(ctx context.Context, id string, values map[string]any) error {

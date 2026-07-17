@@ -30,6 +30,7 @@ import (
 const uploadLifetime = 15 * time.Minute
 
 type Snapshot struct {
+	ID        string            `json:"snapshotId"`
 	OwnerID   string            `json:"ownerId"`
 	ProjectID string            `json:"projectId"`
 	Files     []api.ProjectFile `json:"files"`
@@ -51,6 +52,11 @@ type storedSnapshot struct {
 	UpdatedAt time.Time
 }
 
+type pinnedSnapshot struct {
+	Snapshot Snapshot
+	Count    int
+}
+
 type Manager struct {
 	cfg      config.Config
 	db       *store.Postgres
@@ -59,6 +65,7 @@ type Manager struct {
 	mu           sync.Mutex
 	sessions     map[string]session
 	snapshots    map[string]storedSnapshot
+	pins         map[string]pinnedSnapshot
 	snapshotMu   sync.Mutex
 	stateBytes   int64
 	pendingBytes int64
@@ -86,7 +93,7 @@ func New(cfg config.Config, db *store.Postgres) (*Manager, error) {
 	}
 	return &Manager{
 		cfg: cfg, db: db, stateDir: stateDir,
-		sessions: make(map[string]session), snapshots: make(map[string]storedSnapshot), stateBytes: stateBytes,
+		sessions: make(map[string]session), snapshots: make(map[string]storedSnapshot), pins: make(map[string]pinnedSnapshot), stateBytes: stateBytes,
 	}, nil
 }
 
@@ -276,7 +283,11 @@ func (m *Manager) Commit(ctx context.Context, ownerID, uploadID string) (Snapsho
 			return Snapshot{}, api.CompileRequest{}, fmt.Errorf("missing required digest %s", digest)
 		}
 	}
-	snapshot := Snapshot{OwnerID: ownerID, ProjectID: s.projectID, Files: append([]api.ProjectFile(nil), s.files...)}
+	snapshot, err := NewSnapshot(ownerID, s.projectID, s.files)
+	if err != nil {
+		release()
+		return Snapshot{}, api.CompileRequest{}, err
+	}
 	m.snapshotMu.Lock()
 	defer m.snapshotMu.Unlock()
 	if m.db != nil {
@@ -310,6 +321,12 @@ func (m *Manager) Snapshot(ctx context.Context, ownerID, projectID string) (Snap
 		if err := json.Unmarshal(record.Manifest, &snapshot); err != nil {
 			return Snapshot{}, fmt.Errorf("decode project snapshot: %w", err)
 		}
+		if snapshot.ID == "" {
+			snapshot, err = NewSnapshot(snapshot.OwnerID, snapshot.ProjectID, snapshot.Files)
+			if err != nil {
+				return Snapshot{}, fmt.Errorf("normalize project snapshot: %w", err)
+			}
+		}
 		return snapshot, nil
 	}
 	m.snapshotMu.Lock()
@@ -321,6 +338,88 @@ func (m *Manager) Snapshot(ctx context.Context, ownerID, projectID string) (Snap
 		return Snapshot{}, errors.New("project snapshot not found")
 	}
 	return stored.Snapshot, nil
+}
+
+// NewSnapshot validates and canonicalizes a project manifest, then assigns a
+// content-derived identifier. The owner and project are included so IDs are
+// scoped to the same authorization boundary as the source blobs.
+func NewSnapshot(ownerID, projectID string, files []api.ProjectFile) (Snapshot, error) {
+	if ownerID == "" {
+		return Snapshot{}, errors.New("snapshot owner is required")
+	}
+	if !validProjectID(projectID) {
+		return Snapshot{}, errors.New("snapshot project ID is invalid")
+	}
+	if len(files) == 0 {
+		return Snapshot{}, errors.New("snapshot must contain at least one file")
+	}
+	canonical := append([]api.ProjectFile(nil), files...)
+	sort.Slice(canonical, func(i, j int) bool { return canonical[i].Path < canonical[j].Path })
+	for i, file := range canonical {
+		if !validProjectPath(file.Path) || !validSHA256(file.SHA256) || file.Size < 0 {
+			return Snapshot{}, fmt.Errorf("snapshot contains invalid file %q", file.Path)
+		}
+		if i > 0 && canonical[i-1].Path == file.Path {
+			return Snapshot{}, fmt.Errorf("snapshot contains duplicate path %q", file.Path)
+		}
+	}
+	identity := struct {
+		OwnerID   string            `json:"ownerId"`
+		ProjectID string            `json:"projectId"`
+		Files     []api.ProjectFile `json:"files"`
+	}{OwnerID: ownerID, ProjectID: projectID, Files: canonical}
+	encoded, err := json.Marshal(identity)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	digest := sha256.Sum256(encoded)
+	return Snapshot{ID: "src_" + hex.EncodeToString(digest[:16]), OwnerID: ownerID, ProjectID: projectID, Files: canonical}, nil
+}
+
+// ValidateSnapshot rejects a modified or incomplete snapshot manifest.
+func ValidateSnapshot(snapshot Snapshot) error {
+	expected, err := NewSnapshot(snapshot.OwnerID, snapshot.ProjectID, snapshot.Files)
+	if err != nil {
+		return err
+	}
+	if snapshot.ID == "" || snapshot.ID != expected.ID {
+		return errors.New("snapshot ID does not match its manifest")
+	}
+	return nil
+}
+
+// PinSnapshot keeps source blobs alive while a queued or running job refers to
+// an older project version. Pins are process-local; database-backed recovery is
+// also covered by active job manifests during pruning.
+func (m *Manager) PinSnapshot(snapshot Snapshot) error {
+	if err := ValidateSnapshot(snapshot); err != nil {
+		return err
+	}
+	snapshot.Files = append([]api.ProjectFile(nil), snapshot.Files...)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pin := m.pins[snapshot.ID]
+	if pin.Count == 0 {
+		pin.Snapshot = snapshot
+	}
+	pin.Count++
+	m.pins[snapshot.ID] = pin
+	return nil
+}
+
+func (m *Manager) ReleaseSnapshot(snapshotID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pin, ok := m.pins[snapshotID]
+	if !ok {
+		return
+	}
+	if pin.Count <= 1 {
+		delete(m.pins, snapshotID)
+		return
+	}
+	pin.Count--
+	m.pins[snapshotID] = pin
 }
 
 // Start keeps the state volume bounded over time. Capacity is still enforced
@@ -370,6 +469,9 @@ func (m *Manager) Prune(ctx context.Context) (int64, error) {
 		}
 		addExpectedReferences(references, ownerKey(s.ownerID), s.expected)
 	}
+	for _, pin := range m.pins {
+		addSnapshotReferences(references, pin.Snapshot)
+	}
 	m.mu.Unlock()
 
 	m.snapshotMu.Lock()
@@ -387,6 +489,19 @@ func (m *Manager) Prune(ctx context.Context) (int64, error) {
 			return nil
 		}); err != nil {
 			return 0, fmt.Errorf("visit project snapshots: %w", err)
+		}
+		if err := m.db.VisitActiveJobSnapshots(ctx, 100, func(manifest []byte) error {
+			var snapshot Snapshot
+			if err := json.Unmarshal(manifest, &snapshot); err != nil {
+				return fmt.Errorf("decode active job snapshot: %w", err)
+			}
+			if err := ValidateSnapshot(snapshot); err != nil {
+				return fmt.Errorf("validate active job snapshot: %w", err)
+			}
+			addSnapshotReferences(references, snapshot)
+			return nil
+		}); err != nil {
+			return 0, fmt.Errorf("visit active job snapshots: %w", err)
 		}
 	} else {
 		m.mu.Lock()
@@ -408,6 +523,9 @@ func (m *Manager) Prune(ctx context.Context) (int64, error) {
 			continue
 		}
 		addExpectedReferences(references, ownerKey(s.ownerID), s.expected)
+	}
+	for _, pin := range m.pins {
+		addSnapshotReferences(references, pin.Snapshot)
 	}
 	var reclaimed int64
 	var err error

@@ -43,6 +43,7 @@ export interface CompileResult {
 export interface Job {
   id: string;
   projectId: string;
+  snapshotId?: string;
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
   createdAt: string;
   startedAt?: string;

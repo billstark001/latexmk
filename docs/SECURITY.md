@@ -23,7 +23,10 @@ at the application and deployment layers.
 - Upload blobs, logs, artifacts, concurrent compiles, queued jobs, state bytes,
   and upload sessions have hard limits.
 - A state sweeper expires results, project snapshots, and orphaned blobs. It
-  never removes data referenced by a live upload or current snapshot.
+  never removes data referenced by a live upload, current project snapshot, or
+  queued/running job snapshot.
+- Queued jobs persist an immutable, content-derived snapshot ID and complete
+  manifest. A later upload to the same project cannot change their input.
 - Compile commands run in their own process group; timeout kills the process
   tree.
 - Docker images run as an unprivileged user. Generated Compose files use a
