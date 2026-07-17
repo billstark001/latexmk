@@ -94,3 +94,17 @@ func TestParseCompileArgsRejectsUnknownRootMode(t *testing.T) {
 		t.Fatal("expected invalid root mode error")
 	}
 }
+
+func TestParseCompileArgsReadsTokenFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("file-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := compileOptions{timeout: time.Minute}
+	if err := parseCompileArgs([]string{"--token-file", path, "main.tex"}, &opts); err != nil {
+		t.Fatal(err)
+	}
+	if opts.token != "file-token" {
+		t.Fatalf("token = %q, want file-token", opts.token)
+	}
+}

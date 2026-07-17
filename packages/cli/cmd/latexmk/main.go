@@ -222,6 +222,15 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 				return err
 			}
 			opts.token = v
+		case a == "--token-file" || strings.HasPrefix(a, "--token-file="):
+			v, err := value("--token-file")
+			if err != nil {
+				return err
+			}
+			opts.token, err = config.ReadTokenFile(v)
+			if err != nil {
+				return err
+			}
 		case a == "--project-root" || strings.HasPrefix(a, "--project-root="):
 			v, err := value("--project-root")
 			if err != nil {
@@ -452,6 +461,15 @@ func runMeta(args []string, doctor bool) int {
 				return fail(e)
 			}
 			token = v
+		case a == "--token-file" || strings.HasPrefix(a, "--token-file="):
+			v, e := next()
+			if e != nil {
+				return fail(e)
+			}
+			token, e = config.ReadTokenFile(v)
+			if e != nil {
+				return fail(e)
+			}
 		case a == "--timeout" || strings.HasPrefix(a, "--timeout="):
 			v, e := next()
 			if e != nil {
@@ -570,6 +588,7 @@ Usage:
 Compile options:
   --server URL                 Remote server URL
   --token TOKEN                Bearer token (prefer LATEXMK_TOKEN)
+  --token-file FILE            Read the bearer token from a file
   --project-root DIR           Root directory uploaded to the server
   --root-mode entry|git        Default root when --project-root is absent
   --gitignore                  Respect Git ignore rules (default)
@@ -584,7 +603,7 @@ Compile options:
   --dry-run                    Print the upload manifest without contacting the server
 
 The executable may be symlinked as xelatex, lualatex, or pdflatex.
-Configuration is read from .latexmk.json and environment variables.
+Configuration is read from the user config, .latexmk.json, and environment variables.
 `)
 }
 

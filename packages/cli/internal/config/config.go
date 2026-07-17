@@ -7,10 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
 const FileName = ".latexmk.json"
+const UserFileName = "config.json"
+
+const maxTokenFileSize = 64 << 10
 
 type FileConfig struct {
 	Server             string   `json:"server"`
@@ -35,6 +39,7 @@ type Resolved struct {
 	Exclude            []string
 	InsecureSkipVerify bool
 	ConfigPath         string
+	UserConfigPath     string
 }
 
 // DefaultExcludes returns files that should not be uploaded without an
@@ -81,25 +86,42 @@ func Load(start string) (Resolved, error) {
 		Timeout:          "3m",
 		Exclude:          DefaultExcludes(),
 	}
+	userPath, err := findUserConfig()
+	if err != nil {
+		return Resolved{}, err
+	}
+	if userPath != "" {
+		if err := mergeFile(userPath, &cfg); err != nil {
+			return Resolved{}, err
+		}
+	}
+	userToken := cfg.Token
+
 	path, err := findConfig(start)
 	if err != nil {
 		return Resolved{}, err
 	}
 	if path != "" {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return Resolved{}, fmt.Errorf("read %s: %w", path, err)
+		if err := mergeFile(path, &cfg); err != nil {
+			return Resolved{}, err
 		}
-		if err := json.Unmarshal(b, &cfg); err != nil {
-			return Resolved{}, fmt.Errorf("parse %s: %w", path, err)
-		}
+	}
+	if userToken != "" {
+		cfg.Token = userToken
 	}
 	cfg.Exclude = mergePatterns(cfg.Exclude, DefaultDeny())
 
 	if v := os.Getenv("LATEXMK_SERVER"); v != "" {
 		cfg.Server = v
 	}
-	if v := os.Getenv("LATEXMK_TOKEN"); v != "" {
+	if v := os.Getenv("LATEXMK_TOKEN_FILE"); v != "" {
+		token, err := ReadTokenFile(v)
+		if err != nil {
+			return Resolved{}, fmt.Errorf("LATEXMK_TOKEN_FILE: %w", err)
+		}
+		cfg.Token = token
+	}
+	if v, ok := os.LookupEnv("LATEXMK_TOKEN"); ok && v != "" {
 		cfg.Token = v
 	}
 	if v := os.Getenv("LATEXMK_ENGINE"); v != "" {
@@ -158,7 +180,69 @@ func Load(start string) (Resolved, error) {
 		Exclude:            cfg.Exclude,
 		InsecureSkipVerify: cfg.InsecureSkipVerify,
 		ConfigPath:         path,
+		UserConfigPath:     userPath,
 	}, nil
+}
+
+func mergeFile(path string, cfg *FileConfig) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	if err := json.Unmarshal(b, cfg); err != nil {
+		return fmt.Errorf("parse %s: %w", path, err)
+	}
+	return nil
+}
+
+func findUserConfig() (string, error) {
+	base := os.Getenv("XDG_CONFIG_HOME")
+	if base == "" {
+		var err error
+		base, err = os.UserConfigDir()
+		if err != nil {
+			return "", fmt.Errorf("find user config directory: %w", err)
+		}
+	}
+	path := filepath.Join(base, "latexmk", UserFileName)
+	st, err := os.Stat(path)
+	if err == nil {
+		if !st.Mode().IsRegular() {
+			return "", fmt.Errorf("user config %s is not a regular file", path)
+		}
+		return path, nil
+	}
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	return "", fmt.Errorf("stat user config %s: %w", path, err)
+}
+
+// ReadTokenFile reads one bearer token from a regular file. Leading and
+// trailing whitespace is ignored to support Docker and Kubernetes secrets.
+func ReadTokenFile(path string) (string, error) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("read token file %s: %w", path, err)
+	}
+	if !st.Mode().IsRegular() {
+		return "", fmt.Errorf("token file %s is not a regular file", path)
+	}
+	if st.Size() > maxTokenFileSize {
+		return "", fmt.Errorf("token file %s exceeds %d bytes", path, maxTokenFileSize)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read token file %s: %w", path, err)
+	}
+	token := strings.TrimSpace(string(b))
+	if token == "" {
+		return "", fmt.Errorf("token file %s is empty", path)
+	}
+	if strings.ContainsAny(token, "\r\n") {
+		return "", fmt.Errorf("token file %s must contain exactly one token", path)
+	}
+	return token, nil
 }
 
 func mergePatterns(base, required []string) []string {

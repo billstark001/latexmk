@@ -6,7 +6,17 @@ import (
 	"testing"
 )
 
+func isolateUserConfig(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("LATEXMK_TOKEN", "")
+	t.Setenv("LATEXMK_TOKEN_FILE", "")
+	return dir
+}
+
 func TestLoadDefaultsToEntryRootModeWithoutExpandingToGitRoot(t *testing.T) {
+	isolateUserConfig(t)
 	repo := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o700); err != nil {
 		t.Fatal(err)
@@ -61,6 +71,7 @@ func TestDefaultDenyIncludesSensitiveLocalConfiguration(t *testing.T) {
 }
 
 func TestLoadKeepsDefaultDenyWhenProjectReplacesExcludes(t *testing.T) {
+	isolateUserConfig(t)
 	root := t.TempDir()
 	configJSON := `{"server":"http://127.0.0.1:8080","exclude":["custom.tmp"]}`
 	if err := os.WriteFile(filepath.Join(root, FileName), []byte(configJSON), 0o600); err != nil {
@@ -84,6 +95,7 @@ func TestLoadKeepsDefaultDenyWhenProjectReplacesExcludes(t *testing.T) {
 }
 
 func TestLoadRespectsExplicitGitIgnoreSetting(t *testing.T) {
+	isolateUserConfig(t)
 	root := t.TempDir()
 	configJSON := `{"server":"http://127.0.0.1:8080","respectGitignore":false}`
 	if err := os.WriteFile(filepath.Join(root, FileName), []byte(configJSON), 0o600); err != nil {
@@ -95,5 +107,63 @@ func TestLoadRespectsExplicitGitIgnoreSetting(t *testing.T) {
 	}
 	if cfg.RespectGitIgnore {
 		t.Fatal("respectGitignore = true, want false")
+	}
+}
+
+func TestLoadTokenPrecedence(t *testing.T) {
+	configHome := isolateUserConfig(t)
+	root := t.TempDir()
+	userDir := filepath.Join(configHome, "latexmk")
+	if err := os.MkdirAll(userDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(userDir, UserFileName), []byte(`{"token":"user-token","server":"https://user.example"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, FileName), []byte(`{"token":"project-token","server":"https://project.example"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Token != "user-token" {
+		t.Fatalf("token = %q, want user-token", cfg.Token)
+	}
+	if cfg.Server != "https://project.example" {
+		t.Fatalf("server = %q, want project config to override user config", cfg.Server)
+	}
+
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte("file-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LATEXMK_TOKEN_FILE", tokenFile)
+	cfg, err = Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Token != "file-token" {
+		t.Fatalf("token = %q, want file-token", cfg.Token)
+	}
+
+	t.Setenv("LATEXMK_TOKEN", "environment-token")
+	cfg, err = Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Token != "environment-token" {
+		t.Fatalf("token = %q, want environment-token", cfg.Token)
+	}
+}
+
+func TestReadTokenFileRejectsMultipleLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("first\nsecond\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadTokenFile(path); err == nil {
+		t.Fatal("expected multiple token lines to be rejected")
 	}
 }

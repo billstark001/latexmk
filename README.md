@@ -90,7 +90,9 @@ the absolute CLI path if you need both in the same shell.
 
 ## Client configuration
 
-The CLI searches upward for `.latexmk.json`:
+The CLI first reads the user config at `$XDG_CONFIG_HOME/latexmk/config.json`
+(or the platform user config directory), then searches upward for a project
+`.latexmk.json`:
 
 ```json
 {
@@ -108,12 +110,20 @@ the entry TeX file. This prevents a command run in a subdirectory from silently
 uploading its parent Git repository. Set `rootMode` to `git`, pass
 `--root-mode git`, or set `--project-root` to request a wider root explicitly.
 
-The project config may contain a `token` for a private, single-user setup. An
-environment variable is safer when the paper directory is committed or shared:
+The project config may contain a `token` for a private, single-user setup. A
+user config, environment variable, or token file is safer when the paper
+directory is committed or shared:
 
 ```sh
 export LATEXMK_TOKEN='lm_...'
+# Or mount a Docker/Kubernetes secret and point to it:
+export LATEXMK_TOKEN_FILE=/run/secrets/latexmk_token
 ```
+
+Token priority is: CLI `--token`/`--token-file`, `LATEXMK_TOKEN`,
+`LATEXMK_TOKEN_FILE`, user config, then project config. Project settings other
+than the token override user defaults. A token file must contain exactly one
+non-empty token; a trailing newline is accepted.
 
 The client does not upload `.latexmk.json`, `.latexmkignore`, `.env` files, or
 common private-key files by default, even when a project replaces the ordinary
