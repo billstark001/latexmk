@@ -83,6 +83,8 @@ func run(args []string) int {
 			return runMeta(argv[1:], true)
 		case "clean":
 			return runClean(argv[1:])
+		case "jobs":
+			return runJobs(argv[1:])
 		case "files":
 			return runCompile(argv[1:], "", true)
 		case "watch":
@@ -828,6 +830,9 @@ Usage:
   latexmk doctor
   latexmk init [--server URL]
   latexmk clean [main.tex]
+  latexmk jobs list [--limit 50] [--json]
+  latexmk jobs show JOB_ID [--json]
+  latexmk jobs cancel JOB_ID [--json]
   latexmk files [options] <main.tex>
   latexmk version
 

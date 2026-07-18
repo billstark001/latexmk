@@ -1,13 +1,49 @@
 package main
 
 import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
 )
+
+func captureCommandOutput(t *testing.T, fn func() int) (int, string, string) {
+	t.Helper()
+	oldStdout, oldStderr := os.Stdout, os.Stderr
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderrR, stderrW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout, os.Stderr = stdoutW, stderrW
+	defer func() {
+		os.Stdout, os.Stderr = oldStdout, oldStderr
+	}()
+	code := fn()
+	_ = stdoutW.Close()
+	_ = stderrW.Close()
+	stdout, err := io.ReadAll(stdoutR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr, err := io.ReadAll(stderrR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = stdoutR.Close()
+	_ = stderrR.Close()
+	return code, string(stdout), string(stderr)
+}
 
 func TestNormalizeCompilePathsResolvesProjectRootSymlink(t *testing.T) {
 	physicalRoot := t.TempDir()
@@ -198,5 +234,94 @@ func TestWatchTargetsOnlyAddsSelectedFilesAndPolicyControls(t *testing.T) {
 	}
 	if paths[filepath.Join(project, "unrelated-secret.txt")] {
 		t.Fatal("watcher included an unrelated project file")
+	}
+}
+func TestJobsListJSONUsesVersionedEnvelope(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("LATEXMK_TOKEN", "")
+	t.Setenv("LATEXMK_TOKEN_FILE", "")
+	older := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	newer := older.Add(time.Minute)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/jobs" || r.URL.Query().Get("limit") != "2" || r.Header.Get("Authorization") != "Bearer secret-token" {
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"jobs": []map[string]any{
+			{"id": "job_old", "projectId": "project", "status": "succeeded", "createdAt": older},
+			{"id": "job_new", "projectId": "project", "status": "queued", "createdAt": newer},
+		}})
+	}))
+	defer server.Close()
+	code, stdout, stderr := captureCommandOutput(t, func() int {
+		return run([]string{"latexmk", "jobs", "list", "--server", server.URL, "--token", "secret-token", "--limit", "2", "--json"})
+	})
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if strings.Contains(stdout, "secret-token") {
+		t.Fatal("JSON output exposed the bearer token")
+	}
+	var envelope struct {
+		SchemaVersion int    `json:"schemaVersion"`
+		OK            bool   `json:"ok"`
+		Command       string `json:"command"`
+		Data          struct {
+			Count int `json:"count"`
+			Limit int `json:"limit"`
+			Jobs  []struct {
+				ID string `json:"id"`
+			} `json:"jobs"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.SchemaVersion != 1 || !envelope.OK || envelope.Command != "jobs.list" || envelope.Data.Count != 2 || envelope.Data.Limit != 2 || envelope.Data.Jobs[0].ID != "job_new" {
+		t.Fatalf("envelope = %#v", envelope)
+	}
+}
+
+func TestJobsJSONErrorIsStableAndDoesNotExposeToken(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("LATEXMK_TOKEN", "")
+	t.Setenv("LATEXMK_TOKEN_FILE", "")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"job not found"}`))
+	}))
+	defer server.Close()
+	code, stdout, stderr := captureCommandOutput(t, func() int {
+		return run([]string{"latexmk", "jobs", "show", "job_missing", "--server", server.URL, "--token", "secret-token", "--json"})
+	})
+	if code != 1 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if strings.Contains(stdout, "secret-token") {
+		t.Fatal("JSON error exposed the bearer token")
+	}
+	var envelope agentJSONEnvelope
+	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.OK || envelope.Command != "jobs.show" || envelope.Error == nil || envelope.Error.Code != "not_found" || envelope.Error.Retryable || envelope.Error.Details["httpStatus"] != float64(http.StatusNotFound) {
+		t.Fatalf("error envelope = %#v", envelope)
+	}
+}
+
+func TestJobsInvalidArgumentsUseJSONError(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	code, stdout, stderr := captureCommandOutput(t, func() int {
+		return run([]string{"latexmk", "jobs", "list", "--limit", "0", "--json"})
+	})
+	if code != 2 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	var envelope agentJSONEnvelope
+	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Error == nil || envelope.Error.Code != "invalid_arguments" || envelope.Error.Retryable {
+		t.Fatalf("error envelope = %#v", envelope)
 	}
 }

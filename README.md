@@ -205,6 +205,19 @@ latexmk clean main.tex
 latexmk --json main.tex
 ```
 
+Agent and script integrations can inspect and cancel queued jobs without
+parsing human-readable output:
+
+```sh
+latexmk jobs list --limit 50 --json
+latexmk jobs show JOB_ID --json
+latexmk jobs cancel JOB_ID --json
+```
+
+These new commands use a versioned JSON envelope with stable error codes and a
+`retryable` flag. Existing `compile`, `files`, and `meta` JSON shapes remain
+unchanged. See [the Agent-facing CLI contract](docs/AGENT_CLI.md).
+
 ## Deployment
 
 Build a slim XeLaTeX/CJK context for an existing PostgreSQL service:

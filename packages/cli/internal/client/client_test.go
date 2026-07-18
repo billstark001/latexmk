@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -93,6 +94,73 @@ func TestNewRejectsUnsafeServerURLs(t *testing.T) {
 	}
 	if _, err := New("https://example.test/api", "", 0, false); err != nil {
 		t.Fatalf("expected valid URL: %v", err)
+	}
+}
+
+func TestJobMethodsUseStablePathsAndOrdering(t *testing.T) {
+	older := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	newer := older.Add(time.Minute)
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.RequestURI())
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/jobs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jobs": []protocol.Job{
+				{ID: "job_old", ProjectID: "project", Status: "succeeded", CreatedAt: older},
+				{ID: "job_b", ProjectID: "project", Status: "queued", CreatedAt: newer},
+				{ID: "job_a", ProjectID: "project", Status: "queued", CreatedAt: newer},
+			}})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/jobs/job_a":
+			_ = json.NewEncoder(w).Encode(protocol.Job{ID: "job_a", ProjectID: "project", Status: "queued", CreatedAt: newer})
+		case r.Method == http.MethodDelete && r.URL.Path == "/v1/jobs/job_a":
+			_ = json.NewEncoder(w).Encode(protocol.Job{ID: "job_a", ProjectID: "project", Status: "cancelled", CreatedAt: newer})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "", time.Second, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := c.ListJobs(context.Background(), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 3 || jobs[0].ID != "job_a" || jobs[1].ID != "job_b" || jobs[2].ID != "job_old" {
+		t.Fatalf("jobs are not stably sorted: %#v", jobs)
+	}
+	job, err := c.GetJob(context.Background(), "job_a")
+	if err != nil || job.ID != "job_a" {
+		t.Fatalf("get job = %#v, %v", job, err)
+	}
+	job, err = c.CancelJob(context.Background(), "job_a")
+	if err != nil || job.Status != "cancelled" {
+		t.Fatalf("cancel job = %#v, %v", job, err)
+	}
+	want := []string{"GET /v1/jobs?limit=3", "GET /v1/jobs/job_a", "DELETE /v1/jobs/job_a"}
+	if strings.Join(requests, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("requests = %#v, want %#v", requests, want)
+	}
+}
+
+func TestHTTPErrorPreservesStatusWithoutRequestCredentials(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"job not found"}`))
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "secret-token", time.Second, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.GetJob(context.Background(), "job_missing")
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusNotFound {
+		t.Fatalf("error = %#v", err)
+	}
+	if strings.Contains(err.Error(), "secret-token") {
+		t.Fatal("HTTP error exposed the bearer token")
 	}
 }
 

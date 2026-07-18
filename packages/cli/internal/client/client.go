@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,6 +45,21 @@ type CompileOutput struct {
 	Stdout   []byte
 	Stderr   []byte
 	Warnings []string
+}
+
+// HTTPError preserves the status code without exposing request credentials.
+// CLI and MCP adapters use it to produce stable machine-readable errors.
+type HTTPError struct {
+	StatusCode int
+	Status     string
+	Message    string
+}
+
+func (e *HTTPError) Error() string {
+	if e.Message == "" {
+		return fmt.Sprintf("server returned %s", e.Status)
+	}
+	return fmt.Sprintf("server returned %s: %s", e.Status, e.Message)
 }
 
 const (
@@ -108,6 +124,49 @@ func (c *Client) Health(ctx context.Context) error {
 		return readHTTPError(resp)
 	}
 	return nil
+}
+
+// ListJobs returns jobs in a stable newest-first order. The server accepts
+// limits from 1 through 200.
+func (c *Client) ListJobs(ctx context.Context, limit int) ([]protocol.Job, error) {
+	if limit < 1 || limit > 200 {
+		return nil, errors.New("job limit must be between 1 and 200")
+	}
+	var response struct {
+		Jobs []protocol.Job `json:"jobs"`
+	}
+	if err := c.jsonRequest(ctx, http.MethodGet, "/v1/jobs?limit="+url.QueryEscape(fmt.Sprint(limit)), nil, &response); err != nil {
+		return nil, err
+	}
+	sort.Slice(response.Jobs, func(i, j int) bool {
+		if response.Jobs[i].CreatedAt.Equal(response.Jobs[j].CreatedAt) {
+			return response.Jobs[i].ID < response.Jobs[j].ID
+		}
+		return response.Jobs[i].CreatedAt.After(response.Jobs[j].CreatedAt)
+	})
+	return response.Jobs, nil
+}
+
+func (c *Client) GetJob(ctx context.Context, jobID string) (protocol.Job, error) {
+	var job protocol.Job
+	if strings.TrimSpace(jobID) == "" {
+		return job, errors.New("job ID is required")
+	}
+	if err := c.jsonRequest(ctx, http.MethodGet, "/v1/jobs/"+url.PathEscape(jobID), nil, &job); err != nil {
+		return job, err
+	}
+	return job, nil
+}
+
+func (c *Client) CancelJob(ctx context.Context, jobID string) (protocol.Job, error) {
+	var job protocol.Job
+	if strings.TrimSpace(jobID) == "" {
+		return job, errors.New("job ID is required")
+	}
+	if err := c.jsonRequest(ctx, http.MethodDelete, "/v1/jobs/"+url.PathEscape(jobID), nil, &job); err != nil {
+		return job, err
+	}
+	return job, nil
 }
 
 func (c *Client) Compile(ctx context.Context, request protocol.CompileRequest, outputRoot string) (CompileOutput, error) {
@@ -739,13 +798,13 @@ func readHTTPError(resp *http.Response) error {
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	b = bytes.TrimSpace(b)
 	if len(b) == 0 {
-		return fmt.Errorf("server returned %s", resp.Status)
+		return &HTTPError{StatusCode: resp.StatusCode, Status: resp.Status}
 	}
 	var payload struct {
 		Error string `json:"error"`
 	}
 	if json.Unmarshal(b, &payload) == nil && payload.Error != "" {
-		return fmt.Errorf("server returned %s: %s", resp.Status, payload.Error)
+		return &HTTPError{StatusCode: resp.StatusCode, Status: resp.Status, Message: payload.Error}
 	}
-	return fmt.Errorf("server returned %s: %s", resp.Status, string(b))
+	return &HTTPError{StatusCode: resp.StatusCode, Status: resp.Status, Message: string(b)}
 }
