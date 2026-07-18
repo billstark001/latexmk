@@ -1,6 +1,7 @@
 # Agent-facing CLI contract
 
-Status: version 1 draft implemented for detached compile and `jobs` commands.
+Status: version 1 draft implemented for detached compile, jobs, logs,
+diagnostics, and artifacts.
 
 This contract is for local agents and scripts. The CLI uses the same token,
 timeout, and TLS configuration as interactive commands. It never prints the
@@ -99,10 +100,11 @@ latexmk jobs cancel JOB_ID --json
 newest first, with ID as the stable tie-breaker. `jobs.show` and `jobs.cancel`
 return one job object. Cancel only succeeds while the remote job is queued.
 
-## Logs and artifacts
+## Logs, diagnostics, and artifacts
 
 ```sh
 latexmk logs JOB_ID --source all --tail 200 --max-bytes 65536 --json
+latexmk diagnostics JOB_ID --json
 latexmk artifacts list JOB_ID --json
 latexmk artifacts get JOB_ID ARTIFACT_ID --out-dir ./build --json
 ```
@@ -112,11 +114,25 @@ byte limit applies across all returned entries and is capped at 4 MiB. Content
 is streamed through a bounded tail buffer; large PDFs and unrelated artifacts
 are not loaded into memory. Compiler logs are checked against job metadata.
 
+`diagnostics.get` scans the complete raw log streams without retaining them in
+memory. It returns at most 100 deduplicated common TeX errors and warnings.
+Each diagnostic contains `severity`, optional project-relative `file` and
+`line`, `message`, optional bounded `context`, and one or more `logLocations`.
+`fileInferred: true` distinguishes a filename inferred from TeX's open-file
+trace from an explicit `-file-line-error` location.
+A location identifies the raw log `source`, `path`, and exact `startLine` and
+`endLine`. Duplicate messages from stdout and a compiler log are merged while
+keeping both locations. Messages, source context, locations, selected log
+count, and input line length are bounded. `incomplete: true` means the caller
+must inspect `logs`; an empty or apparently insufficient index should also
+fall back to raw logs. Diagnostics are an index, not an authoritative parser or
+a replacement for the original output.
+
 Artifact list returns an opaque, deterministic 128-bit ID derived from the
 declared project-relative artifact path. Download accepts only that ID, checks
 size and SHA-256, rejects unsafe output paths and symlinks, and returns the
 absolute local path and MIME type. Binary data is never embedded in JSON.
 
-Job list output is bounded to 1 through 200 jobs. Log and artifact commands use
-their own bounded contracts; they do not embed PDF data or unbounded logs in
-this envelope.
+Job list output is bounded to 1 through 200 jobs. Log, diagnostic, and artifact
+commands use their own bounded contracts; they do not embed PDF data or
+unbounded logs in this envelope.

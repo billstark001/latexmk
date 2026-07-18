@@ -264,6 +264,101 @@ func TestLogsShareBoundedTailBudgetAcrossSources(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsIndexKeepsRawLogLocations(t *testing.T) {
+	stdout := []byte("This is pdfTeX\n(./main.tex\n./main.tex:7: Undefined control sequence.\nl.7 \\badcommand\nLaTeX Warning: Citation `missing' undefined on input line 12.\n")
+	compiler := []byte("(./main.tex\n./main.tex:7: Undefined control sequence.\nl.7 \\badcommand\nLaTeX Warning: Citation `missing' undefined on input line 12.\n")
+	compilerHash := sha256.Sum256(compiler)
+	result := protocol.CompileResult{ProtocolVersion: 2, RequestID: "job_diagnostics", Success: false, Artifacts: []protocol.Artifact{
+		{Path: "main.log", Size: int64(len(compiler)), SHA256: hex.EncodeToString(compilerHash[:])},
+	}}
+	resultJSON, _ := json.Marshal(result)
+	archive := buildResultArchive(t, []tarEntry{
+		{name: "result.json", payload: resultJSON},
+		{name: "stdout.log", payload: stdout},
+		{name: "stderr.log", payload: nil},
+		{name: "artifacts/main.log", payload: compiler},
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/result") {
+			_, _ = w.Write(archive)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(protocol.Job{ID: "job_diagnostics", Status: "failed", Result: &result})
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "", time.Second, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := c.Diagnostics(context.Background(), "job_diagnostics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Count != 2 || output.Incomplete || len(output.LogsScanned) != 3 {
+		t.Fatalf("diagnostics output = %#v", output)
+	}
+	errorDiagnostic := output.Diagnostics[0]
+	if errorDiagnostic.Severity != "error" || errorDiagnostic.File != "main.tex" || errorDiagnostic.FileInferred || errorDiagnostic.Line != 7 || errorDiagnostic.Context != `\badcommand` {
+		t.Fatalf("error diagnostic = %#v", errorDiagnostic)
+	}
+	if len(errorDiagnostic.LogLocations) != 2 || errorDiagnostic.LogLocations[0] != (LogLocation{Source: "stdout", Path: "stdout.log", StartLine: 3, EndLine: 4}) || errorDiagnostic.LogLocations[1] != (LogLocation{Source: "compiler", Path: "main.log", StartLine: 2, EndLine: 3}) {
+		t.Fatalf("error locations = %#v", errorDiagnostic.LogLocations)
+	}
+	warning := output.Diagnostics[1]
+	if warning.Severity != "warning" || warning.File != "main.tex" || !warning.FileInferred || warning.Line != 12 || len(warning.LogLocations) != 2 {
+		t.Fatalf("warning diagnostic = %#v", warning)
+	}
+}
+
+func TestDiagnosticStreamBoundsUntrustedLines(t *testing.T) {
+	parser := newDiagnosticStream("compiler", "main.log")
+	longLine := "! " + strings.Repeat("x", maxDiagnosticLineBytes+1024) + "\n"
+	if _, err := parser.Write([]byte(longLine)); err != nil {
+		t.Fatal(err)
+	}
+	parser.finish()
+	if !parser.incomplete || parser.oversizedLines != 1 || len(parser.diagnostics) != 1 {
+		t.Fatalf("parser state = %#v", parser)
+	}
+	if len(parser.diagnostics[0].Message) > maxDiagnosticTextBytes+len("…") {
+		t.Fatalf("diagnostic message was not bounded: %d", len(parser.diagnostics[0].Message))
+	}
+}
+
+func TestDiagnosticStreamIndexesClassicTeXErrorAsInferred(t *testing.T) {
+	parser := newDiagnosticStream("compiler", "main.log")
+	logData := "(./chapters/body.tex\n! LaTeX Error: File `missing.sty' not found.\n\nl.23 \\usepackage{missing}\n"
+	if _, err := parser.Write([]byte(logData)); err != nil {
+		t.Fatal(err)
+	}
+	parser.finish()
+	if len(parser.diagnostics) != 1 {
+		t.Fatalf("diagnostics = %#v", parser.diagnostics)
+	}
+	diagnostic := parser.diagnostics[0]
+	if diagnostic.File != "chapters/body.tex" || !diagnostic.Inferred || diagnostic.Line != 23 || diagnostic.Context != `\usepackage{missing}` {
+		t.Fatalf("diagnostic = %#v", diagnostic)
+	}
+	if diagnostic.Location != (LogLocation{Source: "compiler", Path: "main.log", StartLine: 2, EndLine: 4}) {
+		t.Fatalf("location = %#v", diagnostic.Location)
+	}
+}
+
+func TestDiagnosticFileDoesNotExposeAbsoluteSystemPaths(t *testing.T) {
+	if got := diagnosticFile("/tmp/latexmk-job-123/project/sections/body.tex"); got != "sections/body.tex" {
+		t.Fatalf("workspace file = %q", got)
+	}
+	if got := diagnosticFile("/usr/local/texlive/texmf-dist/tex/latex/base/article.cls"); got != "" {
+		t.Fatalf("system path exposed as diagnostic file: %q", got)
+	}
+	if got := diagnosticFile(`C:\\texlive\\texmf-dist\\article.cls`); got != "" {
+		t.Fatalf("Windows system path exposed as diagnostic file: %q", got)
+	}
+	if got := diagnosticFile(`..\\secret.tex`); got != "" {
+		t.Fatalf("traversal exposed as diagnostic file: %q", got)
+	}
+}
+
 func TestResultStateErrorMarksQueuedResultUnavailable(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(protocol.Job{ID: "job_wait", Status: "running"})

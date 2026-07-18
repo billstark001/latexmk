@@ -128,6 +128,53 @@ func runLogs(args []string) int {
 	return 0
 }
 
+func runDiagnostics(args []string) int {
+	jsonOutput := hasJSONFlag(args)
+	command := "diagnostics.get"
+	opts, err := loadResultCommandOptions()
+	if err != nil {
+		return failAgentArguments(command, jsonOutput, err)
+	}
+	opts.jsonOutput = jsonOutput
+	if err := parseResultCommandArgs("diagnostics", args, &opts); err != nil {
+		return failAgentArguments(command, jsonOutput, err)
+	}
+	c, err := client.New(opts.server, opts.token, opts.timeout, opts.insecure)
+	if err != nil {
+		return failAgentArguments(command, jsonOutput, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
+	defer cancel()
+	diagnostics, err := c.Diagnostics(ctx, opts.jobID)
+	if err != nil {
+		return failAgent(command, opts.jsonOutput, err)
+	}
+	if opts.jsonOutput {
+		if err := writeAgentJSON(command, diagnostics); err != nil {
+			return fail(err)
+		}
+		return 0
+	}
+	for _, diagnostic := range diagnostics.Diagnostics {
+		position := diagnostic.File
+		if diagnostic.Line > 0 {
+			position += fmt.Sprintf(":%d", diagnostic.Line)
+		}
+		if position == "" {
+			position = "-"
+		}
+		locations := make([]string, 0, len(diagnostic.LogLocations))
+		for _, location := range diagnostic.LogLocations {
+			locations = append(locations, fmt.Sprintf("%s:%s:%d-%d", location.Source, location.Path, location.StartLine, location.EndLine))
+		}
+		fmt.Printf("%s\t%s\t%s\t[%s]\n", diagnostic.Severity, position, diagnostic.Message, strings.Join(locations, ", "))
+	}
+	if diagnostics.Incomplete {
+		fmt.Fprintln(os.Stderr, "latexmk: diagnostic index is incomplete; inspect the raw logs")
+	}
+	return 0
+}
+
 func loadResultCommandOptions() (resultCommandOptions, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -220,18 +267,20 @@ func parseResultCommandArgs(command string, args []string, opts *resultCommandOp
 	if opts.timeout <= 0 {
 		return errors.New("timeout must be positive")
 	}
-	if command == "logs" {
+	if command == "logs" || command == "diagnostics" {
 		if len(positionals) != 1 || !jobIDPattern.MatchString(positionals[0]) {
-			return errors.New("logs requires one valid job ID")
+			return fmt.Errorf("%s requires one valid job ID", command)
 		}
-		if opts.source != "all" && opts.source != "stdout" && opts.source != "stderr" && opts.source != "compiler" {
-			return errors.New("--source must be all, stdout, stderr, or compiler")
-		}
-		if opts.tailLines < 1 || opts.tailLines > 10_000 {
-			return errors.New("--tail must be between 1 and 10000")
-		}
-		if opts.maxBytes < 1 || opts.maxBytes > 4<<20 {
-			return errors.New("--max-bytes must be between 1 and 4194304")
+		if command == "logs" {
+			if opts.source != "all" && opts.source != "stdout" && opts.source != "stderr" && opts.source != "compiler" {
+				return errors.New("--source must be all, stdout, stderr, or compiler")
+			}
+			if opts.tailLines < 1 || opts.tailLines > 10_000 {
+				return errors.New("--tail must be between 1 and 10000")
+			}
+			if opts.maxBytes < 1 || opts.maxBytes > 4<<20 {
+				return errors.New("--max-bytes must be between 1 and 4194304")
+			}
 		}
 		opts.jobID = positionals[0]
 		return nil

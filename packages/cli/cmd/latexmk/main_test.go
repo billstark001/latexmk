@@ -221,6 +221,16 @@ func TestParseResultCommandArgs(t *testing.T) {
 	if opts.jobID != "job_test" || opts.artifactID != strings.Repeat("a", 32) || opts.outDir != "build" {
 		t.Fatalf("artifact options = %#v", opts)
 	}
+	opts = resultCommandOptions{timeout: time.Minute}
+	if err := parseResultCommandArgs("diagnostics", []string{"job_test", "--json"}, &opts); err != nil {
+		t.Fatal(err)
+	}
+	if opts.jobID != "job_test" || !opts.jsonOutput {
+		t.Fatalf("diagnostic options = %#v", opts)
+	}
+	if err := parseResultCommandArgs("diagnostics", []string{"job_test", "--tail", "20"}, &opts); err == nil {
+		t.Fatal("expected diagnostics to reject log-only options")
+	}
 }
 
 func TestResultStateErrorUsesRetryableAgentCode(t *testing.T) {

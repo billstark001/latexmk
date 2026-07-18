@@ -88,6 +88,8 @@ func run(args []string) int {
 			return runJobs(argv[1:])
 		case "logs":
 			return runLogs(argv[1:])
+		case "diagnostics":
+			return runDiagnostics(argv[1:])
 		case "artifacts":
 			return runArtifacts(argv[1:])
 		case "files":
@@ -895,6 +897,7 @@ Usage:
   latexmk jobs show JOB_ID [--json]
   latexmk jobs cancel JOB_ID [--json]
   latexmk logs JOB_ID [--source all|stdout|stderr|compiler] [--tail 200] [--max-bytes 65536] [--json]
+  latexmk diagnostics JOB_ID [--json]
   latexmk artifacts list JOB_ID [--json]
   latexmk artifacts get JOB_ID ARTIFACT_ID [--out-dir DIR] [--json]
   latexmk files [options] <main.tex>
