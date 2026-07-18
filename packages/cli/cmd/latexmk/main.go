@@ -48,6 +48,7 @@ type compileOptions struct {
 	quiet         bool
 	jsonOutput    bool
 	dryRun        bool
+	detach        bool
 	watch         bool
 	watchInterval time.Duration
 	watchDebounce time.Duration
@@ -107,13 +108,14 @@ func run(args []string) int {
 }
 
 func runCompile(args []string, forcedEngine string, listOnly bool) int {
+	detachedJSON := hasJSONFlag(args) && hasDetachFlag(args)
 	cwd, err := os.Getwd()
 	if err != nil {
-		return fail(err)
+		return failAgent("compile.start", detachedJSON, err)
 	}
 	cfg, err := config.Load(cwd)
 	if err != nil {
-		return fail(err)
+		return failAgentArguments("compile.start", detachedJSON, err)
 	}
 	opts := compileOptions{
 		server:        cfg.Server,
@@ -142,14 +144,27 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		opts.engine = forcedEngine
 	}
 	if err := parseCompileArgs(args, &opts); err != nil {
+		if detachedJSON {
+			return failAgentArguments("compile.start", true, err)
+		}
 		fmt.Fprintln(os.Stderr, "latexmk:", err)
 		fmt.Fprintln(os.Stderr, "run 'latexmk help' for usage")
 		return 2
 	}
 	if opts.entry == "" {
-		return fail(errors.New("no TeX entry file was provided"))
+		err := errors.New("no TeX entry file was provided")
+		if opts.detach {
+			return failAgentArguments("compile.start", opts.jsonOutput, err)
+		}
+		return fail(err)
+	}
+	if opts.detach && (opts.watch || opts.dryRun || listOnly) {
+		return failAgentArguments("compile.start", opts.jsonOutput, errors.New("--detach cannot be combined with --watch, --dry-run, or files"))
 	}
 	if err := normalizeCompilePaths(&opts, cwd); err != nil {
+		if opts.detach {
+			return failAgentArguments("compile.start", opts.jsonOutput, err)
+		}
 		return fail(err)
 	}
 	if opts.dryRun {
@@ -158,6 +173,9 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 
 	c, err := client.New(opts.server, opts.token, opts.timeout, opts.insecure)
 	if err != nil {
+		if opts.detach {
+			return failAgentArguments("compile.start", opts.jsonOutput, err)
+		}
 		return fail(err)
 	}
 	c.ProjectRoot = opts.projectRoot
@@ -182,8 +200,36 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 	if opts.watch {
 		return runWatch(c, request, opts)
 	}
+	if opts.detach {
+		return runDetachedCompile(c, request, opts)
+	}
 	out, err := compileWithTimeout(context.Background(), c, request, opts)
 	return reportCompile(out, err, opts)
+}
+
+type compileStartData struct {
+	Job      protocol.Job `json:"job"`
+	Warnings []string     `json:"warnings,omitempty"`
+}
+
+func runDetachedCompile(c *client.Client, request protocol.CompileRequest, opts compileOptions) int {
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
+	defer cancel()
+	out, err := c.StartCompile(ctx, request)
+	if err != nil {
+		return failAgent("compile.start", opts.jsonOutput, err)
+	}
+	if opts.jsonOutput {
+		if err := writeAgentJSON("compile.start", compileStartData{Job: out.Job, Warnings: out.Warnings}); err != nil {
+			return fail(err)
+		}
+		return 0
+	}
+	for _, warning := range out.Warnings {
+		fmt.Fprintln(os.Stderr, "latexmk: warning:", warning)
+	}
+	fmt.Printf("job ID: %s\nproject ID: %s\nsnapshot ID: %s\nstatus: %s\n", out.Job.ID, out.Job.ProjectID, out.Job.SnapshotID, out.Job.Status)
+	return 0
 }
 
 func compileWithTimeout(parent context.Context, c *client.Client, request protocol.CompileRequest, opts compileOptions) (client.CompileOutput, error) {
@@ -492,6 +538,8 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 			opts.jsonOutput = true
 		case a == "--dry-run":
 			opts.dryRun = true
+		case a == "--detach":
+			opts.detach = true
 		case a == "--watch":
 			opts.watch = true
 		case a == "--watch-interval" || strings.HasPrefix(a, "--watch-interval="):
@@ -538,6 +586,15 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 		return errors.New("watch debounce cannot be negative")
 	}
 	return nil
+}
+
+func hasDetachFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--detach" {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeCompilePaths(opts *compileOptions, cwd string) error {
@@ -855,6 +912,7 @@ Compile options:
   --no-synctex                 Disable SyncTeX
   --json                       Print machine-readable result
   --dry-run                    Print the upload manifest without contacting the server
+  --detach                     Return after creating an immutable queued job
   --watch                      Recompile after selected dependency changes
   --watch-interval 500ms       Poll only selected files at this interval
   --watch-debounce 500ms       Wait for rapid edits to settle before compiling

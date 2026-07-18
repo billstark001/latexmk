@@ -12,6 +12,7 @@ import (
 	"time"
 
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
+	"github.com/billstark001/latexmk/packages/cli/internal/client"
 )
 
 func captureCommandOutput(t *testing.T, fn func() int) (int, string, string) {
@@ -185,6 +186,23 @@ func TestParseCompileArgsWatchOptions(t *testing.T) {
 	opts.watchInterval = 0
 	if err := parseCompileArgs([]string{"--watch", "main.tex"}, &opts); err == nil {
 		t.Fatal("expected zero watch interval to fail")
+	}
+}
+
+func TestParseCompileArgsDetach(t *testing.T) {
+	opts := compileOptions{timeout: time.Minute}
+	if err := parseCompileArgs([]string{"--detach", "--json", "main.tex"}, &opts); err != nil {
+		t.Fatal(err)
+	}
+	if !opts.detach || !opts.jsonOutput || opts.entry != "main.tex" {
+		t.Fatalf("detach options = %#v", opts)
+	}
+}
+
+func TestCapabilityErrorUsesStableAgentCode(t *testing.T) {
+	code, details, retryable, exitCode := classifyAgentError(&client.CapabilityError{Capability: "detached queued compilation"})
+	if code != "unsupported_capability" || retryable || exitCode != 1 || details["capability"] != "detached queued compilation" {
+		t.Fatalf("classification = %q %#v %t %d", code, details, retryable, exitCode)
 	}
 }
 

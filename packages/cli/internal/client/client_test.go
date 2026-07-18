@@ -239,6 +239,76 @@ func TestCompileUsesQueuedIncrementalProtocol(t *testing.T) {
 	}
 }
 
+func TestStartCompileReturnsImmutableJobWithoutPolling(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var planned protocol.UploadPlanRequest
+	requests := make([]string, 0, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/meta":
+			_ = json.NewEncoder(w).Encode(protocol.Metadata{ProtocolVersion: 2, Capabilities: protocol.Capabilities{IncrementalUpload: true, QueuedJobs: true, DependencyInputs: true, NeedsFiles: true}})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/uploads/plans":
+			if err := json.NewDecoder(r.Body).Decode(&planned); err != nil {
+				t.Error(err)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(protocol.UploadPlan{UploadID: "upl_detach", Missing: []string{planned.Files[0].SHA256}, ExpiresAt: time.Now().Add(time.Minute)})
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/v1/uploads/upl_detach/blobs/"):
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/uploads/upl_detach/commit":
+			_ = json.NewEncoder(w).Encode(protocol.Job{ID: "job_detach", ProjectID: planned.ProjectID, SnapshotID: "snap_detach", Status: "queued", CreatedAt: time.Now()})
+		default:
+			t.Errorf("detached compile made unexpected request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "", 3*time.Second, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.ProjectRoot = root
+	out, err := c.StartCompile(context.Background(), protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex", Interaction: "nonstopmode"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Job.ID != "job_detach" || out.Job.SnapshotID != "snap_detach" || out.Job.Status != "queued" {
+		t.Fatalf("detached job = %#v", out.Job)
+	}
+	if !planned.Request.RecordInputs || !planned.Request.DetectMissingFiles {
+		t.Fatalf("detached request did not negotiate capabilities: %#v", planned.Request)
+	}
+	if len(requests) != 4 {
+		t.Fatalf("detached compile polled or downloaded a result: %#v", requests)
+	}
+}
+
+func TestStartCompileRequiresQueuedCapabilities(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(protocol.Metadata{ProtocolVersion: 1})
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "", time.Second, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.ProjectRoot = root
+	_, err = c.StartCompile(context.Background(), protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex"})
+	var capabilityErr *CapabilityError
+	if !errors.As(err, &capabilityErr) || capabilityErr.Capability != "detached queued compilation" {
+		t.Fatalf("error = %#v", err)
+	}
+}
+
 func TestProjectManifestUsesCachedInputsForDynamicReferences(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte(`\input{\chapterfile}`), 0o600); err != nil {

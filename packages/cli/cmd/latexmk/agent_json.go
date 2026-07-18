@@ -102,6 +102,10 @@ func classifyAgentError(err error) (string, map[string]any, bool, int) {
 			return "http_error", details, false, 1
 		}
 	}
+	var capabilityErr *client.CapabilityError
+	if errors.As(err, &capabilityErr) {
+		return "unsupported_capability", map[string]any{"capability": capabilityErr.Capability}, false, 1
+	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
 		return "network_error", nil, true, 1

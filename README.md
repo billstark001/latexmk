@@ -212,6 +212,7 @@ parsing human-readable output:
 latexmk jobs list --limit 50 --json
 latexmk jobs show JOB_ID --json
 latexmk jobs cancel JOB_ID --json
+latexmk compile --detach --json main.tex
 ```
 
 These new commands use a versioned JSON envelope with stable error codes and a

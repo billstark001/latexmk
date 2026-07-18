@@ -1,6 +1,6 @@
 # Agent-facing CLI contract
 
-Status: version 1 draft implemented for `jobs` commands.
+Status: version 1 draft implemented for detached compile and `jobs` commands.
 
 This contract is for local agents and scripts. The CLI uses the same token,
 timeout, and TLS configuration as interactive commands. It never prints the
@@ -65,7 +65,24 @@ Stable error codes currently include:
 - `network_error`;
 - `timeout`;
 - `cancelled`;
-- `command_failed`.
+- `command_failed`;
+- `unsupported_capability`.
+
+## Detached compile
+
+```sh
+latexmk compile --detach --json main.tex
+```
+
+The command applies the normal project-root, Git-ignore, denylist, dependency,
+manifest, TLS, and token policies. It uploads the selected files, commits one
+immutable snapshot, and returns after the queued job is created. It does not
+poll, download artifacts, or perform automatic missing-file retries.
+
+The success command is `compile.start`. Its data contains `job` and optional
+manifest-selection `warnings`. Detached compile requires a server that supports
+queued jobs and incremental uploads. Use `jobs show` to poll the returned job
+ID.
 
 ## Jobs
 
