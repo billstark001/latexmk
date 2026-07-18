@@ -66,7 +66,10 @@ Stable error codes currently include:
 - `timeout`;
 - `cancelled`;
 - `command_failed`;
-- `unsupported_capability`.
+- `unsupported_capability`;
+- `result_not_ready`;
+- `result_unavailable`;
+- `artifact_not_found`.
 
 ## Detached compile
 
@@ -96,6 +99,24 @@ latexmk jobs cancel JOB_ID --json
 newest first, with ID as the stable tie-breaker. `jobs.show` and `jobs.cancel`
 return one job object. Cancel only succeeds while the remote job is queued.
 
-List output is bounded to 1 through 200 jobs. Log and artifact commands will
-use separate bounded contracts; they will not embed PDF data or unbounded logs
-in this envelope.
+## Logs and artifacts
+
+```sh
+latexmk logs JOB_ID --source all --tail 200 --max-bytes 65536 --json
+latexmk artifacts list JOB_ID --json
+latexmk artifacts get JOB_ID ARTIFACT_ID --out-dir ./build --json
+```
+
+Logs distinguish `stdout`, `stderr`, and TeX-generated `compiler` logs. The
+byte limit applies across all returned entries and is capped at 4 MiB. Content
+is streamed through a bounded tail buffer; large PDFs and unrelated artifacts
+are not loaded into memory. Compiler logs are checked against job metadata.
+
+Artifact list returns an opaque, deterministic 128-bit ID derived from the
+declared project-relative artifact path. Download accepts only that ID, checks
+size and SHA-256, rejects unsafe output paths and symlinks, and returns the
+absolute local path and MIME type. Binary data is never embedded in JSON.
+
+Job list output is bounded to 1 through 200 jobs. Log and artifact commands use
+their own bounded contracts; they do not embed PDF data or unbounded logs in
+this envelope.

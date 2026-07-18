@@ -164,6 +164,122 @@ func TestHTTPErrorPreservesStatusWithoutRequestCredentials(t *testing.T) {
 	}
 }
 
+func TestArtifactListAndDownloadUseOpaqueIDAndHash(t *testing.T) {
+	pdf := []byte("pdf payload")
+	logData := []byte("compiler log")
+	pdfHash := sha256.Sum256(pdf)
+	logHash := sha256.Sum256(logData)
+	result := protocol.CompileResult{ProtocolVersion: 2, RequestID: "job_result", Success: true, Artifacts: []protocol.Artifact{
+		{Path: "main.log", Size: int64(len(logData)), SHA256: hex.EncodeToString(logHash[:])},
+		{Path: "main.pdf", Size: int64(len(pdf)), SHA256: hex.EncodeToString(pdfHash[:])},
+	}}
+	resultJSON, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := buildResultArchive(t, []tarEntry{
+		{name: "result.json", payload: resultJSON},
+		{name: "stdout.log", payload: nil},
+		{name: "stderr.log", payload: nil},
+		{name: "artifacts/main.log", payload: logData},
+		{name: "artifacts/main.pdf", payload: pdf},
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/jobs/job_result":
+			_ = json.NewEncoder(w).Encode(protocol.Job{ID: "job_result", Status: "succeeded", Result: &result})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/jobs/job_result/result":
+			_, _ = w.Write(archive)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "", time.Second, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := c.ListArtifacts(context.Background(), "job_result")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(artifacts) != 2 || len(artifacts[1].ID) != 32 || artifacts[1].Path != "main.pdf" || artifacts[1].MIMEType != "application/pdf" {
+		t.Fatalf("artifacts = %#v", artifacts)
+	}
+	root := filepath.Join(t.TempDir(), "output")
+	download, err := c.DownloadArtifact(context.Background(), "job_result", artifacts[1].ID, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := os.ReadFile(download.LocalPath)
+	if err != nil || !bytes.Equal(installed, pdf) {
+		t.Fatalf("installed artifact = %q, %v", installed, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "main.log")); !os.IsNotExist(err) {
+		t.Fatalf("unselected artifact was installed: %v", err)
+	}
+}
+
+func TestLogsShareBoundedTailBudgetAcrossSources(t *testing.T) {
+	stdout := []byte("one\ntwo\nthree\n")
+	stderr := []byte("err1\nerr2\n")
+	compiler := []byte("a\nb\nc\nd\n")
+	compilerHash := sha256.Sum256(compiler)
+	result := protocol.CompileResult{ProtocolVersion: 2, RequestID: "job_logs", Success: false, Artifacts: []protocol.Artifact{
+		{Path: "main.log", Size: int64(len(compiler)), SHA256: hex.EncodeToString(compilerHash[:])},
+	}}
+	resultJSON, _ := json.Marshal(result)
+	archive := buildResultArchive(t, []tarEntry{
+		{name: "result.json", payload: resultJSON},
+		{name: "stdout.log", payload: stdout},
+		{name: "stderr.log", payload: stderr},
+		{name: "artifacts/main.log", payload: compiler},
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/result") {
+			_, _ = w.Write(archive)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(protocol.Job{ID: "job_logs", Status: "failed", Result: &result})
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "", time.Second, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs, err := c.Logs(context.Background(), "job_logs", "all", 2, 18)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logs.Entries) != 3 || logs.Returned > 18 || !logs.ArchiveDone {
+		t.Fatalf("logs = %#v", logs)
+	}
+	for _, entry := range logs.Entries {
+		if entry.ReturnedBytes > 6 || entry.ReturnedBytes == 0 {
+			t.Fatalf("log budget was not shared: %#v", logs.Entries)
+		}
+	}
+	if logs.Entries[2].Source != "compiler" || logs.Entries[2].Path != "main.log" {
+		t.Fatalf("compiler log = %#v", logs.Entries[2])
+	}
+}
+
+func TestResultStateErrorMarksQueuedResultUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(protocol.Job{ID: "job_wait", Status: "running"})
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "", time.Second, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.ListArtifacts(context.Background(), "job_wait")
+	var stateErr *ResultStateError
+	if !errors.As(err, &stateErr) || stateErr.Status != "running" {
+		t.Fatalf("error = %#v", err)
+	}
+}
+
 func TestUnpackResponseRejectsProtocolBeforeWriting(t *testing.T) {
 	payload := []byte("pdf")
 	result := []byte(`{"protocolVersion":99,"requestId":"req_test","success":true,"exitCode":0,"artifacts":[{"path":"main.pdf","size":3,"sha256":"c35b21d6ca39aa7cc3b79a705d989f1a6e88b99ab43988d74048799e3db926a3"}]}`)

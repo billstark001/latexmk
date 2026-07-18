@@ -206,6 +206,30 @@ func TestCapabilityErrorUsesStableAgentCode(t *testing.T) {
 	}
 }
 
+func TestParseResultCommandArgs(t *testing.T) {
+	opts := resultCommandOptions{timeout: time.Minute, source: "all", tailLines: 200, maxBytes: 64 << 10}
+	if err := parseResultCommandArgs("logs", []string{"job_test", "--source", "compiler", "--tail", "25", "--max-bytes", "4096", "--json"}, &opts); err != nil {
+		t.Fatal(err)
+	}
+	if opts.jobID != "job_test" || opts.source != "compiler" || opts.tailLines != 25 || opts.maxBytes != 4096 || !opts.jsonOutput {
+		t.Fatalf("log options = %#v", opts)
+	}
+	opts = resultCommandOptions{timeout: time.Minute}
+	if err := parseResultCommandArgs("artifacts.get", []string{"job_test", strings.Repeat("a", 32), "--out-dir", "build"}, &opts); err != nil {
+		t.Fatal(err)
+	}
+	if opts.jobID != "job_test" || opts.artifactID != strings.Repeat("a", 32) || opts.outDir != "build" {
+		t.Fatalf("artifact options = %#v", opts)
+	}
+}
+
+func TestResultStateErrorUsesRetryableAgentCode(t *testing.T) {
+	code, details, retryable, exitCode := classifyAgentError(&client.ResultStateError{Status: "running"})
+	if code != "result_not_ready" || !retryable || exitCode != 1 || details["status"] != "running" {
+		t.Fatalf("classification = %q %#v %t %d", code, details, retryable, exitCode)
+	}
+}
+
 func TestSelectedFilesChangedIgnoresNewRecorderDependencies(t *testing.T) {
 	before := []projectarchive.File{{Path: "main.tex", SHA256: "main-v1"}}
 	after := []projectarchive.File{{Path: "main.tex", SHA256: "main-v1"}, {Path: "dynamic.tex", SHA256: "dynamic-v1"}}

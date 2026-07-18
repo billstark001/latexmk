@@ -213,6 +213,9 @@ latexmk jobs list --limit 50 --json
 latexmk jobs show JOB_ID --json
 latexmk jobs cancel JOB_ID --json
 latexmk compile --detach --json main.tex
+latexmk logs JOB_ID --tail 200 --max-bytes 65536 --json
+latexmk artifacts list JOB_ID --json
+latexmk artifacts get JOB_ID ARTIFACT_ID --out-dir ./build --json
 ```
 
 These new commands use a versioned JSON envelope with stable error codes and a

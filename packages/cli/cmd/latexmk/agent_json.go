@@ -106,6 +106,17 @@ func classifyAgentError(err error) (string, map[string]any, bool, int) {
 	if errors.As(err, &capabilityErr) {
 		return "unsupported_capability", map[string]any{"capability": capabilityErr.Capability}, false, 1
 	}
+	var stateErr *client.ResultStateError
+	if errors.As(err, &stateErr) {
+		if stateErr.Status == "queued" || stateErr.Status == "running" {
+			return "result_not_ready", map[string]any{"status": stateErr.Status}, true, 1
+		}
+		return "result_unavailable", map[string]any{"status": stateErr.Status}, false, 1
+	}
+	var artifactErr *client.ArtifactNotFoundError
+	if errors.As(err, &artifactErr) {
+		return "artifact_not_found", map[string]any{"artifactId": artifactErr.ID}, false, 1
+	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
 		return "network_error", nil, true, 1
