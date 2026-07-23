@@ -97,10 +97,10 @@ base image by digest:
 ```sh
 docker build \
   --build-arg TEXLIVE_IMAGE='texlive/texlive@sha256:...' \
-  --build-arg VERSION='0.1.0' \
+  --build-arg VERSION='0.2.0' \
   --build-arg COMMIT="$(git rev-parse HEAD)" \
   --build-arg BUILD_DATE="$(date -u +%FT%TZ)" \
-  -t registry.example.edu/latexmk:0.1.0 .
+  -t registry.example.edu/latexmk:0.2.0 .
 ```
 
 Use `latexmk meta` to verify the remote toolchain actually running the image.

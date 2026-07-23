@@ -263,9 +263,9 @@ node packages/deploy/dist/index.js bundle \
   --profile slim \
   --auth token \
   --out dist/paas-slim \
-  --tag registry.example.edu/latexmk:0.1.0 \
+  --tag registry.example.edu/latexmk:0.2.0 \
   --build \
-  --save dist/latexmk-0.1.0.tar
+  --save dist/latexmk-0.2.0.tar
 ```
 
 The templates are in `packages/deploy/templates/`. Pin `TEXLIVE_IMAGE` by digest
