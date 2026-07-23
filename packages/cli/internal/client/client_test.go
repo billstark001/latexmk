@@ -182,7 +182,7 @@ func TestProjectManifestUsesCachedInputsForDynamicReferences(t *testing.T) {
 	if err := dependency.SaveCachedInputs(root, "main.tex", "xelatex", []string{"main.tex", "chapter.tex"}); err != nil {
 		t.Fatal(err)
 	}
-	c, err := New("http://127.0.0.1:1", "", time.Second, false, "")
+	c, err := New("http://127.0.0.1:1", "", time.Second, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestProjectManifestUsesExplicitManifestWithoutHistory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, ".latexmk-files"), []byte("chapter.tex\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	c, err := New("http://127.0.0.1:1", "", time.Second, false, "")
+	c, err := New("http://127.0.0.1:1", "", time.Second, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestProjectManifestExplicitModesCanBypassBrokenCache(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cacheDir, "dependencies.json"), []byte("not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	c, err := New("http://127.0.0.1:1", "", time.Second, false, "")
+	c, err := New("http://127.0.0.1:1", "", time.Second, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestProjectManifestNeverUploadsConfiguredManifestFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "policy.list"), []byte("main.tex\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	c, err := New("http://127.0.0.1:1", "", time.Second, false, "")
+	c, err := New("http://127.0.0.1:1", "", time.Second, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +368,7 @@ func TestCompileLegacyArchiveExcludesUnrelatedFiles(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	c, err := New(server.URL, "", 3*time.Second, false, "")
+	c, err := New(server.URL, "", 3*time.Second, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -431,7 +431,7 @@ func TestCompileRetriesMissingFilesWithNewAllowedManifest(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	c, err := New(server.URL, "", 3*time.Second, false, "")
+	c, err := New(server.URL, "", 3*time.Second, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +480,7 @@ func TestCompileRefusesMissingFileOutsideLocalPolicy(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	c, err := New(server.URL, "", 3*time.Second, false, "")
+	c, err := New(server.URL, "", 3*time.Second, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -526,7 +526,7 @@ func TestCompileManifestModeDoesNotNegotiateMissingFiles(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	c, err := New(server.URL, "", 3*time.Second, false, "")
+	c, err := New(server.URL, "", 3*time.Second, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,7 +552,7 @@ func TestCompileRejectsIncompleteDependenciesBeforeNetwork(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
-	c, err := New(server.URL, "", 3*time.Second, false, "")
+	c, err := New(server.URL, "", 3*time.Second, false)
 	if err != nil {
 		t.Fatal(err)
 	}
