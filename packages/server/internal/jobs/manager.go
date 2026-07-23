@@ -42,7 +42,6 @@ type Manager struct {
 	admissionMu sync.Mutex
 	jobs        map[string]record
 	queue       chan string
-	ctx         context.Context
 }
 
 func New(cfg config.Config, meta api.Metadata, runner *compile.Runner, projects *project.Manager, db *store.Postgres, logger *slog.Logger) *Manager {
@@ -56,7 +55,6 @@ func New(cfg config.Config, meta api.Metadata, runner *compile.Runner, projects 
 }
 
 func (m *Manager) Start(ctx context.Context) {
-	m.ctx = ctx
 	recoverIDs := make([]string, 0)
 	if m.db != nil {
 		pending, err := m.db.ListPendingJobs(ctx)
@@ -279,6 +277,9 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	rec, err := m.load(ctx, id)
 	if err != nil {
 		m.logger.Error("load queued job", "job_id", id, "error", err)
+		if !errors.Is(err, store.ErrJobNotFound) {
+			m.requeue(ctx, id)
+		}
 		return
 	}
 	if rec.Job.Status != "queued" {
@@ -286,25 +287,30 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	}
 	now := time.Now().UTC()
 	rec.Job.Status, rec.Job.StartedAt = "running", &now
-	if err := m.save(ctx, rec); err != nil {
+	changed, err := m.transition(ctx, rec, "queued")
+	if err != nil {
 		m.logger.Error("mark job running", "job_id", id, "error", err)
+		m.requeue(ctx, id)
+		return
+	}
+	if !changed {
 		return
 	}
 	m.logger.Info("compile job started", "job_id", id, "worker", worker, "owner_id", rec.OwnerID)
 
 	root, err := os.MkdirTemp(m.cfg.TempDir, "latexmk-job-*")
 	if err != nil {
-		m.finish(ctx, rec, nil, "could not create compile workspace")
+		m.finish(ctx, rec, nil, "could not create compile workspace", false)
 		return
 	}
 	defer os.RemoveAll(root)
 	workspace := filepath.Join(root, "project")
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
-		m.finish(ctx, rec, nil, "could not initialize compile workspace")
+		m.finish(ctx, rec, nil, "could not initialize compile workspace", false)
 		return
 	}
 	if err := m.projects.Materialize(rec.Snapshot, workspace); err != nil {
-		m.finish(ctx, rec, nil, "could not materialize project: "+err.Error())
+		m.finish(ctx, rec, nil, "could not materialize project: "+err.Error(), false)
 		return
 	}
 	output := m.runner.Run(ctx, workspace, rec.Request, rec.Job.ID)
@@ -312,24 +318,39 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	output.Result.ImageProfile = m.meta.ImageProfile
 	_, err = m.projects.WriteResult(rec.OwnerID, rec.Job.ID, output)
 	if err != nil {
-		m.finish(ctx, rec, &output.Result, "could not package compile result: "+err.Error())
+		m.finish(ctx, rec, &output.Result, "could not package compile result: "+err.Error(), false)
 		return
 	}
-	m.finish(ctx, rec, &output.Result, output.Result.Error)
+	m.finish(ctx, rec, &output.Result, output.Result.Error, true)
 }
 
-func (m *Manager) finish(ctx context.Context, rec record, result *api.CompileResult, message string) {
+func (m *Manager) finish(ctx context.Context, rec record, result *api.CompileResult, message string, resultArchived bool) {
 	now := time.Now().UTC()
+	if !resultArchived && result != nil && result.Success {
+		failed := *result
+		failed.Success = false
+		if failed.Error == "" {
+			failed.Error = message
+		}
+		result = &failed
+	}
 	rec.Job.FinishedAt = &now
 	rec.Job.Result = result
 	rec.Job.Error = message
-	if result != nil && result.Success {
+	if resultArchived && result != nil && result.Success {
 		rec.Job.Status = "succeeded"
 	} else {
 		rec.Job.Status = "failed"
 	}
-	if err := m.save(ctx, rec); err != nil {
+	persistCtx, cancel := m.persistenceContext(ctx)
+	defer cancel()
+	changed, err := m.transitionWithRetry(persistCtx, rec, "running")
+	if err != nil {
 		m.logger.Error("finish compile job", "job_id", rec.Job.ID, "error", err)
+		return
+	}
+	if !changed {
+		m.logger.Warn("compile job state changed before finish", "job_id", rec.Job.ID)
 		return
 	}
 	m.projects.ReleaseSnapshot(rec.Snapshot.ID)
@@ -343,11 +364,78 @@ func (m *Manager) cancel(ctx context.Context, id, message string) error {
 	}
 	now := time.Now().UTC()
 	rec.Job.Status, rec.Job.Error, rec.Job.FinishedAt = "cancelled", message, &now
-	if err := m.save(ctx, rec); err != nil {
+	changed, err := m.transition(ctx, rec, "queued")
+	if err != nil {
 		return err
+	}
+	if !changed {
+		return errors.New("job is no longer queued")
 	}
 	m.projects.ReleaseSnapshot(rec.Snapshot.ID)
 	return nil
+}
+
+func (m *Manager) transition(ctx context.Context, rec record, expectedStatus string) (bool, error) {
+	if m.db == nil {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		current, ok := m.jobs[rec.Job.ID]
+		if !ok {
+			return false, errors.New("job not found")
+		}
+		if current.Job.Status != expectedStatus {
+			return false, nil
+		}
+		current.Job = rec.Job
+		m.jobs[rec.Job.ID] = current
+		return true, nil
+	}
+	result, err := marshalResult(rec.Job.Result)
+	if err != nil {
+		return false, err
+	}
+	return m.db.TransitionJob(ctx, rec.Job.ID, expectedStatus, map[string]any{
+		"status": rec.Job.Status, "result": result, "error": rec.Job.Error,
+		"started_at": rec.Job.StartedAt, "finished_at": rec.Job.FinishedAt,
+	})
+}
+
+func (m *Manager) transitionWithRetry(ctx context.Context, rec record, expectedStatus string) (bool, error) {
+	for attempt := 0; ; attempt++ {
+		changed, err := m.transition(ctx, rec, expectedStatus)
+		if err == nil {
+			return changed, nil
+		}
+		delay := time.Duration(1<<min(attempt, 5)) * 100 * time.Millisecond
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false, errors.Join(err, ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func (m *Manager) requeue(ctx context.Context, id string) {
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-timer.C:
+	}
+	select {
+	case <-ctx.Done():
+	case m.queue <- id:
+	}
+}
+
+func (m *Manager) persistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx.Err() == nil {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(context.Background(), m.cfg.ShutdownTimeout)
 }
 
 func (m *Manager) load(ctx context.Context, id string) (record, error) {
@@ -370,8 +458,11 @@ func (m *Manager) load(ctx context.Context, id string) (record, error) {
 func (m *Manager) save(ctx context.Context, rec record) error {
 	if m.db == nil {
 		m.mu.Lock()
+		defer m.mu.Unlock()
+		if _, exists := m.jobs[rec.Job.ID]; exists {
+			return errors.New("job already exists")
+		}
 		m.jobs[rec.Job.ID] = rec
-		m.mu.Unlock()
 		return nil
 	}
 	request, err := json.Marshal(rec.Request)
@@ -382,17 +473,18 @@ func (m *Manager) save(ctx context.Context, rec record) error {
 	if err != nil {
 		return err
 	}
-	var result []byte
-	if rec.Job.Result != nil {
-		result, err = json.Marshal(rec.Job.Result)
-		if err != nil {
-			return err
-		}
+	result, err := marshalResult(rec.Job.Result)
+	if err != nil {
+		return err
 	}
-	if _, err := m.db.GetJob(ctx, rec.Job.ID); err != nil {
-		return m.db.CreateJob(ctx, store.CompileJob{ID: rec.Job.ID, OwnerID: rec.OwnerID, ProjectID: rec.Job.ProjectID, SnapshotID: rec.Snapshot.ID, SnapshotManifest: snapshot, Status: rec.Job.Status, Request: request, Result: result, Error: rec.Job.Error, CreatedAt: rec.Job.CreatedAt, StartedAt: rec.Job.StartedAt, FinishedAt: rec.Job.FinishedAt})
+	return m.db.CreateJob(ctx, store.CompileJob{ID: rec.Job.ID, OwnerID: rec.OwnerID, ProjectID: rec.Job.ProjectID, SnapshotID: rec.Snapshot.ID, SnapshotManifest: snapshot, Status: rec.Job.Status, Request: request, Result: result, Error: rec.Job.Error, CreatedAt: rec.Job.CreatedAt, StartedAt: rec.Job.StartedAt, FinishedAt: rec.Job.FinishedAt})
+}
+
+func marshalResult(result *api.CompileResult) ([]byte, error) {
+	if result == nil {
+		return nil, nil
 	}
-	return m.db.UpdateJob(ctx, rec.Job.ID, map[string]any{"status": rec.Job.Status, "result": result, "error": rec.Job.Error, "started_at": rec.Job.StartedAt, "finished_at": rec.Job.FinishedAt})
+	return json.Marshal(result)
 }
 
 func recordFromRow(row store.CompileJob) (record, error) {

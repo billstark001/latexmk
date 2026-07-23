@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
@@ -63,6 +64,68 @@ func TestQueueAcceptsMultipleJobsAndAllowsQueuedCancellation(t *testing.T) {
 	}
 	if got, err := manager.Get(context.Background(), "member", first.ID); err != nil || got.Status != "queued" {
 		t.Fatalf("first job = %#v, %v", got, err)
+	}
+}
+
+func TestQueuedTransitionCannotOverwriteCancellation(t *testing.T) {
+	cfg := config.Config{MaxConcurrentCompiles: 1, MaxQueuedJobs: 2}
+	manager := &Manager{cfg: cfg, jobs: make(map[string]record), logger: slog.New(slog.NewTextHandler(testWriter{t}, nil))}
+	now := time.Now().UTC()
+	original := record{OwnerID: "member", Job: api.Job{ID: "job_race", Status: "queued", CreatedAt: now}}
+	manager.jobs[original.Job.ID] = original
+
+	staleWorkerCopy := original
+	cancelledCopy := original
+	finished := time.Now().UTC()
+	cancelledCopy.Job.Status = "cancelled"
+	cancelledCopy.Job.Error = "cancelled by user"
+	cancelledCopy.Job.FinishedAt = &finished
+	changed, err := manager.transition(context.Background(), cancelledCopy, "queued")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("expected cancellation transition to win")
+	}
+	started := time.Now().UTC()
+	staleWorkerCopy.Job.Status = "running"
+	staleWorkerCopy.Job.StartedAt = &started
+	changed, err = manager.transition(context.Background(), staleWorkerCopy, "queued")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("stale worker transition overwrote cancellation")
+	}
+	got, err := manager.load(context.Background(), original.Job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Job.Status != "cancelled" {
+		t.Fatalf("job status = %q, want cancelled", got.Job.Status)
+	}
+}
+
+func TestSuccessfulCompileRequiresArchivedResult(t *testing.T) {
+	cfg := config.Config{StateDir: t.TempDir(), MaxStateBytes: 4096, ShutdownTimeout: time.Second}
+	projects, err := project.New(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(cfg, api.Metadata{}, compile.NewRunner(config.Config{MaxConcurrentCompiles: 1}), projects, nil, slog.New(slog.NewTextHandler(testWriter{t}, nil)))
+	now := time.Now().UTC()
+	rec := record{OwnerID: "member", Job: api.Job{ID: "job_archive_failed", Status: "running", CreatedAt: now}}
+	if err := manager.save(context.Background(), rec); err != nil {
+		t.Fatal(err)
+	}
+	result := &api.CompileResult{Success: true, ExitCode: 0}
+	manager.finish(context.Background(), rec, result, "could not package compile result", false)
+	got, err := manager.Get(context.Background(), "member", rec.Job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "failed" || got.Error != "could not package compile result" || got.Result == nil || got.Result.Success {
+		t.Fatalf("job = %#v, want failed packaging status", got)
 	}
 }
 

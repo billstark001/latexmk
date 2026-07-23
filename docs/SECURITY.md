@@ -40,6 +40,8 @@ at the application and deployment layers.
   queued/running job snapshot.
 - Queued jobs persist an immutable, content-derived snapshot ID and complete
   manifest. A later upload to the same project cannot change their input.
+- Worker start, cancellation, and completion use conditional state transitions,
+  so a stale worker cannot overwrite a cancellation or another terminal state.
 - Compile commands run in their own process group; timeout kills the process
   tree.
 - Docker images run as an unprivileged user. Generated Compose files use a
