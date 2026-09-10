@@ -1030,3 +1030,37 @@ func readCompileMultipart(r *http.Request) (protocol.CompileRequest, []string, e
 	}
 	return request, files, nil
 }
+
+func TestCompileCacheRequiresAdvertisedCapability(t *testing.T) {
+	for _, detached := range []bool{false, true} {
+		t.Run(fmt.Sprint(detached), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/meta" {
+					t.Errorf("unexpected request before capability check: %s", r.URL.Path)
+					http.Error(w, "unexpected", 500)
+					return
+				}
+				json.NewEncoder(w).Encode(protocol.Metadata{Capabilities: protocol.Capabilities{QueuedJobs: true, IncrementalUpload: true}})
+			}))
+			defer server.Close()
+			c, err := New(server.URL, "", time.Second, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.ProjectRoot = t.TempDir()
+			if err := os.WriteFile(filepath.Join(c.ProjectRoot, "main.tex"), []byte("hello"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			req := protocol.CompileRequest{Entry: "main.tex", Engine: "xelatex", Auxiliary: protocol.AuxiliaryOptions{Server: "reuse"}}
+			if detached {
+				_, err = c.StartCompile(context.Background(), req)
+			} else {
+				_, err = c.Compile(context.Background(), req, t.TempDir())
+			}
+			var capability *CapabilityError
+			if !errors.As(err, &capability) {
+				t.Fatalf("expected capability error, got %v", err)
+			}
+		})
+	}
+}

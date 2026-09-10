@@ -159,8 +159,8 @@ func (c *Client) cleanupProject(ctx context.Context, projectID, scope, method, e
 	if !validProjectID(projectID) {
 		return report, errors.New("project ID is invalid")
 	}
-	if scope != "results" && scope != "snapshot" && scope != "project" {
-		return report, errors.New("cleanup scope must be results, snapshot, or project")
+	if scope != "results" && scope != "snapshot" && scope != "project" && scope != "cache" {
+		return report, errors.New("cleanup scope must be results, snapshot, cache, or project")
 	}
 	path := "/v1/projects/" + url.PathEscape(projectID) + "/cleanup?scope=" + url.QueryEscape(scope)
 	if expectedDigest != "" {
@@ -223,6 +223,9 @@ func (c *Client) Compile(ctx context.Context, request protocol.CompileRequest, o
 	meta, err := c.Metadata(ctx)
 	if err != nil {
 		return CompileOutput{}, err
+	}
+	if request.Auxiliary.Server == "reuse" && (!meta.Capabilities.CompileCache || !meta.Capabilities.QueuedJobs || !meta.Capabilities.IncrementalUpload) {
+		return CompileOutput{}, &CapabilityError{Capability: "server compile cache"}
 	}
 	request.RecordInputs = meta.Capabilities.DependencyInputs
 	request.DetectMissingFiles = meta.Capabilities.NeedsFiles && (c.UploadMode == "" || c.UploadMode == "auto")
@@ -317,6 +320,9 @@ func (c *Client) StartCompile(ctx context.Context, request protocol.CompileReque
 	}
 	if !meta.Capabilities.IncrementalUpload || !meta.Capabilities.QueuedJobs {
 		return StartCompileOutput{}, &CapabilityError{Capability: "detached queued compilation"}
+	}
+	if request.Auxiliary.Server == "reuse" && !meta.Capabilities.CompileCache {
+		return StartCompileOutput{}, &CapabilityError{Capability: "server compile cache"}
 	}
 	request.RecordInputs = meta.Capabilities.DependencyInputs
 	request.DetectMissingFiles = meta.Capabilities.NeedsFiles && (c.UploadMode == "" || c.UploadMode == "auto")
@@ -417,6 +423,10 @@ func (c *Client) compileQueued(ctx context.Context, request protocol.CompileRequ
 	defer resp.Body.Close()
 	if err := unpackResponse(resp.Body, outputRoot, &out); err != nil {
 		return out, err
+	}
+	// Cache publication happens after the immutable result archive is durable.
+	if job.Result != nil {
+		out.Result.CompileCache = job.Result.CompileCache
 	}
 	return out, nil
 }

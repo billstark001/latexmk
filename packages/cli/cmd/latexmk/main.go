@@ -27,6 +27,7 @@ var (
 )
 
 type compileOptions struct {
+	auxiliary     protocol.AuxiliaryOptions
 	server        string
 	token         string
 	projectRoot   string
@@ -134,6 +135,7 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		return failAgentArguments("compile.start", detachedJSON, err)
 	}
 	opts := compileOptions{
+		auxiliary:     cfg.Auxiliary,
 		server:        cfg.Server,
 		token:         cfg.Token,
 		projectRoot:   cfg.ProjectRoot,
@@ -213,6 +215,7 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 	c.ManifestFile = opts.manifestFile
 	c.IncludeFiles = append([]string(nil), opts.includeFiles...)
 	request := protocol.CompileRequest{
+		Auxiliary:       opts.auxiliary,
 		ProtocolVersion: protocol.Version,
 		Entry:           opts.entry,
 		Engine:          opts.engine,
@@ -281,6 +284,12 @@ func reportCompile(out client.CompileOutput, err error, opts compileOptions) int
 		}
 		if len(out.Stderr) > 0 {
 			_, _ = os.Stderr.Write(out.Stderr)
+		}
+		if cache := out.Result.CompileCache; cache != nil {
+			fmt.Fprintf(os.Stderr, "latexmk: compile cache=%s restored=%d stored=%d reason=%s\n", cache.Status, cache.RestoredFiles, cache.StoredFiles, cache.Reason)
+			if cache.Warning != "" {
+				fmt.Fprintln(os.Stderr, "latexmk: compile cache:", cache.Warning)
+			}
 		}
 		fmt.Fprintf(os.Stderr, "latexmk: request=%s server=%s profile=%s engine=%s duration=%dms artifacts=%d\n", out.Result.RequestID, out.Result.ServerVersion, out.Result.ImageProfile, out.Result.Engine, out.Result.DurationMS, len(out.Result.Artifacts))
 		if out.Result.StdoutTruncated || out.Result.StderrTruncated {
@@ -495,6 +504,15 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 				return fmt.Errorf("--upload-mode must be auto, manifest, or all, got %q", v)
 			}
 			opts.uploadMode = v
+		case a == "--server-cache" || strings.HasPrefix(a, "--server-cache="):
+			v, err := value("--server-cache")
+			if err != nil {
+				return err
+			}
+			if v != "none" && v != "reuse" {
+				return errors.New("--server-cache must be none or reuse")
+			}
+			opts.auxiliary.Server = v
 		case a == "--manifest" || strings.HasPrefix(a, "--manifest="):
 			v, err := value("--manifest")
 			if err != nil {
@@ -1034,8 +1052,8 @@ func parseRemoteCleanArgs(args []string, opts *remoteCleanOptions) error {
 	if opts.planID != "" {
 		return errors.New("--plan-id requires --yes")
 	}
-	if opts.scope != "results" && opts.scope != "snapshot" && opts.scope != "project" {
-		return errors.New("--scope must be results, snapshot, or project")
+	if opts.scope != "results" && opts.scope != "snapshot" && opts.scope != "project" && opts.scope != "cache" {
+		return errors.New("--scope must be results, snapshot, cache, or project")
 	}
 	return nil
 }
@@ -1142,6 +1160,9 @@ func runRemoteClean(args []string) int {
 }
 
 func writeRemoteCleanupReport(report protocol.CleanupReport) {
+	if report.Scope == "cache" || report.Scope == "project" {
+		fmt.Printf("compile caches: %d (%d bytes)\n", report.CompileCaches, report.CompileCacheBytes)
+	}
 	fmt.Printf("project ID: %s\nscope: %s\ndry run: %t\n", report.ProjectID, report.Scope, report.DryRun)
 	if report.Scope == "snapshot" || report.Scope == "project" {
 		fmt.Printf("snapshot: %t (%d files, %d bytes)\n", report.SnapshotPresent, report.SnapshotFiles, report.SnapshotBytes)
@@ -1169,7 +1190,7 @@ Usage:
   latexmk init [--server URL]
   latexmk clean [main.tex]
   latexmk cache ignore [--project-root DIR] [--json]
-  latexmk remote clean --scope results|snapshot|project [--dry-run] [--json]
+  latexmk remote clean --scope results|snapshot|cache|project [--dry-run] [--json]
   latexmk remote clean --plan-id PLAN_ID --yes [--json]
   latexmk jobs list [--limit 50] [--json]
   latexmk jobs show JOB_ID [--json]
@@ -1189,6 +1210,7 @@ Compile options:
   --project-id ID              Override the persisted local project identity
   --root-mode entry|git        Default root when --project-root is absent
   --upload-mode MODE           auto (default), manifest, or all
+  --server-cache MODE          none (default) or reuse; --force starts clean
   --manifest FILE              Read exact project-relative files, one per line
   --include-file FILE          Add one exact project-relative file (repeatable)
   --gitignore                  Respect Git ignore rules (default)

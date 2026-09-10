@@ -177,7 +177,7 @@ func validRemoteCleanupPlan(plan remoteCleanupPlan, id string) bool {
 	if err != nil || plan.Server != strings.TrimRight(strings.TrimSpace(plan.Server), "/") || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return false
 	}
-	if plan.Scope != "results" && plan.Scope != "snapshot" && plan.Scope != "project" {
+	if plan.Scope != "results" && plan.Scope != "snapshot" && plan.Scope != "project" && plan.Scope != "cache" {
 		return false
 	}
 	if !validRemoteCleanupProjectID(plan.ProjectID) || plan.CreatedAt.IsZero() || plan.ExpiresAt.IsZero() {

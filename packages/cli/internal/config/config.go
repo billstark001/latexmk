@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
 )
 
 const FileName = ".latexmk.json"
@@ -17,22 +19,24 @@ const UserFileName = "config.json"
 const maxTokenFileSize = 64 << 10
 
 type FileConfig struct {
-	Server             string   `json:"server"`
-	Token              string   `json:"token,omitempty"`
-	ProjectRoot        string   `json:"projectRoot,omitempty"`
-	ProjectID          string   `json:"projectId,omitempty"`
-	RootMode           string   `json:"rootMode,omitempty"`
-	UploadMode         string   `json:"uploadMode,omitempty"`
-	ManifestFile       string   `json:"manifestFile,omitempty"`
-	IncludeFiles       []string `json:"includeFiles,omitempty"`
-	RespectGitIgnore   *bool    `json:"respectGitignore,omitempty"`
-	Engine             string   `json:"engine,omitempty"`
-	Timeout            string   `json:"timeout,omitempty"`
-	Exclude            []string `json:"exclude,omitempty"`
-	InsecureSkipVerify bool     `json:"insecureSkipVerify,omitempty"`
+	Auxiliary          protocol.AuxiliaryOptions `json:"auxiliary,omitempty"`
+	Server             string                    `json:"server"`
+	Token              string                    `json:"token,omitempty"`
+	ProjectRoot        string                    `json:"projectRoot,omitempty"`
+	ProjectID          string                    `json:"projectId,omitempty"`
+	RootMode           string                    `json:"rootMode,omitempty"`
+	UploadMode         string                    `json:"uploadMode,omitempty"`
+	ManifestFile       string                    `json:"manifestFile,omitempty"`
+	IncludeFiles       []string                  `json:"includeFiles,omitempty"`
+	RespectGitIgnore   *bool                     `json:"respectGitignore,omitempty"`
+	Engine             string                    `json:"engine,omitempty"`
+	Timeout            string                    `json:"timeout,omitempty"`
+	Exclude            []string                  `json:"exclude,omitempty"`
+	InsecureSkipVerify bool                      `json:"insecureSkipVerify,omitempty"`
 }
 
 type Resolved struct {
+	Auxiliary          protocol.AuxiliaryOptions
 	Server             string
 	Token              string
 	ProjectRoot        string
@@ -156,6 +160,12 @@ func Load(start string) (Resolved, error) {
 		}
 		cfg.RespectGitIgnore = &parsed
 	}
+	if v := os.Getenv("LATEXMK_SERVER_CACHE"); v != "" {
+		cfg.Auxiliary.Server = v
+	}
+	if cfg.Auxiliary.Server != "" && cfg.Auxiliary.Server != "none" && cfg.Auxiliary.Server != "reuse" {
+		return Resolved{}, errors.New("auxiliary.server must be none or reuse")
+	}
 	if cfg.RootMode != "entry" && cfg.RootMode != "git" {
 		return Resolved{}, fmt.Errorf("invalid rootMode %q; expected entry or git", cfg.RootMode)
 	}
@@ -192,6 +202,7 @@ func Load(start string) (Resolved, error) {
 	}
 	respectGitIgnore = cfg.RespectGitIgnore == nil || *cfg.RespectGitIgnore
 	return Resolved{
+		Auxiliary:          cfg.Auxiliary,
 		Server:             cfg.Server,
 		Token:              cfg.Token,
 		ProjectRoot:        resolvedRoot,

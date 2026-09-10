@@ -377,3 +377,16 @@ func TestJobsInvalidArgumentsUseJSONError(t *testing.T) {
 		t.Fatalf("error envelope = %#v", envelope)
 	}
 }
+
+func TestParseServerCache(t *testing.T) {
+	opts := compileOptions{timeout: time.Minute, watchInterval: time.Second, watchDebounce: time.Second}
+	if err := parseCompileArgs([]string{"--server-cache", "reuse", "--force", "main.tex"}, &opts); err != nil || opts.auxiliary.Server != "reuse" || !opts.force {
+		t.Fatalf("parse %+v %v", opts, err)
+	}
+	if err := parseCompileArgs([]string{"--server-cache=none", "main.tex"}, &opts); err != nil || opts.auxiliary.Server != "none" {
+		t.Fatal("none override failed")
+	}
+	if err := parseCompileArgs([]string{"--server-cache=invalid", "main.tex"}, &opts); err == nil {
+		t.Fatal("accepted invalid cache mode")
+	}
+}

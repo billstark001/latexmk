@@ -207,3 +207,24 @@ func TestReadTokenFileRejectsMultipleLines(t *testing.T) {
 		t.Fatal("expected multiple token lines to be rejected")
 	}
 }
+
+func TestAuxiliaryCacheConfigAndEnvironment(t *testing.T) {
+	isolateUserConfig(t)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, FileName), []byte(`{"auxiliary":{"server":"reuse"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(root)
+	if err != nil || cfg.Auxiliary.Server != "reuse" {
+		t.Fatalf("config %+v %v", cfg, err)
+	}
+	t.Setenv("LATEXMK_SERVER_CACHE", "none")
+	cfg, err = Load(root)
+	if err != nil || cfg.Auxiliary.Server != "none" {
+		t.Fatalf("env %+v %v", cfg, err)
+	}
+	t.Setenv("LATEXMK_SERVER_CACHE", "invalid")
+	if _, err := Load(root); err == nil {
+		t.Fatal("accepted invalid cache mode")
+	}
+}
