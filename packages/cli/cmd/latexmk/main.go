@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	version   = "0.3.0"
+	version   = "0.3.1"
 	commit    = "unknown"
 	buildDate = "unknown"
 )
@@ -1079,7 +1079,7 @@ func runInit(args []string) int {
 	if err := config.Write(
 		path,
 		config.FileConfig{
-			Server:    server,
+			Server:    config.ServerSources{config.LiteralSource(server)},
 			Engine:    "xelatex",
 			Timeout:   "3m",
 			Auxiliary: protocol.AuxiliaryOptions{Local: "none", Server: "none"},

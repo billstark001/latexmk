@@ -10,10 +10,12 @@ import (
 )
 
 type credentials struct {
-	userDefaultFile                                string
-	userToken, userFile, projectToken, projectFile string
-	envToken, envFile, cliToken, cliFile, start    string
-	cliSet                                         bool
+	userDefaultFile                             string
+	userFile, projectFile                       string
+	userSource, projectSource                   *ValueSource
+	lookup                                      func(string) (string, bool)
+	envToken, envFile, cliToken, cliFile, start string
+	cliSet                                      bool
 }
 
 func Load(start string) (Resolved, error) {
@@ -105,7 +107,7 @@ func (c *Resolved) Authenticate(root string) error {
 	switch c.TokenMode {
 	case "", "auto":
 		candidates = []source{{a.envToken, "", "LATEXMK_TOKEN", false}, {"", a.envFile, "LATEXMK_TOKEN_FILE", false},
-			{a.userToken, a.userFile, "user config", false}, {a.projectToken, a.projectFile, "project config", false},
+			{"", a.userFile, "user config", false}, {"", a.projectFile, "project config", false},
 			{"", filepath.Join(root, TokenFileName), "project token file", true}}
 		candidates = append(
 			candidates,
@@ -134,6 +136,20 @@ func (c *Resolved) Authenticate(root string) error {
 		candidates = []source{{a.cliToken, a.cliFile, "CLI", false}}
 	}
 	for _, candidate := range candidates {
+		var declared *ValueSource
+		if candidate.name == "user config" {
+			declared = a.userSource
+		} else if candidate.name == "project config" {
+			declared = a.projectSource
+		}
+		if declared != nil {
+			token, err := declared.resolve("token", a.lookup)
+			if err != nil {
+				return fmt.Errorf("%s: %w", candidate.name, err)
+			}
+			c.Token, c.TokenSource = token, candidate.name
+			return nil
+		}
 		if candidate.token != "" {
 			c.Token, c.TokenSource = candidate.token, candidate.name
 			return nil

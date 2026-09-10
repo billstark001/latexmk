@@ -59,6 +59,37 @@ numbers.
   module layer. Committed on 2026-09-10 at 14:52:19 +09:00 (`55b04d8`), after
   the `v0.3.0` release.
 
+## @latexmk/cli [0.3.1] - 2026-09-11
+
+### Added
+
+- Declare server addresses through literal values, named environment variables,
+  or local text files using a consistent source-object format.
+- Accept a server string, source object, or mixed array of strings and objects.
+  Normalize all forms to an ordered object array in Go and generated JSON,
+  including `latexmk init`.
+- Try server candidates in order, skipping unset variables, missing files, and
+  whitespace-only values. Report exhaustion clearly and reject malformed
+  declarations, unreadable files, and invalid file contents.
+- Document source precedence, relative paths, empty-value behavior, and migration;
+  add regression coverage for normalization, fallback, credentials, and errors.
+
+### Security
+
+- Prohibit hardcoded JSON tokens, including empty strings and literal-value
+  objects, without exposing credentials in errors. Replace them with
+  `{"env":"TOKEN_VARIABLE"}`, `{"file":"token.txt"}`, or legacy `tokenFile`.
+  This intentional compatibility change also applies when the token is overridden
+  or authentication is disabled; see [configuration migration](docs/CONFIGURATION.md#migration).
+- Preserve lazy credential resolution and exclude explicitly declared credential
+  files from uploads before authentication.
+
+### Changed
+
+- Bump only `@latexmk/cli`, its default executable version, and its default HTTP
+  user-agent version to `0.3.1`. Other workspace packages remain at `0.3.0`.
+- Resolve [issue #1](https://github.com/billstark001/latexmk/issues/1).
+
 ## [0.3.0] - 2026-09-10
 
 Version bump: `3bf24d2` at 11:25:11 +09:00. The published `v0.3.0` release

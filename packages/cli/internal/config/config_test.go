@@ -158,6 +158,8 @@ func TestLoadRespectsExplicitGitIgnoreSetting(t *testing.T) {
 }
 
 func TestLoadTokenPrecedence(t *testing.T) {
+	t.Setenv("TEST_USER_TOKEN", "user-token")
+	t.Setenv("TEST_PROJECT_TOKEN", "project-token")
 	configHome := isolateUserConfig(t)
 	root := t.TempDir()
 	userDir := filepath.Join(configHome, "latexmk")
@@ -166,14 +168,14 @@ func TestLoadTokenPrecedence(t *testing.T) {
 	}
 	if err := os.WriteFile(
 		filepath.Join(userDir, UserFileName),
-		[]byte(`{"token":"user-token","server":"https://user.example"}`),
+		[]byte(`{"token":{"env":"TEST_USER_TOKEN"},"server":"https://user.example"}`),
 		0o600,
 	); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(
 		filepath.Join(root, FileName),
-		[]byte(`{"token":"project-token","server":"https://project.example"}`),
+		[]byte(`{"token":{"env":"TEST_PROJECT_TOKEN"},"server":"https://project.example"}`),
 		0o600,
 	); err != nil {
 		t.Fatal(err)

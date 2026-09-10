@@ -31,6 +31,7 @@ type Target struct {
 }
 
 type FileConfig struct {
+	tokenSource   *ValueSource
 	TokenMode     string            `json:"tokenMode,omitempty"`
 	TokenFile     string            `json:"tokenFile,omitempty"`
 	EnvFile       *string           `json:"envFile,omitempty"`
@@ -40,7 +41,7 @@ type FileConfig struct {
 	Targets       map[string]Target `json:"targets,omitempty"`
 
 	Auxiliary          protocol.AuxiliaryOptions `json:"auxiliary,omitempty"`
-	Server             string                    `json:"server"`
+	Server             ServerSources             `json:"server"`
 	Token              string                    `json:"token,omitempty"`
 	ProjectRoot        string                    `json:"projectRoot,omitempty"`
 	ProjectID          string                    `json:"projectId,omitempty"`
@@ -124,7 +125,7 @@ func load(start string, envOverride *string) (Resolved, error) {
 	respectGitIgnore := true
 	cfg := FileConfig{
 		TokenMode: "auto", UnmatchedGlob: "error",
-		Server:           "http://127.0.0.1:8080",
+		Server:           ServerSources{LiteralSource("http://127.0.0.1:8080")},
 		RootMode:         "entry",
 		UploadMode:       "auto",
 		RespectGitIgnore: &respectGitIgnore,
@@ -145,7 +146,8 @@ func load(start string, envOverride *string) (Resolved, error) {
 			return Resolved{}, err
 		}
 	}
-	userToken, userTokenFile := cfg.Token, cfg.TokenFile
+	userToken, userTokenFile := cfg.tokenSource, cfg.TokenFile
+	cfg.tokenSource, cfg.TokenFile = nil, ""
 
 	path, err := findConfig(start)
 	if err != nil {
@@ -156,25 +158,31 @@ func load(start string, envOverride *string) (Resolved, error) {
 			return Resolved{}, err
 		}
 	}
-	projectToken, projectTokenFile := cfg.Token, cfg.TokenFile
-	if userToken != "" || userTokenFile != "" {
-		cfg.Token, cfg.TokenFile = userToken, userTokenFile
-	}
+	projectToken, projectTokenFile := cfg.tokenSource, cfg.TokenFile
 	envPath, envValues, err := loadEnvironment(start, path, cfg.EnvFile, envOverride)
 	if err != nil {
 		return Resolved{}, err
 	}
-	get := func(name string) string {
+	lookup := func(name string) (string, bool) {
 		if value, ok := os.LookupEnv(name); ok {
-			return value
+			return value, true
 		}
-		return envValues[name]
+		value, ok := envValues[name]
+		return value, ok
+	}
+	get := func(name string) string {
+		value, _ := lookup(name)
+		return value
 	}
 
 	cfg.Exclude = mergePatterns(cfg.Exclude, DefaultDeny())
 
-	if v := get("LATEXMK_SERVER"); v != "" {
-		cfg.Server = v
+	server := strings.TrimSpace(get("LATEXMK_SERVER"))
+	if server == "" {
+		server, err = cfg.Server.resolve(lookup)
+		if err != nil {
+			return Resolved{}, err
+		}
 	}
 	if v := get("LATEXMK_ENGINE"); v != "" {
 		cfg.Engine = v
@@ -286,9 +294,10 @@ func load(start string, envOverride *string) (Resolved, error) {
 		},
 		auth: credentials{
 			userDefaultFile: filepath.Join(userDir, "token"),
-			userToken:       userToken,
+			userSource:      userToken,
+			lookup:          lookup,
 			userFile:        userTokenFile,
-			projectToken:    projectToken,
+			projectSource:   projectToken,
 			projectFile:     projectTokenFile,
 			envToken: get(
 				"LATEXMK_TOKEN",
@@ -297,7 +306,7 @@ func load(start string, envOverride *string) (Resolved, error) {
 			start:   start,
 		},
 		Auxiliary:          cfg.Auxiliary,
-		Server:             cfg.Server,
+		Server:             server,
 		Token:              cfg.Token,
 		ProjectRoot:        resolvedRoot,
 		ProjectID:          cfg.ProjectID,
@@ -320,8 +329,36 @@ func mergeFile(path string, cfg *FileConfig) error {
 	if err != nil {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
-	if err := json.Unmarshal(b, cfg); err != nil {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(b, &fields); err != nil {
+		return fmt.Errorf("parse %s: invalid JSON configuration", path)
+	}
+	if raw, ok := fields["token"]; ok {
+		source, err := parseValueSource(raw, "token", filepath.Dir(path))
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
+		}
+		if _, exists := fields["tokenFile"]; exists {
+			return errors.New("token and tokenFile are mutually exclusive")
+		}
+		cfg.tokenSource = source
+		cfg.TokenFile = source.File
+		delete(fields, "token")
+	}
+	remaining, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(remaining, cfg); err != nil {
 		return fmt.Errorf("parse %s: %w", path, err)
+	}
+	if _, declared := fields["server"]; declared {
+		for index := range cfg.Server {
+			source := &cfg.Server[index]
+			if source.File != "" && !filepath.IsAbs(source.File) {
+				source.File = filepath.Join(filepath.Dir(path), source.File)
+			}
+		}
 	}
 	// Existing configurations downloaded auxiliaries and retained them in job
 	// results. A local policy opts into the new independent retention semantics.
@@ -330,10 +367,6 @@ func mergeFile(path string, cfg *FileConfig) error {
 		if cfg.Auxiliary.Server == "" {
 			cfg.Auxiliary.Server = "retain"
 		}
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(b, &fields); err != nil {
-		return err
 	}
 	if _, ok := fields["outDir"]; ok && cfg.OutDir != "" && !filepath.IsAbs(cfg.OutDir) {
 		cfg.OutDir = filepath.Join(filepath.Dir(path), cfg.OutDir)
@@ -397,34 +430,38 @@ func findUserConfig(base string) (string, error) {
 // ReadTokenFile reads one bearer token from a regular file. Leading and
 // trailing whitespace is ignored to support Docker and Kubernetes secrets.
 func ReadTokenFile(path string) (string, error) {
+	return readValueFile(path, "token")
+}
+
+func readValueFile(path, field string) (string, error) {
 	st, err := os.Stat(path)
 	if err != nil {
-		return "", fmt.Errorf("read token file %s: %w", path, err)
+		return "", fmt.Errorf("read %s file %s: %w", field, path, err)
 	}
 	if !st.Mode().IsRegular() {
-		return "", fmt.Errorf("token file %s is not a regular file", path)
+		return "", fmt.Errorf("%s file %s is not a regular file", field, path)
 	}
 	if st.Size() > maxTokenFileSize {
-		return "", fmt.Errorf("token file %s exceeds %d bytes", path, maxTokenFileSize)
+		return "", fmt.Errorf("%s file %s exceeds %d bytes", field, path, maxTokenFileSize)
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return "", fmt.Errorf("read token file %s: %w", path, err)
+		return "", fmt.Errorf("read %s file %s: %w", field, path, err)
 	}
 	defer func() { _ = f.Close() }()
 	b, err := io.ReadAll(io.LimitReader(f, maxTokenFileSize+1))
 	if err != nil {
-		return "", fmt.Errorf("read token file %s: %w", path, err)
+		return "", fmt.Errorf("read %s file %s: %w", field, path, err)
 	}
 	if len(b) > maxTokenFileSize {
-		return "", fmt.Errorf("token file %s exceeds %d bytes", path, maxTokenFileSize)
+		return "", fmt.Errorf("%s file %s exceeds %d bytes", field, path, maxTokenFileSize)
 	}
 	token := strings.TrimSpace(string(b))
 	if token == "" {
-		return "", fmt.Errorf("token file %s is empty", path)
+		return "", fmt.Errorf("%s file %s: %w", field, path, errEmptySource)
 	}
 	if strings.ContainsAny(token, "\r\n") {
-		return "", fmt.Errorf("token file %s must contain exactly one token", path)
+		return "", fmt.Errorf("%s file %s must contain exactly one value", field, path)
 	}
 	return token, nil
 }
@@ -446,8 +483,11 @@ func mergePatterns(base, required []string) []string {
 }
 
 func Write(path string, cfg FileConfig) error {
-	if cfg.Server == "" {
-		cfg.Server = "http://127.0.0.1:8080"
+	if cfg.Token != "" {
+		return errors.New("token must use a file or environment source; hardcoded credentials are prohibited")
+	}
+	if cfg.Server == nil {
+		cfg.Server = ServerSources{LiteralSource("http://127.0.0.1:8080")}
 	}
 	if cfg.Engine == "" {
 		cfg.Engine = "xelatex"
