@@ -113,6 +113,15 @@ only compiles/copies the server binary. A cold PaaS builder pulls the runtime;
 it does not install thousands of TeX packages. See the [deployment guide](../packages/deploy/README.md)
 for runtime publishing, CI variables, cache import/export, and measurement.
 
+After a successful `runtime-image` publication, run
+`node scripts/update-runtime-variables.mjs --dry-run` from the repository root
+to preview the new CI pins, then run it without `--dry-run` to update them.
+Use `--run RUN_ID` to adopt a specific publication and `--profile slim` or
+`--profile full` for a single profile. Finally dispatch `app-image.yml` to build
+against the new runtime. See [adopting a published runtime](../packages/deploy/README.md#adopting-a-published-runtime)
+for prerequisites and failure recovery. Server-only updates do not require
+changing the runtime variables.
+
 Use `latexmk meta` to verify the remote toolchain actually running the image.
 
 ## Compose watcher

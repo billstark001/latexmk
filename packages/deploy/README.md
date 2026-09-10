@@ -104,6 +104,35 @@ resource presets, persistent state, and timeout settings.
   It requires the selected profile's pinned reference and publishes the application without any
   TeX installation. Dispatch it after updating runtime variables.
 
+### Adopting a published runtime
+
+Repository variables only need updating when adopting a new runtime. Ordinary
+server changes keep using the existing pinned runtime. From the repository root,
+with Node.js 24+ and `gh` authenticated with repository-variable write permissions:
+
+```sh
+# Preview both references from the latest successful runtime-image run on the default branch.
+node scripts/update-runtime-variables.mjs --dry-run
+node scripts/update-runtime-variables.mjs
+
+# Then build the application against the adopted runtime.
+gh workflow run app-image.yml -f profile=both
+```
+
+For a specific publication, pass `--run RUN_ID`. For a runtime workflow that
+published only one profile, also pass `--profile slim` or `--profile full`.
+`--repo OWNER/REPO` selects a different repository; otherwise `gh` resolves the
+current repository. Use `--help` for all options.
+
+The script reads the successful publication step's logs and validates the image
+repository, profile and SHA-256 digest before writing any selected variable. It
+does not combine profiles from different runs or fall back to mutable tags; if
+the selected run lacks a profile or its logs have expired, select another run.
+Matching values are skipped. GitHub updates variables individually, so an API
+failure can leave a partial update; rerun the same `--run` command to finish.
+The script does not dispatch an application build automatically. Variable changes
+alone do not trigger `app-image`; dispatch it explicitly or push an application change.
+
 Both use separate GHA cache scopes with `mode=max`. Registry caches are also
 supported by the CLI. External cache export requires a compatible Buildx
 builder (for example, the `docker-container` driver used by CI). Cache mounts accelerate repeated builds on the same

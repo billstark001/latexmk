@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "build": "pnpm -r build",
-    "test": "pnpm -r test",
-    "lint": "pnpm -r lint",
+    "test": "node --test scripts/*.test.mjs && pnpm -r test",
+    "lint": "oxlint scripts/*.mjs && pnpm -r lint",
     "clean": "pnpm -r clean",
     "bundle:runtime:slim": "pnpm --filter @latexmk/deploy build && node packages/deploy/dist/index.js runtime-bundle --profile slim --out dist/runtime-slim",
     "bundle:runtime:full": "pnpm --filter @latexmk/deploy build && node packages/deploy/dist/index.js runtime-bundle --profile full --out dist/runtime-full",
