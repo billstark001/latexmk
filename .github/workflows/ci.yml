@@ -8,6 +8,21 @@ permissions:
   contents: read
 
 jobs:
+  installer:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install zsh for cross-shell tests
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh
+      - run: bash -n scripts/install-cli.sh
+      - run: node --test scripts/install-cli.test.mjs
   test:
     runs-on: ubuntu-latest
     steps:

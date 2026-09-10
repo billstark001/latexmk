@@ -1,0 +1,83 @@
+name: CLI release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/cli/go.mod
+          cache-dependency-path: packages/cli/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --test scripts/install-cli.test.mjs
+      - run: go test ./...
+        working-directory: packages/cli
+        env:
+          GOWORK: 'off'
+      - name: Build standalone CLI binaries
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          CGO_ENABLED: '0'
+          GOWORK: 'off'
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][a-zA-Z0-9.-]+)?$ ]] || exit 1
+          mkdir -p dist/cli-release
+          build_date=$(git show -s --format=%cI HEAD)
+          for target in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do
+            (
+              cd packages/cli
+              GOOS="${target%_*}" GOARCH="${target#*_}" go build -trimpath \
+                -ldflags "-s -w -X main.version=${RELEASE_TAG#v} -X main.commit=$GITHUB_SHA -X main.buildDate=$build_date" \
+                -o "../../dist/cli-release/latexmk_$target" ./cmd/latexmk
+            )
+          done
+          cp scripts/install-cli.sh dist/cli-release/install-cli.sh
+          cd dist/cli-release
+          sha256sum latexmk_* install-cli.sh > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-release
+          path: dist/cli-release/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cli-release
+          path: dist
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" dist/* --clobber
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease
+          else
+            gh release edit "$RELEASE_TAG" --draft=false --latest
+          fi
