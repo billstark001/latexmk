@@ -43,6 +43,39 @@ numbers.
   its first commit's date. These historical version entries do not assert that
   an untagged version was published.
 
+## @latexmk/cli [0.3.2] - 2026-09-11
+
+### Added
+
+- Register dependency syntax and resolution rules declaratively, including
+  biblatex data models, styles and language mappings; forwarded package/class
+  options; local class/package inheritance; optional inputs; and imported
+  subprojects (issue #2).
+- Discover local font faces and font configuration files, external plot data,
+  local SVG assets and checked-in figure exports. Respect scoped graphics paths
+  and extension order, and distinguish generated file contents from uploads.
+- Cover structured multiline options, comments, literal unbraced inputs,
+  conditional branches, filtering and project boundaries with regression
+  fixtures. Add opt-in remote compiler checks for cold, cached and edited inputs.
+
+### Fixed
+
+- Include local `.dbx` files referenced by multiline `biblatex` options on the
+  first discovery run, and follow their recognized transitive dependencies.
+- Bound recursive discovery and asset parsing, preserve upload-policy filtering,
+  and derive missing-file retry extensions from registered dependency rules.
+- Stop treating unrelated cached or explicit files as proof that dynamic
+  references are resolved. This intentional correction makes `auto` reject such
+  unresolved references even when previous runs succeeded. Migrate computed
+  inputs to `manifest` with a reviewed, complete `includeFiles` list; manifest
+  selection includes the entry and explicit files without adding static or
+  cached dependencies. See [dependency selection](docs/DEPENDENCIES.md).
+
+### Changed
+
+- Bump `@latexmk/cli`, its default executable version and HTTP user-agent to
+  `0.3.2`; other workspace package versions are unchanged.
+
 ## @latexmk/deploy [0.3.2] - 2026-09-11
 
 ### Added
