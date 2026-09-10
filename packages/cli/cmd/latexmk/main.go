@@ -30,6 +30,7 @@ type compileOptions struct {
 	server        string
 	token         string
 	projectRoot   string
+	projectID     string
 	rootMode      string
 	uploadMode    string
 	manifestFile  string
@@ -84,6 +85,8 @@ func run(args []string) int {
 			return runMeta(argv[1:], true)
 		case "clean":
 			return runClean(argv[1:])
+		case "cache":
+			return runCache(argv[1:])
 		case "jobs":
 			return runJobs(argv[1:])
 		case "logs":
@@ -127,6 +130,7 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		server:        cfg.Server,
 		token:         cfg.Token,
 		projectRoot:   cfg.ProjectRoot,
+		projectID:     cfg.ProjectID,
 		rootMode:      cfg.RootMode,
 		uploadMode:    cfg.UploadMode,
 		manifestFile:  cfg.ManifestFile,
@@ -185,6 +189,17 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		return fail(err)
 	}
 	c.ProjectRoot = opts.projectRoot
+	c.ProjectID = opts.projectID
+	if c.ProjectID == "" {
+		resolution, resolveErr := client.ResolveProjectIDWithStatus(opts.projectRoot, true)
+		if resolveErr != nil {
+			return fail(resolveErr)
+		}
+		c.ProjectID = resolution.ID
+		if resolution.Created {
+			fmt.Fprintln(os.Stderr, "latexmk: created a local project ID in .latexmk-cache; run 'latexmk cache ignore' in Git projects")
+		}
+	}
 	c.Exclude = opts.exclude
 	c.RespectGitIgnore = opts.gitIgnore
 	c.UploadMode = opts.uploadMode
@@ -377,6 +392,9 @@ func watchTargets(opts compileOptions, files []projectarchive.File) []projectwat
 		}
 	}
 	policyPaths[filepath.Join(repoRoot, ".git", "info", "exclude")] = struct{}{}
+	if globalExcludes, ok := effectiveGitExcludesFile(repoRoot); ok {
+		policyPaths[globalExcludes] = struct{}{}
+	}
 	for policyPath := range policyPaths {
 		label, relErr := filepath.Rel(opts.projectRoot, policyPath)
 		if relErr != nil {
@@ -446,6 +464,12 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 				return err
 			}
 			opts.projectRoot = v
+		case a == "--project-id" || strings.HasPrefix(a, "--project-id="):
+			v, err := value("--project-id")
+			if err != nil {
+				return err
+			}
+			opts.projectID = v
 		case a == "--root-mode" || strings.HasPrefix(a, "--root-mode="):
 			v, err := value("--root-mode")
 			if err != nil {
@@ -745,6 +769,9 @@ func runMeta(args []string, doctor bool) int {
 	if err != nil {
 		return fail(err)
 	}
+	if doctor {
+		reportDoctorProjectCache(cwd, cfg.ProjectRoot, hasJSONFlag(args))
+	}
 	server, token, timeout, insecure, jsonOutput := cfg.Server, cfg.Token, cfg.Timeout, cfg.InsecureSkipVerify, false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -852,7 +879,39 @@ func runInit(args []string) int {
 		return fail(err)
 	}
 	fmt.Println(path)
+	fmt.Fprintln(os.Stderr, "latexmk: recommended: run 'latexmk cache ignore' to protect the local project identity")
+	fmt.Fprintln(os.Stderr, "latexmk: warning: 'git clean -fdX' deletes ignored cache files; the next compile creates a new project ID")
 	return 0
+}
+
+func reportDoctorProjectCache(cwd, configuredRoot string, jsonOutput bool) {
+	root := configuredRoot
+	if root == "" {
+		root = cwd
+	}
+	root, err := filepath.Abs(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "latexmk: doctor: could not inspect project cache Git policy: %v\n", err)
+		return
+	}
+	status, err := client.InspectProjectCacheGitIgnore(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "latexmk: doctor: could not inspect project cache Git policy: %v\n", err)
+		return
+	}
+	if !status.InWorkTree {
+		if !jsonOutput {
+			fmt.Println("project cache Git ignore: not applicable (not a Git work tree)")
+		}
+		return
+	}
+	if status.Ignored {
+		if !jsonOutput {
+			fmt.Println("project cache Git ignore: configured")
+		}
+		return
+	}
+	fmt.Fprintln(os.Stderr, "latexmk: doctor: "+client.ProjectCacheGitAdvice)
 }
 
 func runClean(args []string) int {
@@ -893,6 +952,7 @@ Usage:
   latexmk doctor
   latexmk init [--server URL]
   latexmk clean [main.tex]
+  latexmk cache ignore [--project-root DIR] [--json]
   latexmk jobs list [--limit 50] [--json]
   latexmk jobs show JOB_ID [--json]
   latexmk jobs cancel JOB_ID [--json]
@@ -908,6 +968,7 @@ Compile options:
   --token TOKEN                Bearer token (prefer LATEXMK_TOKEN)
   --token-file FILE            Read the bearer token from a file
   --project-root DIR           Root directory uploaded to the server
+  --project-id ID              Override the persisted local project identity
   --root-mode entry|git        Default root when --project-root is absent
   --upload-mode MODE           auto (default), manifest, or all
   --manifest FILE              Read exact project-relative files, one per line

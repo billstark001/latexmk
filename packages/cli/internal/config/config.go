@@ -20,6 +20,7 @@ type FileConfig struct {
 	Server             string   `json:"server"`
 	Token              string   `json:"token,omitempty"`
 	ProjectRoot        string   `json:"projectRoot,omitempty"`
+	ProjectID          string   `json:"projectId,omitempty"`
 	RootMode           string   `json:"rootMode,omitempty"`
 	UploadMode         string   `json:"uploadMode,omitempty"`
 	ManifestFile       string   `json:"manifestFile,omitempty"`
@@ -35,6 +36,7 @@ type Resolved struct {
 	Server             string
 	Token              string
 	ProjectRoot        string
+	ProjectID          string
 	RootMode           string
 	UploadMode         string
 	ManifestFile       string
@@ -135,6 +137,9 @@ func Load(start string) (Resolved, error) {
 	if v := os.Getenv("LATEXMK_ENGINE"); v != "" {
 		cfg.Engine = v
 	}
+	if v := os.Getenv("LATEXMK_PROJECT_ID"); v != "" {
+		cfg.ProjectID = v
+	}
 	if v := os.Getenv("LATEXMK_ROOT_MODE"); v != "" {
 		cfg.RootMode = v
 	}
@@ -190,6 +195,7 @@ func Load(start string) (Resolved, error) {
 		Server:             cfg.Server,
 		Token:              cfg.Token,
 		ProjectRoot:        resolvedRoot,
+		ProjectID:          cfg.ProjectID,
 		RootMode:           cfg.RootMode,
 		UploadMode:         cfg.UploadMode,
 		ManifestFile:       cfg.ManifestFile,

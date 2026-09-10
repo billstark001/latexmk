@@ -38,6 +38,7 @@ type Client struct {
 	UploadMode       string
 	ManifestFile     string
 	IncludeFiles     []string
+	ProjectID        string
 }
 
 type CompileOutput struct {
@@ -393,9 +394,13 @@ func (c *Client) startQueued(ctx context.Context, request protocol.CompileReques
 	if c.ProjectRoot == "" {
 		return job, errors.New("project root is not configured")
 	}
-	projectID, err := stableProjectID(c.ProjectRoot)
-	if err != nil {
-		return job, err
+	projectID := c.ProjectID
+	if projectID == "" {
+		var err error
+		projectID, err = ResolveProjectID(c.ProjectRoot, true)
+		if err != nil {
+			return job, err
+		}
 	}
 	planRequest := protocol.UploadPlanRequest{ProjectID: projectID, Request: request, Files: make([]protocol.ProjectFile, 0, len(files))}
 	byDigest := make(map[string]string, len(files))
@@ -591,19 +596,6 @@ func (c *Client) rawRequest(ctx context.Context, method, path string, body io.Re
 		return nil, readHTTPError(resp)
 	}
 	return resp, nil
-}
-
-func stableProjectID(root string) (string, error) {
-	abs, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
-	resolved, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return "", err
-	}
-	digest := sha256.Sum256([]byte(filepath.Clean(resolved)))
-	return "project-" + hex.EncodeToString(digest[:16]), nil
 }
 
 func (c *Client) decorate(req *http.Request) {
