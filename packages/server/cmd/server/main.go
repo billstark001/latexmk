@@ -61,8 +61,10 @@ func main() {
 	queue := jobs.New(cfg, meta, runner, projects, db, logger)
 	signalCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	projects.Start(signalCtx, logger)
-	queue.Start(signalCtx)
+	workerCtx, stopWorkers := context.WithCancel(context.Background())
+	defer stopWorkers()
+	projects.Start(workerCtx, logger)
+	queue.Start(workerCtx)
 	apiServer := httpapi.New(cfg, meta, runner, authManager, db, projects, queue, logger)
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
@@ -91,8 +93,16 @@ func main() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer shutdownCancel()
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		logger.Error("graceful shutdown failed", "error", err)
+	shutdownErr := httpServer.Shutdown(shutdownCtx)
+	stopWorkers()
+	waitErr := queue.Wait(shutdownCtx)
+	if shutdownErr != nil {
+		logger.Error("graceful HTTP shutdown failed", "error", shutdownErr)
+	}
+	if waitErr != nil {
+		logger.Error("compile workers did not stop before the shutdown deadline", "error", waitErr)
+	}
+	if shutdownErr != nil || waitErr != nil {
 		_ = httpServer.Close()
 		os.Exit(1)
 	}

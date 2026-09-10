@@ -30,8 +30,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Server owns the Gin engine and keeps the legacy synchronous endpoint beside
-// the v2 content-addressed upload and queued-job API.
+// Server owns the Gin engine and exposes the v2 content-addressed upload and
+// queued-job API. The legacy synchronous endpoint is opt-in.
 type Server struct {
 	cfg      config.Config
 	meta     api.Metadata
@@ -55,7 +55,9 @@ func New(cfg config.Config, meta api.Metadata, runner *compile.Runner, authManag
 
 	compileAuth := authManager.Middleware(false)
 	adminAuth := authManager.Middleware(true)
-	engine.POST("/v1/compile", compileAuth, s.compileLegacy)
+	if cfg.EnableLegacyCompile {
+		engine.POST("/v1/compile", compileAuth, s.compileLegacy)
+	}
 	engine.POST("/v1/uploads/plans", compileAuth, s.planUpload)
 	engine.PUT("/v1/uploads/:uploadID/blobs/:digest", compileAuth, s.putBlob)
 	engine.POST("/v1/uploads/:uploadID/commit", compileAuth, s.commitUpload)
@@ -96,8 +98,8 @@ func (s *Server) metadata(c *gin.Context) {
 	c.JSON(http.StatusOK, meta)
 }
 
-// compileLegacy is intentionally retained for v1 clients. New clients use the
-// queued protocol below, so a slow TeX run no longer occupies an HTTP request.
+// compileLegacy is available only when explicitly enabled for migrating v1
+// clients. New clients use the queued protocol below.
 func (s *Server) compileLegacy(c *gin.Context) {
 	requestID := requestIDFrom(c.Request.Context())
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, s.cfg.MaxUploadBytes)

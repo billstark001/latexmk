@@ -42,6 +42,7 @@ type Manager struct {
 	admissionMu sync.Mutex
 	jobs        map[string]record
 	queue       chan string
+	workers     sync.WaitGroup
 }
 
 func New(cfg config.Config, meta api.Metadata, runner *compile.Runner, projects *project.Manager, db *store.Postgres, logger *slog.Logger) *Manager {
@@ -89,8 +90,10 @@ func (m *Manager) Start(ctx context.Context) {
 		}
 	}
 	for i := 0; i < m.cfg.MaxConcurrentCompiles; i++ {
+		m.workers.Add(1)
 		go m.worker(ctx, i+1)
 	}
+	go m.pruneLoop(ctx)
 	go func() {
 		for _, id := range recoverIDs {
 			select {
@@ -263,6 +266,7 @@ func (m *Manager) ResultPath(ctx context.Context, ownerID, id string) (string, a
 }
 
 func (m *Manager) worker(ctx context.Context, worker int) {
+	defer m.workers.Done()
 	for {
 		select {
 		case <-ctx.Done():
@@ -436,6 +440,64 @@ func (m *Manager) persistenceContext(ctx context.Context) (context.Context, cont
 		return context.WithCancel(ctx)
 	}
 	return context.WithTimeout(context.Background(), m.cfg.ShutdownTimeout)
+}
+
+func (m *Manager) Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		m.workers.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (m *Manager) pruneLoop(ctx context.Context) {
+	if m.cfg.StateSweepInterval <= 0 || m.cfg.ResultRetention <= 0 {
+		return
+	}
+	m.pruneTerminal(ctx, time.Now().UTC().Add(-m.cfg.ResultRetention))
+	ticker := time.NewTicker(m.cfg.StateSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			m.pruneTerminal(ctx, now.UTC().Add(-m.cfg.ResultRetention))
+		}
+	}
+}
+
+func (m *Manager) pruneTerminal(ctx context.Context, cutoff time.Time) {
+	m.admissionMu.Lock()
+	defer m.admissionMu.Unlock()
+	if m.db != nil {
+		removed, err := m.db.DeleteTerminalJobsBefore(ctx, cutoff)
+		if err != nil {
+			m.logger.Error("terminal job metadata sweep failed", "error", err)
+		} else if removed > 0 {
+			m.logger.Info("terminal job metadata swept", "jobs", removed)
+		}
+		return
+	}
+	m.mu.Lock()
+	removed := 0
+	for id, rec := range m.jobs {
+		terminal := rec.Job.Status == "succeeded" || rec.Job.Status == "failed" || rec.Job.Status == "cancelled"
+		if terminal && rec.Job.FinishedAt != nil && rec.Job.FinishedAt.Before(cutoff) {
+			delete(m.jobs, id)
+			removed++
+		}
+	}
+	m.mu.Unlock()
+	if removed > 0 {
+		m.logger.Info("terminal job metadata swept", "jobs", removed)
+	}
 }
 
 func (m *Manager) load(ctx context.Context, id string) (record, error) {

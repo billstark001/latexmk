@@ -381,6 +381,13 @@ func (p *Postgres) TransitionJob(ctx context.Context, id, expectedStatus string,
 	return result.RowsAffected == 1, nil
 }
 
+func (p *Postgres) DeleteTerminalJobsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	result := p.db.WithContext(ctx).
+		Where("status IN ? AND finished_at IS NOT NULL AND finished_at < ?", []string{"succeeded", "failed", "cancelled"}, cutoff).
+		Delete(&CompileJob{})
+	return result.RowsAffected, result.Error
+}
+
 func containsControl(value string) bool {
 	for _, r := range value {
 		if r < 0x20 || r == 0x7f {
