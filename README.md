@@ -403,3 +403,74 @@ PostgreSQL for production multi-instance deployments, long retention, or higher
 concurrency.
 
 See `docs/` for full API, operations, and security documentation.
+
+## Reusing server compilation state
+
+Opt in per compile, or set a user/project default:
+
+```sh
+latexmk --server-cache reuse main.tex
+latexmk --server-cache reuse --force main.tex
+```
+
+```json
+{
+  "auxiliary": { "server": "reuse" }
+}
+```
+
+`LATEXMK_SERVER_CACHE=none|reuse` overrides configuration; `--server-cache`
+overrides both. The default (`none`) does not read or publish reusable compiler
+state. It does not delete an existing cache or change result-archive retention
+and local artifact downloads. Local auxiliary retention controls and the
+proposed server `retain` mode are separate features, not implemented by this
+switch. Explicit reuse requires the `compileCache` server capability; older
+servers are rejected instead of silently ignoring the request.
+
+Each job still materializes its immutable sources into a fresh workspace and
+runs latexmk. Reuse warms `.aux`, `.toc`, `.lof`, `.lot`, `.out`, `.bbl`, `.nav`
+and `.snm` files from a previous successful compile, reducing repeated passes.
+It does not return an old PDF or restore `.fls`, `.fdb_latexmk`, `.run.xml` or
+other records tied to an old workspace. Files containing that workspace's
+absolute path cannot be cached. Uploaded source files, including supplied
+`.bbl` files, are never replaced by cached outputs.
+
+Caches are isolated by owner, project ID, entry, engine, job name, compilation
+options, server build, image profile and reported toolchain versions. TeX source
+edits may reuse state; added/removed input paths or changed non-TeX inputs
+(including `.bib`, `.sty` and `.cls`) start cold. `--force` also starts cold and
+refreshes the cache on success. Failed, timed-out or cancelled runs do not
+publish state; older submitted jobs cannot overwrite a newer successful
+cache. Corruption, expiry and cache quota failures fall back to ordinary
+compilation. A failed warm compile retries once from clean sources within the
+same timeout budget, unless it timed out or was cancelled; `coldRetry` reports
+this fallback. A cache hit still runs the compiler and lets latexmk converge
+references; speedups depend on the document.
+
+Server settings:
+
+- `LATEXMK_COMPILE_CACHE_RETENTION`: maximum age since publication, default `24h`.
+- `LATEXMK_MAX_COMPILE_CACHE_BYTES`: uncompressed auxiliary bytes per cache,
+  default 16 MiB; `0` disables reuse.
+- `LATEXMK_COMPILE_CACHE_EPOCH`: change this after updating installed TeX
+  packages/fonts in place without rebuilding the service.
+
+Cache archives count towards `LATEXMK_MAX_STATE_BYTES` and are swept with the
+other state. They survive a process restart only when `LATEXMK_STATE_DIR`
+survives; an ephemeral Railway filesystem provides no cross-deployment
+persistence guarantee.
+
+JSON compile results and job records include `compileCache` with `hit`, `miss`
+or `bypass`, the reason and restored file count. Publication happens after the
+result archive is durable; the job record (and CLI result) additionally reports
+`storedFiles` and publication warnings. Inspect or remove only reusable state
+with the existing preview/apply flow:
+
+```sh
+latexmk remote clean --scope cache
+latexmk remote clean --plan-id PLAN_ID --yes
+```
+
+`--scope project` includes reusable state too. Cache cleanup leaves downloaded
+local files, source snapshots and job result archives alone when its scope is
+`cache`.
