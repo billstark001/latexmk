@@ -12,11 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
+	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
 )
 
 // Only portable TeX state is restored. In particular, .fls, .fdb_latexmk,
@@ -92,17 +92,22 @@ func (m *Manager) readCompileCache(path string) (compileCacheRecord, error) {
 	if info.Size() > limit {
 		return record, errors.New("cache exceeds size limit")
 	}
-	f, err := os.Open(path)
+	cacheRoot, err := safefs.Open(filepath.Dir(path))
+	if err != nil {
+		return record, err
+	}
+	defer func() { _ = cacheRoot.Close() }()
+	f, err := cacheRoot.OpenRegular(filepath.Base(path))
 	if err != nil {
 		return record, err
 	}
 	defer func() { _ = f.Close() }()
-	gz, err := gzip.NewReader(f)
+	gz, err := gzip.NewReader(io.LimitReader(f, limit+1))
 	if err != nil {
 		return record, err
 	}
 	defer func() { _ = gz.Close() }()
-	payload, err := io.ReadAll(io.LimitReader(gz, limit+1))
+	payload, err := safefs.ReadLimited(gz, limit)
 	if err != nil {
 		return record, err
 	}
@@ -188,35 +193,30 @@ func (m *Manager) RestoreCompileCache(snapshot Snapshot, key, workspace string) 
 	for _, file := range snapshot.Files {
 		sources[filepath.ToSlash(filepath.Clean(file.Path))] = true
 	}
+	fs, err := safefs.Open(workspace)
+	if err != nil {
+		info.Warning = err.Error()
+		return info
+	}
+	defer func() { _ = fs.Close() }()
 	created := []string{}
 	for _, file := range record.Files {
 		if sources[file.Path] {
 			err = errors.New("cached auxiliary would overwrite a source")
 			break
 		}
-		var destination string
-		destination, err = safeCacheFile(workspace, file.Path, true)
+		err = fs.WriteExclusive(file.Path, int64(len(file.Data)), func(w io.Writer) error {
+			_, err := w.Write(file.Data)
+			return err
+		})
 		if err != nil {
 			break
 		}
-		var out *os.File
-		out, err = os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if err != nil {
-			break
-		}
-		created = append(created, destination)
-		_, err = out.Write(file.Data)
-		closeErr := out.Close()
-		if err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			break
-		}
+		created = append(created, file.Path)
 	}
 	if err != nil {
 		for _, path := range created {
-			_ = os.Remove(path)
+			err = errors.Join(err, fs.Remove(path))
 		}
 		info.Reason, info.Warning = "cache restore failed; cold build", err.Error()
 		return info
@@ -245,34 +245,24 @@ func (m *Manager) SaveCompileCache(
 	for _, file := range snapshot.Files {
 		sources[filepath.ToSlash(filepath.Clean(file.Path))] = true
 	}
+	fs, err := safefs.Open(workspace)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = fs.Close() }()
 	var total int64
 	for _, file := range output.Files {
 		if !reusableAuxiliary(file.RelativePath) || sources[file.RelativePath] {
 			continue
 		}
-		source, err := safeCacheFile(workspace, file.RelativePath, false)
+		if file.Size < 0 || file.Size > m.cfg.MaxCompileCacheBytes-total {
+			return 0, errors.New("auxiliary cache exceeds size limit")
+		}
+		data, err := fs.ReadLimited(file.RelativePath, file.Size)
 		if err != nil {
 			return 0, err
 		}
-		stat, err := os.Lstat(source)
-		if err != nil || !stat.Mode().IsRegular() {
-			return 0, errors.New("auxiliary is not a regular file")
-		}
-		if stat.Size() != file.Size || total+stat.Size() > m.cfg.MaxCompileCacheBytes {
-			return 0, errors.New("auxiliary cache exceeds size limit or file changed")
-		}
-		input, err := os.Open(source)
-		if err != nil {
-			return 0, err
-		}
-		data, readErr := io.ReadAll(io.LimitReader(input, file.Size+1))
-		closeErr := input.Close()
-		if readErr != nil {
-			return 0, readErr
-		}
-		if closeErr != nil {
-			return 0, closeErr
-		}
+
 		if int64(len(data)) != file.Size {
 			return 0, errors.New("auxiliary changed after collection")
 		}
@@ -324,53 +314,20 @@ func (m *Manager) SaveCompileCache(
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return 0, err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".compile-cache-*")
+	cacheRoot, err := safefs.Open(filepath.Dir(path))
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	_, err = tmp.Write(buffer.Bytes())
-	closeErr := tmp.Close()
-	if err != nil {
+	defer func() { _ = cacheRoot.Close() }()
+	if _, err := cacheRoot.WriteAtomic(filepath.Base(path), int64(buffer.Len()), func(w io.Writer) error {
+		_, err := w.Write(buffer.Bytes())
+		return err
+	}); err != nil {
 		return 0, err
 	}
-	if closeErr != nil {
-		return 0, closeErr
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		return 0, err
-	}
+
 	m.stateBytes += int64(buffer.Len()) - replaced
 	return len(record.Files), nil
-}
-
-// safeCacheFile rejects symlinks in every component, including the leaf.
-func safeCacheFile(root, rel string, createParents bool) (string, error) {
-	if !validProjectPath(rel) || filepath.ToSlash(filepath.Clean(rel)) != rel {
-		return "", errors.New("invalid auxiliary path")
-	}
-	parts := strings.Split(rel, "/")
-	current := root
-	for i, part := range parts {
-		current = filepath.Join(current, part)
-		info, err := os.Lstat(current)
-		if os.IsNotExist(err) && createParents {
-			if i == len(parts)-1 {
-				return current, nil
-			}
-			if err := os.Mkdir(current, 0o700); err != nil {
-				return "", err
-			}
-			continue
-		}
-		if err != nil {
-			return "", err
-		}
-		if info.Mode()&os.ModeSymlink != 0 || (i < len(parts)-1 && !info.IsDir()) {
-			return "", errors.New("unsafe auxiliary path component")
-		}
-	}
-	return current, nil
 }
 
 // CompileCacheStats participates in the existing exact-preview cleanup digest.

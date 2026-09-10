@@ -3,7 +3,6 @@ package compile
 import (
 	"bytes"
 	"io"
-	"os"
 	"path"
 	"regexp"
 	"sort"
@@ -33,7 +32,7 @@ func detectMissingFiles(stdout, stderr []byte, artifacts []File) []string {
 		if remaining <= 0 || !strings.HasSuffix(strings.ToLower(artifact.RelativePath), ".log") {
 			continue
 		}
-		f, err := os.Open(artifact.AbsolutePath)
+		f, err := artifact.Open()
 		if err != nil {
 			continue
 		}

@@ -4,13 +4,13 @@ package metadata
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
+	"github.com/billstark001/latexmk/packages/server/internal/platform/process"
 )
 
 type BuildInfo struct {
@@ -101,7 +101,8 @@ func ValidateToolchain(meta api.Metadata, cfg config.Config) error {
 func firstLine(name string, args ...string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	result := process.Run(ctx, process.Spec{Name: name, Args: args, MaxOutputBytes: 4096, CombinedOutput: true})
+	out, err := result.Stdout, result.Err
 	if err != nil && len(out) == 0 {
 		return ""
 	}

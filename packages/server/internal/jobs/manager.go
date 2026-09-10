@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -569,21 +568,18 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	}
 	m.logger.Info("compile job started", "job_id", id, "worker", worker, "owner_id", rec.OwnerID)
 
-	root, err := os.MkdirTemp(m.cfg.TempDir, "latexmk-job-*")
+	jobWorkspace, err := compile.NewWorkspace(m.cfg.TempDir)
 	if err != nil {
 		m.finish(ctx, rec, nil, "could not create compile workspace", false)
 		return
 	}
 	defer func() {
-		if err := os.RemoveAll(root); err != nil {
+		if err := jobWorkspace.Close(); err != nil {
 			m.logger.Warn("could not remove compile workspace", "error", err)
 		}
 	}()
-	workspace := filepath.Join(root, "project")
-	if err := os.MkdirAll(workspace, 0o700); err != nil {
-		m.finish(ctx, rec, nil, "could not initialize compile workspace", false)
-		return
-	}
+	workspace := jobWorkspace.Project
+
 	if err := m.projects.Materialize(rec.Snapshot, workspace); err != nil {
 		m.finish(ctx, rec, nil, "could not materialize project: "+err.Error(), false)
 		return
@@ -607,10 +603,7 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 		// Retry once from the immutable source snapshot, within the same deadline.
 		cacheInfo.ColdRetry = true
 		cacheInfo.Reason = "warm compile failed; retried with clean sources"
-		resetErr := os.RemoveAll(workspace)
-		if resetErr == nil {
-			resetErr = os.MkdirAll(workspace, 0o700)
-		}
+		resetErr := jobWorkspace.Reset()
 		if resetErr == nil {
 			resetErr = m.projects.Materialize(rec.Snapshot, workspace)
 		}

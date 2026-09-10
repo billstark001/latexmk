@@ -1,6 +1,6 @@
 //go:build windows
 
-package compile
+package process
 
 import (
 	"os"

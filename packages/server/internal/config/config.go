@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
 )
 
 type Config struct {
@@ -181,17 +184,12 @@ func loadAPIToken() (string, error) {
 	if path == "" {
 		return token, nil
 	}
-	info, err := os.Lstat(path)
+	root, err := safefs.Open(filepath.Dir(path))
 	if err != nil {
 		return "", fmt.Errorf("read LATEXMK_API_TOKEN_FILE: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("LATEXMK_API_TOKEN_FILE must be a regular file")
-	}
-	if info.Size() > 64<<10 {
-		return "", fmt.Errorf("LATEXMK_API_TOKEN_FILE is too large")
-	}
-	data, err := os.ReadFile(path)
+	defer func() { _ = root.Close() }()
+	data, err := root.ReadLimited(filepath.Base(path), 64<<10)
 	if err != nil {
 		return "", fmt.Errorf("read LATEXMK_API_TOKEN_FILE: %w", err)
 	}

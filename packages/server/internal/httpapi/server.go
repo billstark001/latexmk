@@ -136,21 +136,18 @@ func (s *Server) compileLegacy(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "invalid multipart request")
 		return
 	}
-	root, err := os.MkdirTemp(s.cfg.TempDir, "latexmk-job-*")
+	jobWorkspace, err := compile.NewWorkspace(s.cfg.TempDir)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "could not create compile workspace")
 		return
 	}
 	defer func() {
-		if err := os.RemoveAll(root); err != nil {
+		if err := jobWorkspace.Close(); err != nil {
 			s.logger.Warn("could not remove compile workspace", "error", err)
 		}
 	}()
-	workspace := filepath.Join(root, "project")
-	if err := os.MkdirAll(workspace, 0o700); err != nil {
-		writeError(c, http.StatusInternalServerError, "could not initialize compile workspace")
-		return
-	}
+	workspace := jobWorkspace.Project
+
 	var request api.CompileRequest
 	var gotRequest, gotProject bool
 	for {
@@ -229,7 +226,7 @@ func (s *Server) compileLegacy(c *gin.Context) {
 	}
 	output.Result.ServerVersion = s.meta.Version
 	output.Result.ImageProfile = s.meta.ImageProfile
-	responsePath := filepath.Join(root, "result.tar.gz")
+	responsePath := filepath.Join(jobWorkspace.Path, "result.tar.gz")
 	if err := resultarchive.Write(responsePath, output); err != nil {
 		writeError(c, http.StatusInternalServerError, "could not package compile result")
 		return

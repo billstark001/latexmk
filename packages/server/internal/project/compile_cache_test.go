@@ -62,7 +62,7 @@ func cacheOutput(t *testing.T, root string, data map[string]string) compile.Outp
 			out.Files,
 			compile.File{
 				RelativePath: name,
-				AbsolutePath: path,
+				Workspace:    root,
 				Size:         int64(len(content)),
 				SHA256:       hex.EncodeToString(hash[:]),
 			},

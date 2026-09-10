@@ -20,7 +20,7 @@ func TestDetectMissingFilesFromTeXDiagnostics(t *testing.T) {
 	got := detectMissingFiles(
 		[]byte("! LaTeX Error: File `sections/body.tex' not found.\n"),
 		[]byte("! I can't find file `chapter2'.\n"),
-		[]File{{RelativePath: "main.log", AbsolutePath: logPath}},
+		[]File{{RelativePath: "main.log", Workspace: filepath.Dir(logPath)}},
 	)
 	want := []string{"chapter2", "figures/plot.png", "sections/body.tex"}
 	if !reflect.DeepEqual(got, want) {

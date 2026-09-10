@@ -3,23 +3,23 @@ package compile
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
+	"github.com/billstark001/latexmk/packages/server/internal/platform/process"
+	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
 )
 
 type Runner struct {
@@ -35,8 +35,8 @@ type Output struct {
 }
 
 type File struct {
+	Workspace    string
 	RelativePath string
-	AbsolutePath string
 	Size         int64
 	SHA256       string
 }
@@ -49,18 +49,16 @@ func (r *Runner) Validate(workspace string, req api.CompileRequest) error {
 	if err := r.ValidateRequest(req); err != nil {
 		return err
 	}
-	entry, err := safeWorkspacePath(workspace, req.Entry)
+	fs, err := safefs.Open(workspace)
 	if err != nil {
-		return fmt.Errorf("invalid entry: %w", err)
+		return err
 	}
-	st, err := os.Stat(entry)
+	defer func() { _ = fs.Close() }()
+	entry, err := fs.OpenRegular(req.Entry)
 	if err != nil {
 		return fmt.Errorf("entry: %w", err)
 	}
-	if !st.Mode().IsRegular() {
-		return errors.New("entry is not a regular file")
-	}
-	return nil
+	return entry.Close()
 }
 
 func (r *Runner) ValidateRequest(req api.CompileRequest) error {
@@ -88,7 +86,7 @@ func (r *Runner) ValidateRequest(req api.CompileRequest) error {
 	if req.JobName != "" && !validJobName(req.JobName) {
 		return errors.New("jobName may contain only letters, digits, dot, underscore, and hyphen")
 	}
-	_, err := safeWorkspacePath("/workspace", req.Entry)
+	_, err := safefs.Clean(req.Entry)
 	if err != nil {
 		return fmt.Errorf("invalid entry: %w", err)
 	}
@@ -122,29 +120,27 @@ func (r *Runner) Run(parent context.Context, workspace string, req api.CompileRe
 
 	ctx, cancel := context.WithTimeout(parent, r.Config.CompileTimeout)
 	defer cancel()
-	_ = removeStaleRecorderFiles(workspace)
+	if err := removeStaleRecorderFiles(workspace); err != nil {
+		result.Error = err.Error()
+		result.DurationMS = time.Since(started).Milliseconds()
+		return Output{Result: result}
+	}
 	args := commandArgs(req)
-	cmd := exec.CommandContext(ctx, "latexmk", args...)
-	cmd.Dir = workspace
-	cmd.Env = sandboxEnvironment(workspace, req.ShellEscape)
-	configureProcess(cmd)
-	stdout := newCappedBuffer(r.Config.MaxLogBytes)
-	stderr := newCappedBuffer(r.Config.MaxLogBytes)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-
-	err := cmd.Start()
-	if err == nil {
-		err = cmd.Wait()
-	}
-	if ctx.Err() != nil {
-		terminateProcessTree(cmd)
-		result.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
-	}
-	result.ExitCode = exitCode(err)
-	result.Success = err == nil && !result.TimedOut
+	env, err := sandboxEnvironment(workspace, req.ShellEscape)
 	if err != nil {
 		result.Error = err.Error()
+		result.DurationMS = time.Since(started).Milliseconds()
+		return Output{Result: result}
+	}
+	executed := process.Run(
+		ctx,
+		process.Spec{Name: "latexmk", Args: args, Dir: workspace, Env: env, MaxOutputBytes: r.Config.MaxLogBytes},
+	)
+	result.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
+	result.ExitCode = executed.ExitCode
+	result.Success = executed.Err == nil && !result.TimedOut
+	if executed.Err != nil {
+		result.Error = executed.Err.Error()
 	}
 	if result.TimedOut {
 		result.Error = "compilation timed out"
@@ -176,12 +172,12 @@ func (r *Runner) Run(parent context.Context, workspace string, req api.CompileRe
 		}
 	}
 	if req.DetectMissingFiles && !result.Success {
-		result.NeedsFiles = detectMissingFiles(stdout.Bytes(), stderr.Bytes(), files)
+		result.NeedsFiles = detectMissingFiles(executed.Stdout, executed.Stderr, files)
 	}
-	result.StdoutTruncated = stdout.Truncated()
-	result.StderrTruncated = stderr.Truncated()
+	result.StdoutTruncated = executed.StdoutTruncated
+	result.StderrTruncated = executed.StderrTruncated
 	result.DurationMS = time.Since(started).Milliseconds()
-	return Output{Result: result, Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), Files: files}
+	return Output{Result: result, Stdout: executed.Stdout, Stderr: executed.Stderr, Files: files}
 }
 
 func commandArgs(req api.CompileRequest) []string {
@@ -224,12 +220,20 @@ func commandArgs(req api.CompileRequest) []string {
 	return args
 }
 
-func sandboxEnvironment(workspace string, shellEscape bool) []string {
+func sandboxEnvironment(workspace string, shellEscape bool) ([]string, error) {
 	home := filepath.Join(workspace, ".latexmk-home")
 	texmfVar := filepath.Join(home, ".texlive-var")
 	texmfConfig := filepath.Join(home, ".texlive-config")
-	_ = os.MkdirAll(texmfVar, 0o700)
-	_ = os.MkdirAll(texmfConfig, 0o700)
+	fs, err := safefs.Open(workspace)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = fs.Close() }()
+	for _, dir := range []string{".latexmk-home/.texlive-var", ".latexmk-home/.texlive-config"} {
+		if err := fs.MakeDirs(dir, 0o700); err != nil {
+			return nil, err
+		}
+	}
 	shell := "f"
 	if shellEscape {
 		shell = "t"
@@ -249,57 +253,55 @@ func sandboxEnvironment(workspace string, shellEscape bool) []string {
 		"openin_any=p",
 		"openout_any=p",
 		"shell_escape=" + shell,
-	}
+	}, nil
 }
 
 func removeStaleRecorderFiles(root string) error {
-	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	scoped, err := safefs.Open(root)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = scoped.Close() }()
+	return fs.WalkDir(scoped.FS(), ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if !d.IsDir() && strings.HasSuffix(strings.ToLower(d.Name()), ".fls") {
-			return os.Remove(path)
+			return scoped.Remove(name)
 		}
 		return nil
 	})
 }
 
 func collectArtifacts(root string, req api.CompileRequest, maxBytes int64) ([]File, error) {
-	candidates := map[string]struct{}{}
-	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() || !strings.HasSuffix(strings.ToLower(d.Name()), ".fls") {
-			return nil
-		}
-		rel, err := filepath.Rel(root, path)
-		if err == nil {
-			candidates[filepath.ToSlash(rel)] = struct{}{}
-		}
-		return parseFLS(root, path, candidates)
-	})
-	if walkErr != nil {
-		return nil, walkErr
+	scoped, err := safefs.Open(root)
+	if err != nil {
+		return nil, err
 	}
-	// Recorder files describe TeX outputs, but XeLaTeX's final PDF may be
-	// produced later by xdvipdfmx and omitted from the .fls file. Always add
-	// artifacts matching the effective job name as a second discovery path.
+	defer func() { _ = scoped.Close() }()
+	candidates, err := recorderPaths(scoped, "OUTPUT")
+	if err != nil {
+		return nil, err
+	}
 	stem := req.JobName
 	if stem == "" {
 		stem = strings.TrimSuffix(filepath.Base(req.Entry), filepath.Ext(req.Entry))
 	}
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
+	// xdvipdfmx may produce the final PDF after the recorder has closed.
+	err = fs.WalkDir(scoped.FS(), ".", func(name string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		if strings.HasPrefix(d.Name(), stem+".") && allowedArtifact(d.Name()) {
-			if rel, relErr := filepath.Rel(root, path); relErr == nil {
-				candidates[filepath.ToSlash(rel)] = struct{}{}
-			}
+		if !d.IsDir() &&
+			(strings.HasSuffix(strings.ToLower(d.Name()), ".fls") || strings.HasPrefix(d.Name(), stem+".")) &&
+			allowedArtifact(name) {
+			candidates[name] = struct{}{}
 		}
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
 	paths := make([]string, 0, len(candidates))
 	for rel := range candidates {
 		if allowedArtifact(rel) {
@@ -310,132 +312,149 @@ func collectArtifacts(root string, req api.CompileRequest, maxBytes int64) ([]Fi
 	files := make([]File, 0, len(paths))
 	var total int64
 	for _, rel := range paths {
-		abs, err := safeWorkspacePath(root, rel)
+		f, err := scoped.OpenRegular(rel)
 		if err != nil {
-			continue
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, err
 		}
-		st, err := os.Stat(abs)
-		if err != nil || !st.Mode().IsRegular() {
-			continue
-		}
-		total += st.Size()
-		if total > maxBytes {
-			return nil, fmt.Errorf("artifacts exceed %d bytes", maxBytes)
-		}
-		hash, err := hashFile(abs)
+		hash, size, readErr := digestFile(f, maxBytes-total)
+		err = errors.Join(readErr, f.Close())
 		if err != nil {
 			return nil, err
 		}
-		files = append(files, File{RelativePath: rel, AbsolutePath: abs, Size: st.Size(), SHA256: hash})
+		total += size
+		files = append(
+			files,
+			File{
+				Workspace:    root,
+				RelativePath: rel,
+				Size:         size,
+				SHA256:       hash,
+			},
+		)
 	}
 	return files, nil
 }
 
-func parseFLS(root, flsPath string, candidates map[string]struct{}) error {
-	f, err := os.Open(flsPath)
+func digestFile(f *os.File, max int64) (string, int64, error) {
+	if max < 0 || max == int64(^uint64(0)>>1) {
+		return "", 0, safefs.ErrLimit
+	}
+	h := sha256.New()
+	n, err := io.Copy(h, io.LimitReader(f, max+1))
 	if err != nil {
-		return err
+		return "", 0, err
 	}
-	defer func() { _ = f.Close() }()
-	s := bufio.NewScanner(io.LimitReader(f, 16<<20))
-	s.Buffer(make([]byte, 64<<10), 1<<20)
-	for s.Scan() {
-		line := s.Text()
-		if !strings.HasPrefix(line, "OUTPUT ") {
-			continue
-		}
-		value := strings.TrimSpace(strings.TrimPrefix(line, "OUTPUT "))
-		if value == "" {
-			continue
-		}
-		abs := value
-		if !filepath.IsAbs(abs) {
-			abs = filepath.Join(root, filepath.FromSlash(value))
-		}
-		abs, err = filepath.Abs(abs)
-		if err != nil {
-			continue
-		}
-		rel, err := filepath.Rel(root, abs)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			continue
-		}
-		candidates[filepath.ToSlash(rel)] = struct{}{}
+	if n > max {
+		return "", 0, safefs.ErrLimit
 	}
-	return s.Err()
+	return hex.EncodeToString(h.Sum(nil)), n, nil
 }
 
 func collectRecordedInputs(root string) ([]string, error) {
-	rootAbs, err := filepath.Abs(root)
+	scoped, err := safefs.Open(root)
 	if err != nil {
 		return nil, err
 	}
-	rootResolved, err := filepath.EvalSymlinks(rootAbs)
-	if err != nil {
-		return nil, fmt.Errorf("resolve workspace for input collection: %w", err)
-	}
-	inputs := make(map[string]struct{})
-	err = filepath.WalkDir(rootAbs, func(filePath string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() || !strings.HasSuffix(strings.ToLower(d.Name()), ".fls") {
-			return nil
-		}
-		return parseRecordedInputs(rootResolved, filePath, inputs)
-	})
+	defer func() { _ = scoped.Close() }()
+	candidates, err := recorderPaths(scoped, "INPUT")
 	if err != nil {
 		return nil, err
 	}
-	paths := make([]string, 0, len(inputs))
-	for input := range inputs {
-		paths = append(paths, input)
+	paths := make([]string, 0, len(candidates))
+	for rel := range candidates {
+		f, err := scoped.OpenRegular(rel)
+		if err != nil {
+			continue
+		}
+		if err := f.Close(); err != nil {
+			return nil, err
+		}
+		paths = append(paths, rel)
 	}
 	sort.Strings(paths)
 	return paths, nil
 }
 
-func parseRecordedInputs(root, flsPath string, inputs map[string]struct{}) error {
-	f, err := os.Open(flsPath)
+// recorderPaths shares bounded parsing and PWD handling for input/output records.
+func recorderPaths(scoped *safefs.Root, kind string) (map[string]struct{}, error) {
+	root, err := filepath.Abs(scoped.Name())
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer func() { _ = f.Close() }()
-	pwd := root
-	s := bufio.NewScanner(io.LimitReader(f, 16<<20))
-	s.Buffer(make([]byte, 64<<10), 1<<20)
-	for s.Scan() {
-		line := s.Text()
-		if strings.HasPrefix(line, "PWD ") {
-			candidate := strings.TrimSpace(strings.TrimPrefix(line, "PWD "))
-			if resolved, ok := recordedPath(root, root, candidate); ok {
-				pwd = resolved
-			}
-			continue
-		}
-		if !strings.HasPrefix(line, "INPUT ") {
-			continue
-		}
-		value := strings.TrimSpace(strings.TrimPrefix(line, "INPUT "))
-		resolved, ok := recordedPath(root, pwd, value)
-		if !ok {
-			continue
-		}
-		info, err := os.Stat(resolved)
-		if err != nil || !info.Mode().IsRegular() {
-			continue
-		}
-		resolved, err = filepath.EvalSymlinks(resolved)
+	canonical, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, err
+	}
+	paths := make(map[string]struct{})
+	err = fs.WalkDir(scoped.FS(), ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
-			continue
+			return err
 		}
-		rel, err := filepath.Rel(root, resolved)
-		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			continue
+		if d.IsDir() || !strings.HasSuffix(strings.ToLower(d.Name()), ".fls") {
+			return nil
 		}
-		inputs[filepath.ToSlash(rel)] = struct{}{}
+		data, err := scoped.ReadLimited(name, 16<<20)
+		if err != nil {
+			return err
+		}
+		pwd := root
+		scanner := bufio.NewScanner(strings.NewReader(string(data)))
+		scanner.Buffer(make([]byte, 64<<10), 1<<20)
+		for scanner.Scan() {
+			tag, value, ok := strings.Cut(scanner.Text(), " ")
+			if !ok || (tag != kind && tag != "PWD") {
+				continue
+			}
+			value = strings.TrimSpace(value)
+			if canonical != root &&
+				(value == canonical || strings.HasPrefix(value, canonical+string(filepath.Separator))) {
+				value = root + strings.TrimPrefix(value, canonical)
+			}
+			absolute, ok := recordedPath(root, pwd, value)
+			if !ok {
+				continue
+			}
+			if tag == "PWD" {
+				pwd = absolute
+				continue
+			}
+			rel, err := filepath.Rel(root, absolute)
+			if err != nil {
+				continue
+			}
+			clean, err := safefs.Clean(filepath.ToSlash(rel))
+			if err == nil {
+				paths[clean] = struct{}{}
+			}
+		}
+		return scanner.Err()
+	})
+	return paths, err
+}
+
+// Open reopens an artifact through its owning workspace, never through a raw
+// compiler-controlled absolute path.
+func (f File) Open() (*os.File, error) {
+	root, name := f.Workspace, f.RelativePath
+	if root == "" {
+		return nil, errors.New("artifact has no owning workspace")
 	}
-	return s.Err()
+	scoped, err := safefs.Open(root)
+	if err != nil {
+		return nil, err
+	}
+	file, err := scoped.OpenRegular(name)
+	closeErr := scoped.Close()
+	if err != nil {
+		return nil, errors.Join(err, closeErr)
+	}
+	if closeErr != nil {
+		return nil, errors.Join(closeErr, file.Close())
+	}
+	return file, nil
 }
 
 func recordedPath(root, base, value string) (string, bool) {
@@ -469,29 +488,6 @@ func allowedArtifact(path string) bool {
 	return false
 }
 
-func safeWorkspacePath(root, rel string) (string, error) {
-	if rel == "" || strings.ContainsRune(rel, '\x00') || strings.Contains(rel, "\\") {
-		return "", errors.New("empty or malformed path")
-	}
-	clean := filepath.Clean(filepath.FromSlash(rel))
-	if filepath.IsAbs(clean) || clean == "." || clean == ".." ||
-		strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", errors.New("path escapes workspace")
-	}
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
-	abs, err := filepath.Abs(filepath.Join(rootAbs, clean))
-	if err != nil {
-		return "", err
-	}
-	if abs != rootAbs && !strings.HasPrefix(abs, rootAbs+string(filepath.Separator)) {
-		return "", errors.New("path escapes workspace")
-	}
-	return abs, nil
-}
-
 func validJobName(value string) bool {
 	if len(value) == 0 || len(value) > 128 {
 		return false
@@ -504,66 +500,4 @@ func validJobName(value string) bool {
 		return false
 	}
 	return value != "." && value != ".."
-}
-
-func hashFile(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = f.Close() }()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-func exitCode(err error) int {
-	if err == nil {
-		return 0
-	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		return exitErr.ExitCode()
-	}
-	return -1
-}
-
-type cappedBuffer struct {
-	mu        sync.Mutex
-	buf       bytes.Buffer
-	max       int64
-	truncated bool
-}
-
-func newCappedBuffer(max int64) *cappedBuffer { return &cappedBuffer{max: max} }
-
-func (b *cappedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	original := len(p)
-	remaining := b.max - int64(b.buf.Len())
-	if remaining <= 0 {
-		b.truncated = true
-		return original, nil
-	}
-	if int64(len(p)) > remaining {
-		p = p[:remaining]
-		b.truncated = true
-	}
-	_, _ = b.buf.Write(p)
-	return original, nil
-}
-
-func (b *cappedBuffer) Bytes() []byte {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return append([]byte(nil), b.buf.Bytes()...)
-}
-
-func (b *cappedBuffer) Truncated() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.truncated
 }

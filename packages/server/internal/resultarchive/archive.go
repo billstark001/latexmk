@@ -6,22 +6,31 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"encoding/json"
-	"errors"
 	"io"
-	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
+	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
 )
 
-func Write(path string, output compile.Output) (err error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+func Write(path string, output compile.Output) error {
+	fs, err := safefs.Open(filepath.Dir(path))
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, f.Close()) }()
-	gz := gzip.NewWriter(f)
+	defer func() { _ = fs.Close() }()
+	return fs.WriteExclusive(
+		filepath.Base(path),
+		int64(^uint64(0)>>1),
+		func(w io.Writer) error { return Encode(w, output) },
+	)
+}
+
+// Encode writes the archive to a caller-owned writer. Publication and quota
+// enforcement belong to the storage layer.
+func Encode(w io.Writer, output compile.Output) error {
+	gz := gzip.NewWriter(w)
 	gz.Name = ""
 	gz.ModTime = time.Unix(0, 0)
 	tw := tar.NewWriter(gz)
@@ -54,7 +63,7 @@ func Write(path string, output compile.Output) (err error) {
 		return err
 	}
 	for _, artifact := range output.Files {
-		in, err := os.Open(artifact.AbsolutePath)
+		in, err := artifact.Open()
 		if err != nil {
 			return err
 		}
@@ -69,7 +78,7 @@ func Write(path string, output compile.Output) (err error) {
 			_ = in.Close()
 			return err
 		}
-		_, copyErr := io.CopyN(tw, in, artifact.Size)
+		copyErr := safefs.CopyVerified(tw, in, artifact.Size, artifact.SHA256)
 		closeErr := in.Close()
 		if copyErr != nil {
 			return copyErr
@@ -84,5 +93,5 @@ func Write(path string, output compile.Output) (err error) {
 	if err := gz.Close(); err != nil {
 		return err
 	}
-	return f.Sync()
+	return nil
 }

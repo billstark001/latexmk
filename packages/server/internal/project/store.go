@@ -23,6 +23,7 @@ import (
 	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
+	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
 	"github.com/billstark001/latexmk/packages/server/internal/resultarchive"
 	"github.com/billstark001/latexmk/packages/server/internal/store"
 )
@@ -184,7 +185,7 @@ func (m *Manager) Plan(ownerID string, request api.UploadPlanRequest) (api.Uploa
 
 // PutBlob stores a single manifest digest. The content length is verified and
 // only a digest listed in this caller's still-valid upload session is accepted.
-func (m *Manager) PutBlob(ownerID, uploadID, digest string, body io.Reader) error {
+func (m *Manager) PutBlob(ownerID, uploadID, digest string, body io.Reader) (err error) {
 	m.mu.Lock()
 	s, ok := m.sessions[uploadID]
 	m.mu.Unlock()
@@ -227,31 +228,19 @@ func (m *Manager) PutBlob(ownerID, uploadID, digest string, body io.Reader) erro
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".upload-*")
+	fs, err := safefs.Open(dir)
 	if err != nil {
 		return err
 	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	hash := sha256.New()
-	n, copyErr := io.Copy(io.MultiWriter(tmp, hash), io.LimitReader(body, size+1))
-	closeErr := tmp.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	if n != size {
-		return fmt.Errorf("digest %s has %d bytes; expected %d", digest, n, size)
-	}
-	if hex.EncodeToString(hash.Sum(nil)) != digest {
-		return errors.New("uploaded file does not match its SHA-256 digest")
-	}
-	if err := os.Chmod(tmpName, 0o600); err != nil {
+	defer func() { _ = fs.Close() }()
+	pending, err := fs.Stage(digest, size, func(w io.Writer) error {
+		return safefs.CopyVerified(w, body, size, digest)
+	})
+	if err != nil {
 		return err
 	}
-	target := m.blobPath(ownerID, digest)
+	defer func() { err = errors.Join(err, pending.Close()) }()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.hasBlob(ownerID, digest, size) {
@@ -260,7 +249,7 @@ func (m *Manager) PutBlob(ownerID, uploadID, digest string, body io.Reader) erro
 	if m.stateBytes+m.pendingBytes > m.cfg.MaxStateBytes {
 		return fmt.Errorf("state storage limit of %d bytes would be exceeded", m.cfg.MaxStateBytes)
 	}
-	if err := os.Rename(tmpName, target); err != nil {
+	if err := pending.Commit(); err != nil {
 		return err
 	}
 	m.stateBytes += size
@@ -696,37 +685,33 @@ func (m *Manager) CollectUnreferencedBlobs(ctx context.Context) (int64, error) {
 }
 
 func (m *Manager) Materialize(snapshot Snapshot, destination string) error {
+	fs, err := safefs.Open(destination)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = fs.Close() }()
+	blobs, err := safefs.Open(m.stateDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = blobs.Close() }()
 	for _, file := range snapshot.Files {
-		if !validProjectPath(file.Path) || !m.hasBlob(snapshot.OwnerID, file.SHA256, file.Size) {
-			return fmt.Errorf("project snapshot is missing valid content for %q", file.Path)
+		if !validProjectPath(file.Path) || !validSHA256(file.SHA256) {
+			return fmt.Errorf("invalid snapshot file %q", file.Path)
 		}
-		output, err := safeDestination(destination, file.Path)
+		rel, err := filepath.Rel(m.stateDir, m.blobPath(snapshot.OwnerID, file.SHA256))
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(output), 0o700); err != nil {
-			return err
-		}
-		in, err := os.Open(m.blobPath(snapshot.OwnerID, file.SHA256))
+		in, err := blobs.OpenRegular(filepath.ToSlash(rel))
 		if err != nil {
 			return err
 		}
-		out, err := os.OpenFile(output, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err != nil {
-			_ = in.Close()
+		err = fs.WriteExclusive(file.Path, file.Size, func(w io.Writer) error {
+			return safefs.CopyVerified(w, in, file.Size, file.SHA256)
+		})
+		if err := errors.Join(err, in.Close()); err != nil {
 			return err
-		}
-		_, copyErr := io.CopyN(out, in, file.Size)
-		closeIn := in.Close()
-		closeOut := out.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if closeIn != nil {
-			return closeIn
-		}
-		if closeOut != nil {
-			return closeOut
 		}
 	}
 	return nil
@@ -795,47 +780,41 @@ func (m *Manager) existingResultPath(ownerID, jobID string) (string, error) {
 	return filepath.Join(m.stateDir, "results", ownerKey(ownerID), jobID+".tar.gz"), nil
 }
 
-// WriteResult reserves state-volume capacity before adding a result archive.
-// The reservation uses the uncompressed inputs as a safe upper bound; the
-// stored gzip archive normally consumes substantially less.
+// WriteResult publishes a complete result within the state-volume quota.
 func (m *Manager) WriteResult(ownerID, jobID string, output compile.Output) (string, error) {
 	path, err := m.ResultPath(ownerID, jobID)
 	if err != nil {
 		return "", err
 	}
-	reserve := int64(len(output.Stdout) + len(output.Stderr) + 4096)
-	for _, file := range output.Files {
-		reserve += file.Size + 1024
-	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var replaced int64
-	if info, statErr := os.Stat(path); statErr == nil && info.Mode().IsRegular() {
-		replaced = info.Size()
-	} else if statErr != nil && !os.IsNotExist(statErr) {
-		return "", statErr
-	}
-	if m.stateBytes+m.pendingBytes-replaced+reserve > m.cfg.MaxStateBytes {
-		return "", fmt.Errorf("state storage limit of %d bytes would be exceeded", m.cfg.MaxStateBytes)
-	}
-	if replaced > 0 {
-		if err := os.Remove(path); err != nil {
-			return "", err
-		}
-	}
-	if err := resultarchive.Write(path, output); err != nil {
-		_ = os.Remove(path)
-		return "", err
-	}
-	info, err := os.Stat(path)
+	fs, err := safefs.Open(filepath.Dir(path))
 	if err != nil {
 		return "", err
 	}
-	if m.stateBytes-replaced+info.Size() > m.cfg.MaxStateBytes {
-		_ = os.Remove(path)
-		return "", fmt.Errorf("state storage limit of %d bytes would be exceeded", m.cfg.MaxStateBytes)
+	defer func() { _ = fs.Close() }()
+	var replaced int64
+	if info, err := fs.Lstat(filepath.Base(path)); err == nil {
+		if !info.Mode().IsRegular() {
+			return "", errors.New("result destination is not a regular file")
+		}
+		replaced = info.Size()
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
 	}
-	m.stateBytes = m.stateBytes - replaced + info.Size()
+	// Old and staged generations coexist until publication. Enforce the quota
+	// while streaming compressed bytes, rather than estimating archive overhead.
+	available := m.cfg.MaxStateBytes - m.stateBytes - m.pendingBytes
+	if available < 0 {
+		return "", errors.New("state storage limit exceeded")
+	}
+	size, err := fs.WriteAtomic(filepath.Base(path), available, func(w io.Writer) error {
+		return resultarchive.Encode(w, output)
+	})
+	if err != nil {
+		return "", err
+	}
+	m.stateBytes += size - replaced
 	return path, nil
 }
 
@@ -851,30 +830,9 @@ func (m *Manager) hasBlob(ownerID, digest string, size int64) bool {
 	return err == nil && info.Mode().IsRegular() && info.Size() == size
 }
 
-func safeDestination(root, rel string) (string, error) {
-	clean := filepath.Clean(filepath.FromSlash(rel))
-	if clean == "." || filepath.IsAbs(clean) || clean == ".." ||
-		strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", errors.New("project path escapes workspace")
-	}
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
-	path := filepath.Join(rootAbs, clean)
-	if !strings.HasPrefix(path, rootAbs+string(filepath.Separator)) {
-		return "", errors.New("project path escapes workspace")
-	}
-	return path, nil
-}
-
 func validProjectPath(value string) bool {
-	if value == "" || len(value) > 4096 || strings.Contains(value, "\\") || strings.ContainsRune(value, 0) {
-		return false
-	}
-	clean := filepath.Clean(filepath.FromSlash(value))
-	return clean != "." && clean != ".." && !filepath.IsAbs(clean) &&
-		!strings.HasPrefix(clean, ".."+string(filepath.Separator))
+	_, err := safefs.Clean(value)
+	return err == nil
 }
 
 func validProjectID(value string) bool {

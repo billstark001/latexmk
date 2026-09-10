@@ -24,7 +24,11 @@ func TestValidateRejectsTraversal(t *testing.T) {
 
 func TestSandboxEnvironmentDoesNotInheritHostSecrets(t *testing.T) {
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "must-not-reach-tex")
-	env := strings.Join(sandboxEnvironment(t.TempDir(), false), "\n")
+	values, err := sandboxEnvironment(t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := strings.Join(values, "\n")
 	if strings.Contains(env, "AWS_SECRET_ACCESS_KEY") || strings.Contains(env, "must-not-reach-tex") {
 		t.Fatal("compile environment inherited a host secret")
 	}
@@ -147,5 +151,59 @@ func TestCollectRecordedInputsOnlyReturnsWorkspaceFiles(t *testing.T) {
 	got := strings.Join(inputs, ",")
 	if got != "main.aux,main.tex,sections/body.tex" {
 		t.Fatalf("recorded inputs = %q", got)
+	}
+}
+
+func TestCompilerFilesystemRejectsSymlinkArtifactsAndHome(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret"), []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "secret"), filepath.Join(root, "main.pdf")); err != nil {
+		t.Skip(err)
+	}
+	if _, err := collectArtifacts(root, api.CompileRequest{Entry: "main.tex"}, 1<<20); err == nil {
+		t.Fatal("collected external artifact")
+	}
+	if err := os.Symlink(outside, filepath.Join(root, ".latexmk-home")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sandboxEnvironment(root, false); err == nil {
+		t.Fatal("accepted external sandbox home")
+	}
+	if _, err := os.Stat(filepath.Join(outside, ".texlive-var")); !os.IsNotExist(err) {
+		t.Fatalf("created directory outside workspace: %v", err)
+	}
+}
+
+func TestRecorderUsesPWDForInputsAndOutputs(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "chapter"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string]string{
+		"chapter/body.tex": "body", "chapter/body.pdf": "pdf",
+		"main.fls": "PWD " + filepath.Join(root, "chapter") + "\nINPUT body.tex\nOUTPUT body.pdf\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := collectArtifacts(root, api.CompileRequest{Entry: "main.tex"}, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, file := range files {
+		if file.RelativePath == "chapter/body.pdf" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("OUTPUT did not honor PWD")
+	}
+	inputs, err := collectRecordedInputs(root)
+	if err != nil || strings.Join(inputs, ",") != "chapter/body.tex" {
+		t.Fatalf("%v %v", inputs, err)
 	}
 }

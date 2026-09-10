@@ -52,8 +52,10 @@ at the application and deployment layers.
   manifest. A later upload to the same project cannot change their input.
 - Worker start, cancellation, and completion use conditional state transitions,
   so a stale worker cannot overwrite a cancellation or another terminal state.
-- Compile commands run in their own process group; timeout kills the process
-  tree.
+- On Unix, compilation and toolchain probes run in their own process group;
+  cancellation kills the group and surviving descendants are terminated after
+  the parent exits. Both streams are capped while being read. Windows retains
+  direct-child termination and does not provide the Unix process-group guarantee.
 - Docker images run as an unprivileged user. Generated Compose files use a
   read-only root filesystem, tmpfs, `no-new-privileges`, dropped capabilities,
   PID limits, and memory limits.
@@ -66,6 +68,35 @@ at the application and deployment layers.
 - CORS accepts only explicit HTTP(S) origins. Wildcards are rejected at startup.
 - Result artifacts come from `.fls`, are constrained to the workspace and an
   allowlist, and result downloads are authorized by job owner.
+
+## Server filesystem and process primitives
+
+`internal/platform/safefs` owns normalized relative paths, `os.Root`-confined
+operations, regular-file reads, byte limits, verified copies, and staged file
+publication. Symlinks are rejected during path validation; `os.Root` independently
+prevents root escape during the actual operation, including concurrent path
+changes. Root confinement does not prevent traversal of privileged mount points.
+Unix regular-file opens are nonblocking so a replaced FIFO cannot hang a reader.
+
+Uploads, snapshot materialization, archive extraction, auxiliary caches, artifact
+collection and token-file reads use these primitives. Artifact contents are
+checked again against their collected size and hash during result packaging.
+The shared recorder parser applies the same `PWD` and root-boundary handling to
+both input and output records, with a bounded recorder-file size.
+
+Blob, result and cache publication writes a private sibling file first. Staged
+files are synced and closed before rename; encoder failures, byte-limit errors
+and failed publication preserve the previous generation and remove temporary
+files. State quotas include both the old and staged generation. This provides
+atomic visibility on the Unix deployment filesystem, not a power-loss durability
+guarantee: parent directories are not fsynced. Non-Unix rename semantics depend
+on the operating system; no delete-before-rename fallback is used.
+
+`internal/platform/process` owns subprocess start/wait, bounded output and
+cancellation. Callers supply deadlines, argument lists and environment policy;
+compiler calls explicitly pass the restricted environment. `compile.Workspace`
+owns temporary job directories and clean retry resets. Cache compatibility,
+retention, quotas and job transitions remain in their owning business packages.
 
 ## Deployment responsibilities
 
