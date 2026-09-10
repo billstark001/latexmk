@@ -1,3 +1,4 @@
+// Package archive selects and packages local project files for upload.
 package archive
 
 import (
@@ -255,7 +256,7 @@ func fileSHA256(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	hash := sha256.New()
 	if _, err := io.Copy(hash, f); err != nil {
 		return "", err
@@ -272,7 +273,7 @@ func loadPatterns(root string, defaults []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	s := bufio.NewScanner(f)
 	for s.Scan() {
 		line := strings.TrimSpace(s.Text())

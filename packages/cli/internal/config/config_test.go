@@ -50,7 +50,8 @@ func TestLoadManifestConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.UploadMode != "manifest" || cfg.ManifestFile != ".latexmk-files" || len(cfg.IncludeFiles) != 1 || cfg.IncludeFiles[0] != "chapter.tex" {
+	if cfg.UploadMode != "manifest" || cfg.ManifestFile != ".latexmk-files" || len(cfg.IncludeFiles) != 1 ||
+		cfg.IncludeFiles[0] != "chapter.tex" {
 		t.Fatalf("manifest config = %#v", cfg)
 	}
 }
@@ -97,7 +98,13 @@ func TestFindGitRoot(t *testing.T) {
 }
 
 func TestDefaultDenyIncludesSensitiveLocalConfiguration(t *testing.T) {
-	want := map[string]bool{".latexmk.json": false, ".latexmk-files": false, ".env": false, "*.key": false, "*.pem": false}
+	want := map[string]bool{
+		".latexmk.json":  false,
+		".latexmk-files": false,
+		".env":           false,
+		"*.key":          false,
+		"*.pem":          false,
+	}
 	for _, pattern := range DefaultDeny() {
 		if _, ok := want[pattern]; ok {
 			want[pattern] = true
@@ -157,10 +164,18 @@ func TestLoadTokenPrecedence(t *testing.T) {
 	if err := os.MkdirAll(userDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(userDir, UserFileName), []byte(`{"token":"user-token","server":"https://user.example"}`), 0o600); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(userDir, UserFileName),
+		[]byte(`{"token":"user-token","server":"https://user.example"}`),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, FileName), []byte(`{"token":"project-token","server":"https://project.example"}`), 0o600); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(root, FileName),
+		[]byte(`{"token":"project-token","server":"https://project.example"}`),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
 
@@ -211,7 +226,11 @@ func TestReadTokenFileRejectsMultipleLines(t *testing.T) {
 func TestAuxiliaryCacheConfigAndEnvironment(t *testing.T) {
 	isolateUserConfig(t)
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, FileName), []byte(`{"auxiliary":{"server":"reuse"}}`), 0600); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(root, FileName),
+		[]byte(`{"auxiliary":{"server":"reuse"}}`),
+		0600,
+	); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load(root)

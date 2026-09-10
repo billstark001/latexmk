@@ -4,8 +4,11 @@
   "private": true,
   "scripts": {
     "build": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\" && go build -trimpath -o dist/latexmk-server ./cmd/server",
-    "test": "go test ./...",
-    "lint": "go vet ./...",
-    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
+    "test": "cross-env GOWORK=off go test ./...",
+    "lint": "cross-env GOWORK=off go tool -modfile=../../tools/go.mod golangci-lint run --config ../../.golangci.yml ./...",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "format": "cross-env GOWORK=off go tool -modfile=../../tools/go.mod golangci-lint fmt --config ../../.golangci.yml ./...",
+    "format:check": "cross-env GOWORK=off go tool -modfile=../../tools/go.mod golangci-lint fmt --config ../../.golangci.yml --diff ./...",
+    "test:race": "cross-env GOWORK=off go test -race ./..."
   }
 }

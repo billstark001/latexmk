@@ -1,3 +1,4 @@
+// Package client communicates with the remote compiler and verifies downloaded artifacts.
 package client
 
 import (
@@ -88,11 +89,17 @@ func New(baseURL, token string, timeout time.Duration, insecure bool) (*Client, 
 	if err != nil {
 		return nil, fmt.Errorf("invalid server URL: %w", err)
 	}
-	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.Opaque != "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.Opaque != "" ||
+		parsed.User != nil ||
+		parsed.RawQuery != "" ||
+		parsed.Fragment != "" {
 		return nil, errors.New("server URL must be an absolute http(s) URL without credentials, query, or fragment")
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: insecure} //nolint:gosec -- explicit user option
+	transport.TLSClientConfig = &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: insecure,
+	} // TLS verification can be disabled explicitly by the user.
 	return &Client{
 		BaseURL:          baseURL,
 		Token:            token,
@@ -113,7 +120,7 @@ func (c *Client) Metadata(ctx context.Context) (protocol.Metadata, error) {
 	if err != nil {
 		return meta, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		return meta, readHTTPError(resp)
 	}
@@ -133,7 +140,7 @@ func (c *Client) Health(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		return readHTTPError(resp)
 	}
@@ -146,7 +153,10 @@ func (c *Client) CleanupProject(ctx context.Context, projectID, scope string) (p
 
 // CleanupProjectWithPlan applies a server-issued preview only while its digest
 // still describes the exact same targets.
-func (c *Client) CleanupProjectWithPlan(ctx context.Context, projectID, scope, expectedDigest string) (protocol.CleanupReport, error) {
+func (c *Client) CleanupProjectWithPlan(
+	ctx context.Context,
+	projectID, scope, expectedDigest string,
+) (protocol.CleanupReport, error) {
 	decoded, err := hex.DecodeString(expectedDigest)
 	if err != nil || len(decoded) != sha256.Size {
 		return protocol.CleanupReport{}, errors.New("cleanup plan digest must be a 64-character SHA-256 digest")
@@ -154,7 +164,10 @@ func (c *Client) CleanupProjectWithPlan(ctx context.Context, projectID, scope, e
 	return c.cleanupProject(ctx, projectID, scope, http.MethodDelete, expectedDigest)
 }
 
-func (c *Client) cleanupProject(ctx context.Context, projectID, scope, method, expectedDigest string) (protocol.CleanupReport, error) {
+func (c *Client) cleanupProject(
+	ctx context.Context,
+	projectID, scope, method, expectedDigest string,
+) (protocol.CleanupReport, error) {
 	var report protocol.CleanupReport
 	if !validProjectID(projectID) {
 		return report, errors.New("project ID is invalid")
@@ -181,7 +194,13 @@ func (c *Client) ListJobs(ctx context.Context, limit int) ([]protocol.Job, error
 	var response struct {
 		Jobs []protocol.Job `json:"jobs"`
 	}
-	if err := c.jsonRequest(ctx, http.MethodGet, "/v1/jobs?limit="+url.QueryEscape(fmt.Sprint(limit)), nil, &response); err != nil {
+	if err := c.jsonRequest(
+		ctx,
+		http.MethodGet,
+		"/v1/jobs?limit="+url.QueryEscape(fmt.Sprint(limit)),
+		nil,
+		&response,
+	); err != nil {
 		return nil, err
 	}
 	sort.Slice(response.Jobs, func(i, j int) bool {
@@ -215,7 +234,11 @@ func (c *Client) CancelJob(ctx context.Context, jobID string) (protocol.Job, err
 	return job, nil
 }
 
-func (c *Client) Compile(ctx context.Context, request protocol.CompileRequest, outputRoot string) (CompileOutput, error) {
+func (c *Client) Compile(
+	ctx context.Context,
+	request protocol.CompileRequest,
+	outputRoot string,
+) (CompileOutput, error) {
 	files, selectionWarnings, err := c.projectManifest(request.Entry, request.Engine)
 	if err != nil {
 		return CompileOutput{}, err
@@ -224,7 +247,8 @@ func (c *Client) Compile(ctx context.Context, request protocol.CompileRequest, o
 	if err != nil {
 		return CompileOutput{}, err
 	}
-	if request.Auxiliary.Server == "reuse" && (!meta.Capabilities.CompileCache || !meta.Capabilities.QueuedJobs || !meta.Capabilities.IncrementalUpload) {
+	if request.Auxiliary.Server == "reuse" &&
+		(!meta.Capabilities.CompileCache || !meta.Capabilities.QueuedJobs || !meta.Capabilities.IncrementalUpload) {
 		return CompileOutput{}, &CapabilityError{Capability: "server compile cache"}
 	}
 	request.RecordInputs = meta.Capabilities.DependencyInputs
@@ -273,7 +297,14 @@ func (c *Client) Compile(ctx context.Context, request protocol.CompileRequest, o
 			newBytes += file.Size
 		}
 		if totalAddedFiles+len(newFiles) > maxNeedsFiles || totalAddedBytes+newBytes > maxNeedsFileBytes {
-			warnings = append(warnings, fmt.Sprintf("missing-file retry refused: additions exceed %d files or %d bytes", maxNeedsFiles, maxNeedsFileBytes))
+			warnings = append(
+				warnings,
+				fmt.Sprintf(
+					"missing-file retry refused: additions exceed %d files or %d bytes",
+					maxNeedsFiles,
+					maxNeedsFileBytes,
+				),
+			)
 			break
 		}
 		paths := make([]string, 0, len(newFiles))
@@ -284,13 +315,20 @@ func (c *Client) Compile(ctx context.Context, request protocol.CompileRequest, o
 		}
 		totalAddedFiles += len(newFiles)
 		totalAddedBytes += newBytes
-		retryFiles, retryWarnings, manifestErr := c.projectManifestWithAdditional(request.Entry, request.Engine, additional)
+		retryFiles, retryWarnings, manifestErr := c.projectManifestWithAdditional(
+			request.Entry,
+			request.Engine,
+			additional,
+		)
 		if manifestErr != nil {
 			warnings = append(warnings, "missing-file retry refused: "+manifestErr.Error())
 			break
 		}
 		warnings = append(warnings, retryWarnings...)
-		warnings = append(warnings, "server reported missing files; creating a new immutable snapshot with: "+strings.Join(paths, ", "))
+		warnings = append(
+			warnings,
+			"server reported missing files; creating a new immutable snapshot with: "+strings.Join(paths, ", "),
+		)
 		output, err = c.compileOnce(ctx, request, outputRoot, retryFiles, meta)
 		if err != nil {
 			output.Warnings = append(output.Warnings, warnings...)
@@ -299,7 +337,12 @@ func (c *Client) Compile(ctx context.Context, request protocol.CompileRequest, o
 	}
 	output.Warnings = append(output.Warnings, warnings...)
 	if output.Result.Success && len(output.Result.InputFiles) > 0 {
-		if cacheErr := dependency.SaveCachedInputs(c.ProjectRoot, request.Entry, request.Engine, output.Result.InputFiles); cacheErr != nil {
+		if cacheErr := dependency.SaveCachedInputs(
+			c.ProjectRoot,
+			request.Entry,
+			request.Engine,
+			output.Result.InputFiles,
+		); cacheErr != nil {
 			output.Warnings = append(output.Warnings, "could not update dependency cache: "+cacheErr.Error())
 		}
 	}
@@ -333,7 +376,13 @@ func (c *Client) StartCompile(ctx context.Context, request protocol.CompileReque
 	return StartCompileOutput{Job: job, Warnings: warnings}, nil
 }
 
-func (c *Client) compileOnce(ctx context.Context, request protocol.CompileRequest, outputRoot string, files []projectarchive.File, meta protocol.Metadata) (CompileOutput, error) {
+func (c *Client) compileOnce(
+	ctx context.Context,
+	request protocol.CompileRequest,
+	outputRoot string,
+	files []projectarchive.File,
+	meta protocol.Metadata,
+) (CompileOutput, error) {
 	var output CompileOutput
 	var err error
 	if meta.Capabilities.IncrementalUpload && meta.Capabilities.QueuedJobs {
@@ -347,7 +396,12 @@ func (c *Client) compileOnce(ctx context.Context, request protocol.CompileReques
 	return output, err
 }
 
-func (c *Client) compileLegacy(ctx context.Context, request protocol.CompileRequest, outputRoot string, files []projectarchive.File) (CompileOutput, error) {
+func (c *Client) compileLegacy(
+	ctx context.Context,
+	request protocol.CompileRequest,
+	outputRoot string,
+	files []projectarchive.File,
+) (CompileOutput, error) {
 	var out CompileOutput
 	if c.ProjectRoot == "" {
 		return out, errors.New("project root is not configured")
@@ -381,7 +435,7 @@ func (c *Client) compileLegacy(ctx context.Context, request protocol.CompileRequ
 	if err != nil {
 		return out, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		return out, readHTTPError(resp)
 	}
@@ -391,7 +445,12 @@ func (c *Client) compileLegacy(ctx context.Context, request protocol.CompileRequ
 	return out, nil
 }
 
-func (c *Client) compileQueued(ctx context.Context, request protocol.CompileRequest, outputRoot string, files []projectarchive.File) (CompileOutput, error) {
+func (c *Client) compileQueued(
+	ctx context.Context,
+	request protocol.CompileRequest,
+	outputRoot string,
+	files []projectarchive.File,
+) (CompileOutput, error) {
 	var out CompileOutput
 	job, err := c.startQueued(ctx, request, files)
 	if err != nil {
@@ -420,7 +479,7 @@ func (c *Client) compileQueued(ctx context.Context, request protocol.CompileRequ
 	if err != nil {
 		return out, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if err := unpackResponse(resp.Body, outputRoot, &out); err != nil {
 		return out, err
 	}
@@ -431,7 +490,11 @@ func (c *Client) compileQueued(ctx context.Context, request protocol.CompileRequ
 	return out, nil
 }
 
-func (c *Client) startQueued(ctx context.Context, request protocol.CompileRequest, files []projectarchive.File) (protocol.Job, error) {
+func (c *Client) startQueued(
+	ctx context.Context,
+	request protocol.CompileRequest,
+	files []projectarchive.File,
+) (protocol.Job, error) {
 	var job protocol.Job
 	if c.ProjectRoot == "" {
 		return job, errors.New("project root is not configured")
@@ -444,10 +507,17 @@ func (c *Client) startQueued(ctx context.Context, request protocol.CompileReques
 			return job, err
 		}
 	}
-	planRequest := protocol.UploadPlanRequest{ProjectID: projectID, Request: request, Files: make([]protocol.ProjectFile, 0, len(files))}
+	planRequest := protocol.UploadPlanRequest{
+		ProjectID: projectID,
+		Request:   request,
+		Files:     make([]protocol.ProjectFile, 0, len(files)),
+	}
 	byDigest := make(map[string]string, len(files))
 	for _, file := range files {
-		planRequest.Files = append(planRequest.Files, protocol.ProjectFile{Path: file.Path, SHA256: file.SHA256, Size: file.Size})
+		planRequest.Files = append(
+			planRequest.Files,
+			protocol.ProjectFile{Path: file.Path, SHA256: file.SHA256, Size: file.Size},
+		)
 		if _, exists := byDigest[file.SHA256]; !exists {
 			byDigest[file.SHA256] = file.Source
 		}
@@ -465,7 +535,13 @@ func (c *Client) startQueued(ctx context.Context, request protocol.CompileReques
 			return job, err
 		}
 	}
-	if err := c.jsonRequest(ctx, http.MethodPost, "/v1/uploads/"+url.PathEscape(plan.UploadID)+"/commit", nil, &job); err != nil {
+	if err := c.jsonRequest(
+		ctx,
+		http.MethodPost,
+		"/v1/uploads/"+url.PathEscape(plan.UploadID)+"/commit",
+		nil,
+		&job,
+	); err != nil {
 		return job, err
 	}
 	return job, nil
@@ -531,7 +607,11 @@ func (c *Client) policyManifest() ([]projectarchive.File, string, error) {
 		exclude = append(exclude, manifestPath)
 	}
 	candidates, _, err := projectarchive.Manifest(projectarchive.Options{
-		Root: c.ProjectRoot, Exclude: exclude, RespectGitIgnore: c.RespectGitIgnore, MaxFiles: 20_000, MaxBytes: 2 << 30,
+		Root:             c.ProjectRoot,
+		Exclude:          exclude,
+		RespectGitIgnore: c.RespectGitIgnore,
+		MaxFiles:         20_000,
+		MaxBytes:         2 << 30,
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("build project manifest: %w", err)
@@ -539,7 +619,10 @@ func (c *Client) policyManifest() ([]projectarchive.File, string, error) {
 	return candidates, manifestPath, nil
 }
 
-func (c *Client) projectManifestWithAdditional(entry, engine string, additional []string) ([]projectarchive.File, []string, error) {
+func (c *Client) projectManifestWithAdditional(
+	entry, engine string,
+	additional []string,
+) ([]projectarchive.File, []string, error) {
 	candidates, manifestPath, err := c.policyManifest()
 	if err != nil {
 		return nil, nil, err
@@ -561,7 +644,16 @@ func (c *Client) projectManifestWithAdditional(entry, engine string, additional 
 			return nil, nil, fmt.Errorf("load dependency cache: %w", err)
 		}
 	}
-	result, err := dependency.SelectWithOptions(entry, candidates, dependency.SelectionOptions{Mode: c.UploadMode, ExplicitFiles: explicit, CachedFiles: cached, HistoryAvailable: historyAvailable})
+	result, err := dependency.SelectWithOptions(
+		entry,
+		candidates,
+		dependency.SelectionOptions{
+			Mode:             c.UploadMode,
+			ExplicitFiles:    explicit,
+			CachedFiles:      cached,
+			HistoryAvailable: historyAvailable,
+		},
+	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("select project dependencies: %w", err)
 	}
@@ -570,7 +662,10 @@ func (c *Client) projectManifestWithAdditional(entry, engine string, additional 
 		if len(result.Diagnostics) > 0 {
 			message += ": " + dependency.FormatDiagnostic(result.Diagnostics[0])
 		}
-		return nil, nil, fmt.Errorf("%s; inspect with 'latexmk files' or use --upload-mode all after reviewing the manifest", message)
+		return nil, nil, fmt.Errorf(
+			"%s; inspect with 'latexmk files' or use --upload-mode all after reviewing the manifest",
+			message,
+		)
 	}
 	warnings := make([]string, 0)
 	for _, diagnostic := range result.Diagnostics {
@@ -594,7 +689,7 @@ func (c *Client) jsonRequest(ctx context.Context, method, path string, body any,
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if output == nil || resp.StatusCode == http.StatusNoContent {
 		return nil
 	}
@@ -611,8 +706,14 @@ func (c *Client) uploadBlob(ctx context.Context, uploadID, digest, source string
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	resp, err := c.rawRequest(ctx, http.MethodPut, "/v1/uploads/"+url.PathEscape(uploadID)+"/blobs/"+url.PathEscape(digest), f, "application/octet-stream")
+	defer func() { _ = f.Close() }()
+	resp, err := c.rawRequest(
+		ctx,
+		http.MethodPut,
+		"/v1/uploads/"+url.PathEscape(uploadID)+"/blobs/"+url.PathEscape(digest),
+		f,
+		"application/octet-stream",
+	)
 	if err != nil {
 		return err
 	}
@@ -620,7 +721,12 @@ func (c *Client) uploadBlob(ctx context.Context, uploadID, digest, source string
 	return nil
 }
 
-func (c *Client) rawRequest(ctx context.Context, method, path string, body io.Reader, contentType string) (*http.Response, error) {
+func (c *Client) rawRequest(
+	ctx context.Context,
+	method, path string,
+	body io.Reader,
+	contentType string,
+) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, body)
 	if err != nil {
 		return nil, err
@@ -634,7 +740,7 @@ func (c *Client) rawRequest(ctx context.Context, method, path string, body io.Re
 		return nil, err
 	}
 	if resp.StatusCode/100 != 2 {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		return nil, readHTTPError(resp)
 	}
 	return resp, nil
@@ -653,7 +759,7 @@ func unpackResponse(r io.Reader, outputRoot string, out *CompileOutput) error {
 	if err != nil {
 		return fmt.Errorf("open result gzip: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	tr := tar.NewReader(gz)
 	var resultSeen bool
 	var stdoutSeen bool
@@ -674,7 +780,7 @@ func unpackResponse(r io.Reader, outputRoot string, out *CompileOutput) error {
 		if entries > 20_000 {
 			return errors.New("result archive contains too many entries")
 		}
-		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA {
+		if h.Typeflag != tar.TypeReg {
 			return fmt.Errorf("unexpected result entry type for %q", h.Name)
 		}
 		if h.Size < 0 || h.Size > 512<<20 {
@@ -779,7 +885,8 @@ func unpackResponse(r io.Reader, outputRoot string, out *CompileOutput) error {
 
 func writeArtifact(root, rel string, r io.Reader, size int64, expectedSHA256 string) error {
 	clean := filepath.Clean(filepath.FromSlash(rel))
-	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+	if clean == "." || filepath.IsAbs(clean) || clean == ".." ||
+		strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("unsafe artifact path %q", rel)
 	}
 	rootAbs, err := filepath.Abs(root)
@@ -809,7 +916,7 @@ func writeArtifact(root, rel string, r io.Reader, size int64, expectedSHA256 str
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 	hash := sha256.New()
 	n, copyErr := io.CopyN(io.MultiWriter(tmp, hash), r, size)
 	if copyErr != nil {

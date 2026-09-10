@@ -13,7 +13,10 @@ import (
 
 func TestValidateRejectsTraversal(t *testing.T) {
 	r := NewRunner(config.Config{Engines: []string{"xelatex"}})
-	err := r.Validate(t.TempDir(), api.CompileRequest{ProtocolVersion: 1, Entry: "../main.tex", Engine: "xelatex", Interaction: "nonstopmode"})
+	err := r.Validate(
+		t.TempDir(),
+		api.CompileRequest{ProtocolVersion: 1, Entry: "../main.tex", Engine: "xelatex", Interaction: "nonstopmode"},
+	)
 	if err == nil {
 		t.Fatal("expected traversal error")
 	}
@@ -36,7 +39,10 @@ func TestValidateAcceptsEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewRunner(config.Config{Engines: []string{"xelatex"}})
-	err := r.Validate(root, api.CompileRequest{ProtocolVersion: 1, Entry: "main.tex", Engine: "xelatex", Interaction: "nonstopmode"})
+	err := r.Validate(
+		root,
+		api.CompileRequest{ProtocolVersion: 1, Entry: "main.tex", Engine: "xelatex", Interaction: "nonstopmode"},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +132,11 @@ func TestCollectRecordedInputsOnlyReturnsWorkspaceFiles(t *testing.T) {
 	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fls := fmt.Sprintf("PWD %s\nINPUT main.tex\nINPUT sections/body.tex\nINPUT main.aux\nINPUT %s\nINPUT /usr/share/texmf/system.sty\n", root, outside)
+	fls := fmt.Sprintf(
+		"PWD %s\nINPUT main.tex\nINPUT sections/body.tex\nINPUT main.aux\nINPUT %s\nINPUT /usr/share/texmf/system.sty\n",
+		root,
+		outside,
+	)
 	if err := os.WriteFile(filepath.Join(root, "main.fls"), []byte(fls), 0o600); err != nil {
 		t.Fatal(err)
 	}

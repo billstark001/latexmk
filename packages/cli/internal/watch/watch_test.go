@@ -57,7 +57,11 @@ func TestTrackerDetectsCreationAndDeletion(t *testing.T) {
 	if err := os.WriteFile(present, []byte("chapter"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	tracker, err := New([]Target{{Name: ".gitignore", Path: missing}, {Name: "chapter.tex", Path: present}}, 5*time.Millisecond, 10*time.Millisecond)
+	tracker, err := New(
+		[]Target{{Name: ".gitignore", Path: missing}, {Name: "chapter.tex", Path: present}},
+		5*time.Millisecond,
+		10*time.Millisecond,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

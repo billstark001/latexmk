@@ -1,3 +1,4 @@
+// Package protocol defines the remote compiler wire format used by the CLI.
 package protocol
 
 import (

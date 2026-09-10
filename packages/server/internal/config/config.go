@@ -1,3 +1,4 @@
+// Package config loads and validates the compiler service configuration.
 package config
 
 import (
@@ -234,7 +235,18 @@ func (c Config) Validate() error {
 	if c.CompileCacheRetention < 0 || c.MaxCompileCacheBytes < 0 {
 		return fmt.Errorf("compile cache limits cannot be negative")
 	}
-	if c.CompileTimeout <= 0 || c.ShutdownTimeout <= 0 || c.MaxUploadBytes <= 0 || c.MaxExpandedBytes <= 0 || c.MaxArtifactBytes <= 0 || c.MaxFiles <= 0 || c.MaxConcurrentCompiles <= 0 || c.MaxQueuedJobs <= 0 || c.MaxLogBytes <= 0 || c.MaxStateBytes <= 0 || c.MaxUploadSessions <= 0 || c.ResultRetention <= 0 || c.SnapshotRetention <= 0 || c.BlobRetention <= 0 || c.StateSweepInterval <= 0 {
+	if c.CompileTimeout <= 0 || c.ShutdownTimeout <= 0 || c.MaxUploadBytes <= 0 || c.MaxExpandedBytes <= 0 ||
+		c.MaxArtifactBytes <= 0 ||
+		c.MaxFiles <= 0 ||
+		c.MaxConcurrentCompiles <= 0 ||
+		c.MaxQueuedJobs <= 0 ||
+		c.MaxLogBytes <= 0 ||
+		c.MaxStateBytes <= 0 ||
+		c.MaxUploadSessions <= 0 ||
+		c.ResultRetention <= 0 ||
+		c.SnapshotRetention <= 0 ||
+		c.BlobRetention <= 0 ||
+		c.StateSweepInterval <= 0 {
 		return fmt.Errorf("resource limits must be positive")
 	}
 	if c.MaxExpandedBytes < c.MaxUploadBytes {
@@ -367,7 +379,8 @@ func validOrigin(value string) bool {
 		return false
 	}
 	u, err := url.ParseRequestURI(value)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" ||
+		u.Fragment != "" {
 		return false
 	}
 	return u.Path == ""

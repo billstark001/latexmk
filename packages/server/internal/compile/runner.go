@@ -1,3 +1,4 @@
+// Package compile validates requests, runs TeX tools, and collects compilation output.
 package compile
 
 import (
@@ -66,7 +67,8 @@ func (r *Runner) ValidateRequest(req api.CompileRequest) error {
 	if req.Auxiliary.Server != "" && req.Auxiliary.Server != "none" && req.Auxiliary.Server != "reuse" {
 		return errors.New("auxiliary.server must be none or reuse")
 	}
-	if req.Auxiliary.Server == "reuse" && (req.ProtocolVersion != api.ProtocolVersion || r.Config.CompileCacheRetention <= 0 || r.Config.MaxCompileCacheBytes <= 0) {
+	if req.Auxiliary.Server == "reuse" &&
+		(req.ProtocolVersion != api.ProtocolVersion || r.Config.CompileCacheRetention <= 0 || r.Config.MaxCompileCacheBytes <= 0) {
 		return errors.New("server compile cache is not enabled for this request")
 	}
 	if req.ProtocolVersion != 1 && req.ProtocolVersion != api.ProtocolVersion {
@@ -334,7 +336,7 @@ func parseFLS(root, flsPath string, candidates map[string]struct{}) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	s := bufio.NewScanner(io.LimitReader(f, 16<<20))
 	s.Buffer(make([]byte, 64<<10), 1<<20)
 	for s.Scan() {
@@ -398,7 +400,7 @@ func parseRecordedInputs(root, flsPath string, inputs map[string]struct{}) error
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	pwd := root
 	s := bufio.NewScanner(io.LimitReader(f, 16<<20))
 	s.Buffer(make([]byte, 64<<10), 1<<20)
@@ -472,7 +474,8 @@ func safeWorkspacePath(root, rel string) (string, error) {
 		return "", errors.New("empty or malformed path")
 	}
 	clean := filepath.Clean(filepath.FromSlash(rel))
-	if filepath.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+	if filepath.IsAbs(clean) || clean == "." || clean == ".." ||
+		strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", errors.New("path escapes workspace")
 	}
 	rootAbs, err := filepath.Abs(root)
@@ -494,7 +497,8 @@ func validJobName(value string) bool {
 		return false
 	}
 	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' ||
+			r == '-' {
 			continue
 		}
 		return false
@@ -507,7 +511,7 @@ func hashFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err

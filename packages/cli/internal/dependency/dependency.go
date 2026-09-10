@@ -48,8 +48,17 @@ func Select(entry, mode string, candidates []projectarchive.File) (Result, error
 // successful compile. Cached paths still have to exist in the current
 // policy-filtered manifest. History can cover dynamic references, but never
 // missing literal paths, malformed commands, or paths outside the project.
-func SelectWithCachedInputs(entry, mode string, candidates []projectarchive.File, cached []string, historyAvailable bool) (Result, error) {
-	return SelectWithOptions(entry, candidates, SelectionOptions{Mode: mode, CachedFiles: cached, HistoryAvailable: historyAvailable})
+func SelectWithCachedInputs(
+	entry, mode string,
+	candidates []projectarchive.File,
+	cached []string,
+	historyAvailable bool,
+) (Result, error) {
+	return SelectWithOptions(
+		entry,
+		candidates,
+		SelectionOptions{Mode: mode, CachedFiles: cached, HistoryAvailable: historyAvailable},
+	)
 }
 
 // SelectWithOptions combines static discovery, explicit files, and recorder
@@ -96,7 +105,10 @@ func SelectWithOptions(entry string, candidates []projectarchive.File, options S
 		file.Reason = "entry file"
 		result = Result{Files: []projectarchive.File{file}, Resolved: true}
 	}
-	selected := make(map[string]projectarchive.File, len(result.Files)+len(options.ExplicitFiles)+len(options.CachedFiles))
+	selected := make(
+		map[string]projectarchive.File,
+		len(result.Files)+len(options.ExplicitFiles)+len(options.CachedFiles),
+	)
 	for _, file := range result.Files {
 		selected[file.Path] = file
 	}
@@ -104,12 +116,28 @@ func SelectWithOptions(entry string, candidates []projectarchive.File, options S
 	for _, explicitPath := range options.ExplicitFiles {
 		clean := cleanProjectPath(explicitPath)
 		if clean == "" {
-			result.Diagnostics = append(result.Diagnostics, Diagnostic{File: entry, Reference: explicitPath, Kind: "explicit", Message: "explicit file path escapes the project root"})
+			result.Diagnostics = append(
+				result.Diagnostics,
+				Diagnostic{
+					File:      entry,
+					Reference: explicitPath,
+					Kind:      "explicit",
+					Message:   "explicit file path escapes the project root",
+				},
+			)
 			continue
 		}
 		file, ok := byPath[clean]
 		if !ok {
-			result.Diagnostics = append(result.Diagnostics, Diagnostic{File: entry, Reference: clean, Kind: "explicit", Message: "explicit file is missing, ignored by Git, or denied by the upload policy"})
+			result.Diagnostics = append(
+				result.Diagnostics,
+				Diagnostic{
+					File:      entry,
+					Reference: clean,
+					Kind:      "explicit",
+					Message:   "explicit file is missing, ignored by Git, or denied by the upload policy",
+				},
+			)
 			continue
 		}
 		if clean != entry {
@@ -197,17 +225,29 @@ type commandSpec struct {
 }
 
 var commandSpecs = map[string]commandSpec{
-	"input":             {argCount: 1, reference: 0, extensions: []string{"", ".tex"}, recursive: true},
-	"include":           {argCount: 1, reference: 0, extensions: []string{"", ".tex"}, recursive: true},
-	"subfile":           {argCount: 1, reference: 0, extensions: []string{"", ".tex"}, recursive: true},
-	"loadglsentries":    {argCount: 1, reference: 0, extensions: []string{"", ".tex"}, recursive: true},
-	"includegraphics":   {argCount: 1, reference: 0, extensions: []string{".pdf", ".png", ".jpg", ".jpeg", ".eps", ".mps"}, graphics: true},
-	"includepdf":        {argCount: 1, reference: 0, extensions: []string{".pdf"}},
-	"includesvg":        {argCount: 1, reference: 0, extensions: []string{".svg"}},
-	"bibliography":      {argCount: 1, reference: 0, extensions: []string{".bib"}, splitComma: true},
-	"addbibresource":    {argCount: 1, reference: 0, extensions: []string{".bib"}},
-	"documentclass":     {argCount: 1, reference: 0, extensions: []string{".cls"}, recursive: true, optional: true},
-	"usepackage":        {argCount: 1, reference: 0, extensions: []string{".sty"}, recursive: true, optional: true, splitComma: true},
+	"input":          {argCount: 1, reference: 0, extensions: []string{"", ".tex"}, recursive: true},
+	"include":        {argCount: 1, reference: 0, extensions: []string{"", ".tex"}, recursive: true},
+	"subfile":        {argCount: 1, reference: 0, extensions: []string{"", ".tex"}, recursive: true},
+	"loadglsentries": {argCount: 1, reference: 0, extensions: []string{"", ".tex"}, recursive: true},
+	"includegraphics": {
+		argCount:   1,
+		reference:  0,
+		extensions: []string{".pdf", ".png", ".jpg", ".jpeg", ".eps", ".mps"},
+		graphics:   true,
+	},
+	"includepdf":     {argCount: 1, reference: 0, extensions: []string{".pdf"}},
+	"includesvg":     {argCount: 1, reference: 0, extensions: []string{".svg"}},
+	"bibliography":   {argCount: 1, reference: 0, extensions: []string{".bib"}, splitComma: true},
+	"addbibresource": {argCount: 1, reference: 0, extensions: []string{".bib"}},
+	"documentclass":  {argCount: 1, reference: 0, extensions: []string{".cls"}, recursive: true, optional: true},
+	"usepackage": {
+		argCount:   1,
+		reference:  0,
+		extensions: []string{".sty"},
+		recursive:  true,
+		optional:   true,
+		splitComma: true,
+	},
 	"bibliographystyle": {argCount: 1, reference: 0, extensions: []string{".bst"}, optional: true},
 	"lstinputlisting":   {argCount: 1, reference: 0, extensions: []string{""}},
 	"verbatiminput":     {argCount: 1, reference: 0, extensions: []string{""}},
@@ -286,7 +326,14 @@ func (d *discoverer) visit(filePath, reason string) error {
 	defer delete(d.visiting, filePath)
 
 	if file.Size > maxParsedFileSize {
-		d.addDiagnostic(filePath, 0, "", "", "too_large", fmt.Sprintf("text dependency exceeds the %d-byte static parser limit", maxParsedFileSize))
+		d.addDiagnostic(
+			filePath,
+			0,
+			"",
+			"",
+			"too_large",
+			fmt.Sprintf("text dependency exceeds the %d-byte static parser limit", maxParsedFileSize),
+		)
 		return nil
 	}
 	content, err := os.ReadFile(file.Source)
@@ -347,7 +394,14 @@ func (d *discoverer) consumeReference(source string, line int, command, referenc
 		if spec.optional && !strings.Contains(reference, "/") {
 			return
 		}
-		d.addDiagnostic(source, line, command, reference, "unavailable", "dependency is missing, ignored by Git, or denied by the upload policy")
+		d.addDiagnostic(
+			source,
+			line,
+			command,
+			reference,
+			"unavailable",
+			"dependency is missing, ignored by Git, or denied by the upload policy",
+		)
 		return
 	}
 	reason := fmt.Sprintf("\\%s from %s:%d", command, source, line)
@@ -391,7 +445,14 @@ func (d *discoverer) consumeGraphicPath(source string, call invocation) {
 	}
 	dirs, ok := bracedList(call.args[0])
 	if !ok {
-		d.addDiagnostic(source, call.line, call.name, call.args[0], "dynamic", "graphic paths must be literal braced directories")
+		d.addDiagnostic(
+			source,
+			call.line,
+			call.name,
+			call.args[0],
+			"dynamic",
+			"graphic paths must be literal braced directories",
+		)
 		return
 	}
 	for _, dir := range dirs {
@@ -410,7 +471,10 @@ func (d *discoverer) consumeGraphicPath(source string, call invocation) {
 }
 
 func (d *discoverer) addDiagnostic(file string, line int, command, reference, kind, message string) {
-	d.diagnostics = append(d.diagnostics, Diagnostic{File: file, Line: line, Command: command, Reference: reference, Kind: kind, Message: message})
+	d.diagnostics = append(
+		d.diagnostics,
+		Diagnostic{File: file, Line: line, Command: command, Reference: reference, Kind: kind, Message: message},
+	)
 }
 
 func scanInvocations(text string) []invocation {
@@ -541,7 +605,8 @@ func maskInlineVerb(text, token string) string {
 		}
 		start := search + relative
 		cursor := start + len(token)
-		if cursor < len(text) && ((text[cursor] >= 'A' && text[cursor] <= 'Z') || (text[cursor] >= 'a' && text[cursor] <= 'z')) {
+		if cursor < len(text) &&
+			((text[cursor] >= 'A' && text[cursor] <= 'Z') || (text[cursor] >= 'a' && text[cursor] <= 'z')) {
 			search = cursor
 			continue
 		}

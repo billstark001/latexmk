@@ -15,12 +15,12 @@ later uploads to the same project cannot change what an existing job compiles.
 
 ## Monorepo
 
-| Package | Implementation | Purpose |
-|---|---|---|
-| `@latexmk/cli` | Go | Local proxy, `latexmk` command, and engine-symlink compatibility |
-| `@latexmk/server` | Go (Gin + GORM) | Compile API, incremental upload, job queue, metadata, authentication, limits, and PostgreSQL user/token management |
-| `@latexmk/dashboard` | Preact + Vite | Console for jobs, capabilities, members, and API tokens |
-| `@latexmk/deploy` | TypeScript | Standalone OCI/Docker context, Compose file, and deployment configuration generator |
+| Package              | Implementation  | Purpose                                                                                                            |
+| -------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `@latexmk/cli`       | Go              | Local proxy, `latexmk` command, and engine-symlink compatibility                                                   |
+| `@latexmk/server`    | Go (Gin + GORM) | Compile API, incremental upload, job queue, metadata, authentication, limits, and PostgreSQL user/token management |
+| `@latexmk/dashboard` | Preact + Vite   | Console for jobs, capabilities, members, and API tokens                                                            |
+| `@latexmk/deploy`    | TypeScript      | Standalone OCI/Docker context, Compose file, and deployment configuration generator                                |
 
 The server uses **Gin** and **GORM/pgx** over the PostgreSQL protocol. Full
 PostgreSQL and PGlite socket use the same connection interface. Use full
@@ -30,14 +30,44 @@ PGlite compatibility.
 
 ## Quick start
 
-Requirements: Go 1.23+, Node.js 22+, pnpm 11, and (for local end-to-end tests)
+Requirements: Go 1.27+, Node.js 24+, pnpm 12, and (for local end-to-end tests)
 `latexmk` plus a TeX engine.
 
 ```sh
-corepack enable pnpm
+npm install --global pnpm@12
+pnpm install --frozen-lockfile
 pnpm build
 pnpm test
 ```
+
+### Development checks
+
+The repository uses golangci-lint for Go analysis and formatting (`goimports`
+and `golines`, 120 columns), Oxlint for JavaScript/TypeScript analysis, and
+Oxfmt for formatting. Both TypeScript packages use strict type checking.
+The standard tools run directly; there are no custom source or architecture checks.
+
+```sh
+pnpm format          # Apply formatting across the repository
+pnpm format:check    # Check formatting without writing files
+pnpm lint           # Go analysis and JS/TS lint, including type-aware rules
+pnpm typecheck      # TypeScript checking without emitting build output
+pnpm test
+pnpm --filter @latexmk/cli --filter @latexmk/server test:race
+pnpm build
+```
+
+Configuration lives in `.golangci.yml`, `.oxlintrc.json`, and `.oxfmtrc.json`.
+Go tools are pinned in the isolated `tools/go.mod` module and invoked through
+`go tool`; the first invocation downloads and builds them automatically.
+They do not change the CLI or server dependency graph. Go modules and CI use
+Go 1.27; CI runs the same commands shown above.
+
+`devEngines.packageManager` accepts any pnpm 12 release, with no minor-version
+pin in the manifest. The lockfile records the resolved package manager and JS
+dependencies for reproducible installs. To update all workspace JS dependencies
+with npm-check-updates and refresh the lockfile, run `pnpm deps:update` and then
+the checks above.
 
 Start an explicitly unauthenticated local development server:
 
@@ -105,7 +135,17 @@ The CLI first reads the user config at `$XDG_CONFIG_HOME/latexmk/config.json`
   "respectGitignore": true,
   "engine": "xelatex",
   "timeout": "3m",
-  "exclude": [".git", "node_modules", ".latexmk-cache", "*.aux", "*.fdb_latexmk", "*.fls", "*.log", "*.synctex.gz", "*.xdv"]
+  "exclude": [
+    ".git",
+    "node_modules",
+    ".latexmk-cache",
+    "*.aux",
+    "*.fdb_latexmk",
+    "*.fls",
+    "*.log",
+    "*.synctex.gz",
+    "*.xdv"
+  ]
 }
 ```
 
@@ -256,11 +296,11 @@ node packages/deploy/dist/index.js bundle \
 
 The supplied low-cost resource presets are:
 
-| Preset | State storage | Queue / retention policy |
-|---|---|---|
-| `railway-serverless` | ephemeral tmpfs | 1 compiler, 2 queued jobs, results 24 h, snapshots/blobs 48 h |
-| `lightsail-tokyo` | 3 GiB named volume | 1 compiler, 12 queued jobs, seven-day cache retention |
-| `railway` | 512 MiB named volume | 1 compiler, 5 queued jobs, 72-hour cache retention |
+| Preset               | State storage        | Queue / retention policy                                      |
+| -------------------- | -------------------- | ------------------------------------------------------------- |
+| `railway-serverless` | ephemeral tmpfs      | 1 compiler, 2 queued jobs, results 24 h, snapshots/blobs 48 h |
+| `lightsail-tokyo`    | 3 GiB named volume   | 1 compiler, 12 queued jobs, seven-day cache retention         |
+| `railway`            | 512 MiB named volume | 1 compiler, 5 queued jobs, 72-hour cache retention            |
 
 Use `--profile full` for the full TeX Live image. The bundler writes
 `.env.example`, `compose.yaml`, and `latexmk-deploy.json`; replace all secret

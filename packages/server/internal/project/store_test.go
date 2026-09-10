@@ -93,7 +93,10 @@ func TestPutBlobRejectsExtraData(t *testing.T) {
 	content := []byte("a")
 	digest := sha256.Sum256(content)
 	sha := hex.EncodeToString(digest[:])
-	plan, err := m.Plan("member", api.UploadPlanRequest{ProjectID: "paper", Files: []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: 1}}})
+	plan, err := m.Plan(
+		"member",
+		api.UploadPlanRequest{ProjectID: "paper", Files: []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: 1}}},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +113,13 @@ func TestPutBlobEnforcesStateStorageLimit(t *testing.T) {
 	content := []byte("ab")
 	digest := sha256.Sum256(content)
 	sha := hex.EncodeToString(digest[:])
-	plan, err := m.Plan("member", api.UploadPlanRequest{ProjectID: "paper", Files: []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}}})
+	plan, err := m.Plan(
+		"member",
+		api.UploadPlanRequest{
+			ProjectID: "paper",
+			Files:     []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,14 +129,27 @@ func TestPutBlobEnforcesStateStorageLimit(t *testing.T) {
 }
 
 func TestPlanEnforcesBlobAndSessionLimits(t *testing.T) {
-	m, err := New(config.Config{StateDir: t.TempDir(), MaxFiles: 10, MaxUploadBytes: 1, MaxExpandedBytes: 1024, MaxStateBytes: 1024, MaxUploadSessions: 1}, nil)
+	m, err := New(
+		config.Config{
+			StateDir:          t.TempDir(),
+			MaxFiles:          10,
+			MaxUploadBytes:    1,
+			MaxExpandedBytes:  1024,
+			MaxStateBytes:     1024,
+			MaxUploadSessions: 1,
+		},
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	content := []byte("ab")
 	digest := sha256.Sum256(content)
 	sha := hex.EncodeToString(digest[:])
-	request := api.UploadPlanRequest{ProjectID: "paper", Files: []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}}}
+	request := api.UploadPlanRequest{
+		ProjectID: "paper",
+		Files:     []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
+	}
 	if _, err := m.Plan("member", request); err == nil {
 		t.Fatal("expected per-blob upload limit to reject manifest")
 	}
@@ -159,7 +181,10 @@ func TestPruneKeepsReferencedBlobsAndRemovesExpiredCache(t *testing.T) {
 	content := []byte("source")
 	digest := sha256.Sum256(content)
 	sha := hex.EncodeToString(digest[:])
-	request := api.UploadPlanRequest{ProjectID: "paper", Files: []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}}}
+	request := api.UploadPlanRequest{
+		ProjectID: "paper",
+		Files:     []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
+	}
 	plan, err := m.Plan("member", request)
 	if err != nil {
 		t.Fatal(err)
@@ -218,7 +243,13 @@ func TestPruneKeepsBlobPinnedByOlderQueuedSnapshot(t *testing.T) {
 		t.Helper()
 		digest := sha256.Sum256([]byte(content))
 		sha := hex.EncodeToString(digest[:])
-		plan, err := m.Plan("member", api.UploadPlanRequest{ProjectID: "paper", Files: []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}}})
+		plan, err := m.Plan(
+			"member",
+			api.UploadPlanRequest{
+				ProjectID: "paper",
+				Files:     []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
+			},
+		)
 		if err != nil {
 			t.Fatal(err)
 		}

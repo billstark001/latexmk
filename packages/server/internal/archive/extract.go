@@ -1,3 +1,4 @@
+// Package archive extracts uploaded projects with path and resource limits.
 package archive
 
 import (
@@ -28,7 +29,7 @@ func ExtractTarGz(r io.Reader, root string, limits Limits) (Stats, error) {
 	if err != nil {
 		return stats, fmt.Errorf("invalid gzip stream: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	tr := tar.NewReader(gz)
 	seen := make(map[string]struct{})
 	for {
@@ -57,7 +58,7 @@ func ExtractTarGz(r io.Reader, root string, limits Limits) (Stats, error) {
 			if err := os.MkdirAll(dst, 0o755); err != nil {
 				return stats, err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
 			if h.Size < 0 {
 				return stats, fmt.Errorf("negative size for %q", h.Name)
 			}

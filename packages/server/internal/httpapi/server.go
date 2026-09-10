@@ -1,3 +1,4 @@
+// Package httpapi exposes compilation, project, and administration endpoints.
 package httpapi
 
 import (
@@ -19,6 +20,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/billstark001/latexmk/packages/server/internal/api"
 	projectarchive "github.com/billstark001/latexmk/packages/server/internal/archive"
 	"github.com/billstark001/latexmk/packages/server/internal/auth"
@@ -28,7 +31,6 @@ import (
 	"github.com/billstark001/latexmk/packages/server/internal/project"
 	"github.com/billstark001/latexmk/packages/server/internal/resultarchive"
 	"github.com/billstark001/latexmk/packages/server/internal/store"
-	"github.com/gin-gonic/gin"
 )
 
 // Server owns the Gin engine and exposes the v2 content-addressed upload and
@@ -45,9 +47,27 @@ type Server struct {
 	engine   *gin.Engine
 }
 
-func New(cfg config.Config, meta api.Metadata, runner *compile.Runner, authManager *auth.Manager, db *store.Postgres, projects *project.Manager, queue *jobs.Manager, logger *slog.Logger) *Server {
+func New(
+	cfg config.Config,
+	meta api.Metadata,
+	runner *compile.Runner,
+	authManager *auth.Manager,
+	db *store.Postgres,
+	projects *project.Manager,
+	queue *jobs.Manager,
+	logger *slog.Logger,
+) *Server {
 	gin.SetMode(gin.ReleaseMode)
-	s := &Server{cfg: cfg, meta: meta, runner: runner, auth: authManager, db: db, projects: projects, jobs: queue, logger: logger}
+	s := &Server{
+		cfg:      cfg,
+		meta:     meta,
+		runner:   runner,
+		auth:     authManager,
+		db:       db,
+		projects: projects,
+		jobs:     queue,
+		logger:   logger,
+	}
 	engine := gin.New()
 	engine.Use(s.recover(), s.requestID(), s.cors(), s.securityHeaders(), s.logRequests())
 	engine.GET("/healthz", s.health)
@@ -121,7 +141,11 @@ func (s *Server) compileLegacy(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "could not create compile workspace")
 		return
 	}
-	defer os.RemoveAll(root)
+	defer func() {
+		if err := os.RemoveAll(root); err != nil {
+			s.logger.Warn("could not remove compile workspace", "error", err)
+		}
+	}()
 	workspace := filepath.Join(root, "project")
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
 		writeError(c, http.StatusInternalServerError, "could not initialize compile workspace")
@@ -158,7 +182,11 @@ func (s *Server) compileLegacy(c *gin.Context) {
 				return
 			}
 			gotProject = true
-			if _, err := projectarchive.ExtractTarGz(part, workspace, projectarchive.Limits{MaxFiles: s.cfg.MaxFiles, MaxBytes: s.cfg.MaxExpandedBytes}); err != nil {
+			if _, err := projectarchive.ExtractTarGz(
+				part,
+				workspace,
+				projectarchive.Limits{MaxFiles: s.cfg.MaxFiles, MaxBytes: s.cfg.MaxExpandedBytes},
+			); err != nil {
 				_ = part.Close()
 				writeError(c, http.StatusBadRequest, "invalid project archive: "+err.Error())
 				return
@@ -183,7 +211,17 @@ func (s *Server) compileLegacy(c *gin.Context) {
 		return
 	}
 	principal, _ := auth.FromContext(c.Request.Context())
-	s.logger.Info("legacy compile started", "request_id", requestID, "user_id", principal.ID, "engine", request.Engine, "entry", request.Entry)
+	s.logger.Info(
+		"legacy compile started",
+		"request_id",
+		requestID,
+		"user_id",
+		principal.ID,
+		"engine",
+		request.Engine,
+		"entry",
+		request.Entry,
+	)
 	output := s.runner.Run(c.Request.Context(), workspace, request, requestID)
 	if request.ProtocolVersion == 1 {
 		// Preserve the result envelope expected by an unmodified v1 CLI.
@@ -201,7 +239,7 @@ func (s *Server) compileLegacy(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "could not read compile result")
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	st, err := f.Stat()
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "could not stat compile result")
@@ -305,7 +343,7 @@ func (s *Server) downloadResult(c *gin.Context) {
 		writeError(c, http.StatusNotFound, "job result archive is unavailable")
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	st, err := f.Stat()
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "could not read job result")
@@ -347,11 +385,18 @@ func (s *Server) projectCleanup(c *gin.Context, dryRun bool) {
 	if dryRun {
 		report, err = s.jobs.CleanupProject(c.Request.Context(), principal.ID, c.Param("id"), scope)
 	} else {
-		report, err = s.jobs.CleanupProjectWithPlan(c.Request.Context(), principal.ID, c.Param("id"), scope, expectedDigest)
+		report, err = s.jobs.CleanupProjectWithPlan(
+			c.Request.Context(),
+			principal.ID,
+			c.Param("id"),
+			scope,
+			expectedDigest,
+		)
 	}
 	if err != nil {
 		status := http.StatusConflict
-		if !project.ValidProjectID(c.Param("id")) || (scope != "results" && scope != "snapshot" && scope != "project" && scope != "cache") {
+		if !project.ValidProjectID(c.Param("id")) ||
+			(scope != "results" && scope != "snapshot" && scope != "project" && scope != "cache") {
 			status = http.StatusBadRequest
 		}
 		writeError(c, status, err.Error())
@@ -493,7 +538,19 @@ func (s *Server) logRequests() gin.HandlerFunc {
 		started := time.Now()
 		c.Next()
 		if c.Request.URL.Path != "/healthz" {
-			s.logger.Info("http request", "request_id", requestIDFrom(c.Request.Context()), "method", c.Request.Method, "path", c.Request.URL.Path, "status", c.Writer.Status(), "duration_ms", time.Since(started).Milliseconds())
+			s.logger.Info(
+				"http request",
+				"request_id",
+				requestIDFrom(c.Request.Context()),
+				"method",
+				c.Request.Method,
+				"path",
+				c.Request.URL.Path,
+				"status",
+				c.Writer.Status(),
+				"duration_ms",
+				time.Since(started).Milliseconds(),
+			)
 		}
 	}
 }
@@ -502,7 +559,15 @@ func (s *Server) recover() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				s.logger.Error("panic", "request_id", requestIDFrom(c.Request.Context()), "error", recovered, "stack", string(debug.Stack()))
+				s.logger.Error(
+					"panic",
+					"request_id",
+					requestIDFrom(c.Request.Context()),
+					"error",
+					recovered,
+					"stack",
+					string(debug.Stack()),
+				)
 				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 			}
 		}()

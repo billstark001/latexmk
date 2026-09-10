@@ -60,7 +60,11 @@ func TestCacheIgnoreCoversNegatedEntry(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, ".latexmk-cache", "nested"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".latexmk-cache/*\n!.latexmk-cache/nested\n"), 0o600); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(root, ".gitignore"),
+		[]byte(".latexmk-cache/*\n!.latexmk-cache/nested\n"),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
 	status, err := InspectProjectCacheGitIgnore(root)

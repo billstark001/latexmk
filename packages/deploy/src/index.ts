@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
@@ -11,17 +11,71 @@ const repoRoot = path.resolve(packageRoot, '..', '..');
 
 const DEPLOYMENT_PRESETS = {
   'railway-serverless': {
-    compileTimeout: '3m', maxConcurrent: '1', maxQueued: '2', maxUploadBytes: '32MiB', maxExpandedBytes: '128MiB', maxArtifactBytes: '32MiB', maxFiles: '2000', maxLogBytes: '2MiB', maxStateBytes: '256MiB', maxUploadSessions: '16', resultRetention: '24h', snapshotRetention: '48h', blobRetention: '48h', stateSweepInterval: '15m', tmpfsSize: '384m', memoryLimit: '1g', pidsLimit: '128', stateDir: '/tmp/latexmk-state', stateVolume: false,
+    compileTimeout: '3m',
+    maxConcurrent: '1',
+    maxQueued: '2',
+    maxUploadBytes: '32MiB',
+    maxExpandedBytes: '128MiB',
+    maxArtifactBytes: '32MiB',
+    maxFiles: '2000',
+    maxLogBytes: '2MiB',
+    maxStateBytes: '256MiB',
+    maxUploadSessions: '16',
+    resultRetention: '24h',
+    snapshotRetention: '48h',
+    blobRetention: '48h',
+    stateSweepInterval: '15m',
+    tmpfsSize: '384m',
+    memoryLimit: '1g',
+    pidsLimit: '128',
+    stateDir: '/tmp/latexmk-state',
+    stateVolume: false,
   },
   'lightsail-tokyo': {
-    compileTimeout: '5m', maxConcurrent: '1', maxQueued: '12', maxUploadBytes: '64MiB', maxExpandedBytes: '256MiB', maxArtifactBytes: '96MiB', maxFiles: '5000', maxLogBytes: '4MiB', maxStateBytes: '3GiB', maxUploadSessions: '64', resultRetention: '168h', snapshotRetention: '168h', blobRetention: '168h', stateSweepInterval: '1h', tmpfsSize: '768m', memoryLimit: '2g', pidsLimit: '192', stateDir: '/var/lib/latexmk', stateVolume: true,
+    compileTimeout: '5m',
+    maxConcurrent: '1',
+    maxQueued: '12',
+    maxUploadBytes: '64MiB',
+    maxExpandedBytes: '256MiB',
+    maxArtifactBytes: '96MiB',
+    maxFiles: '5000',
+    maxLogBytes: '4MiB',
+    maxStateBytes: '3GiB',
+    maxUploadSessions: '64',
+    resultRetention: '168h',
+    snapshotRetention: '168h',
+    blobRetention: '168h',
+    stateSweepInterval: '1h',
+    tmpfsSize: '768m',
+    memoryLimit: '2g',
+    pidsLimit: '192',
+    stateDir: '/var/lib/latexmk',
+    stateVolume: true,
   },
   railway: {
-    compileTimeout: '4m', maxConcurrent: '1', maxQueued: '5', maxUploadBytes: '48MiB', maxExpandedBytes: '192MiB', maxArtifactBytes: '64MiB', maxFiles: '5000', maxLogBytes: '4MiB', maxStateBytes: '512MiB', maxUploadSessions: '32', resultRetention: '72h', snapshotRetention: '72h', blobRetention: '72h', stateSweepInterval: '30m', tmpfsSize: '640m', memoryLimit: '1g', pidsLimit: '160', stateDir: '/var/lib/latexmk', stateVolume: true,
+    compileTimeout: '4m',
+    maxConcurrent: '1',
+    maxQueued: '5',
+    maxUploadBytes: '48MiB',
+    maxExpandedBytes: '192MiB',
+    maxArtifactBytes: '64MiB',
+    maxFiles: '5000',
+    maxLogBytes: '4MiB',
+    maxStateBytes: '512MiB',
+    maxUploadSessions: '32',
+    resultRetention: '72h',
+    snapshotRetention: '72h',
+    blobRetention: '72h',
+    stateSweepInterval: '30m',
+    tmpfsSize: '640m',
+    memoryLimit: '1g',
+    pidsLimit: '160',
+    stateDir: '/var/lib/latexmk',
+    stateVolume: true,
   },
 };
 
-async function main(argv) {
+async function main(argv: string[]) {
   const [command = 'help', ...rest] = argv;
   if (command === 'help' || command === '--help' || command === '-h') {
     printHelp();
@@ -39,14 +93,13 @@ async function main(argv) {
   return 0;
 }
 
-function parseBundleOptions(args) {
-	const selectedPreset = readPreset(args);
-	if (selectedPreset && !Object.hasOwn(DEPLOYMENT_PRESETS, selectedPreset)) throw new Error('--preset must be railway-serverless, lightsail-tokyo, or railway');
-	const preset = selectedPreset ? DEPLOYMENT_PRESETS[selectedPreset] : {};
+function parseBundleOptions(args: string[]) {
+  const selectedPreset = readPreset(args);
+  const preset = selectedPreset ? DEPLOYMENT_PRESETS[selectedPreset] : {};
   const options = {
     profile: 'slim',
     auth: 'token',
-		database: 'postgres',
+    database: 'postgres',
     out: path.resolve(process.cwd(), 'dist', 'latexmk-paas'),
     tag: 'latexmk-server:local',
     build: false,
@@ -58,29 +111,29 @@ function parseBundleOptions(args) {
     externalDatabase: false,
     compileTimeout: '2m',
     maxConcurrent: '2',
-		maxQueued: '100',
-		maxUploadBytes: '64MiB',
-		maxExpandedBytes: '256MiB',
-		maxArtifactBytes: '128MiB',
-		maxFiles: '10000',
-		maxLogBytes: '8MiB',
-		maxStateBytes: '2GiB',
-		maxUploadSessions: '64',
-		resultRetention: '168h',
-		snapshotRetention: '168h',
-		blobRetention: '168h',
-		stateSweepInterval: '1h',
-		tmpfsSize: '1g',
-		memoryLimit: '2g',
-		pidsLimit: '256',
-		stateDir: '/var/lib/latexmk',
-		stateVolume: true,
-		...preset,
+    maxQueued: '100',
+    maxUploadBytes: '64MiB',
+    maxExpandedBytes: '256MiB',
+    maxArtifactBytes: '128MiB',
+    maxFiles: '10000',
+    maxLogBytes: '8MiB',
+    maxStateBytes: '2GiB',
+    maxUploadSessions: '64',
+    resultRetention: '168h',
+    snapshotRetention: '168h',
+    blobRetention: '168h',
+    stateSweepInterval: '1h',
+    tmpfsSize: '1g',
+    memoryLimit: '2g',
+    pidsLimit: '256',
+    stateDir: '/var/lib/latexmk',
+    stateVolume: true,
+    ...preset,
     serverSource: path.join(repoRoot, 'packages', 'server'),
   };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    const take = (name) => {
+    const take = (name: string) => {
       const equal = arg.indexOf('=');
       if (equal >= 0) return arg.slice(equal + 1);
       if (i + 1 >= args.length) throw new Error(`${name} requires a value`);
@@ -89,50 +142,63 @@ function parseBundleOptions(args) {
     };
     if (arg === '--profile' || arg.startsWith('--profile=')) options.profile = take('--profile');
     else if (arg === '--auth' || arg.startsWith('--auth=')) options.auth = take('--auth');
-	else if (arg === '--database' || arg.startsWith('--database=')) options.database = take('--database');
-		else if (arg === '--preset' || arg.startsWith('--preset=')) take('--preset');
+    else if (arg === '--database' || arg.startsWith('--database=')) options.database = take('--database');
+    else if (arg === '--preset' || arg.startsWith('--preset=')) take('--preset');
     else if (arg === '--out' || arg.startsWith('--out=')) options.out = path.resolve(take('--out'));
     else if (arg === '--tag' || arg.startsWith('--tag=')) options.tag = take('--tag');
     else if (arg === '--save' || arg.startsWith('--save=')) options.save = path.resolve(take('--save'));
     else if (arg === '--engines' || arg.startsWith('--engines=')) options.engines = take('--engines');
-    else if (arg === '--compile-timeout' || arg.startsWith('--compile-timeout=')) options.compileTimeout = take('--compile-timeout');
-    else if (arg === '--max-concurrent' || arg.startsWith('--max-concurrent=')) options.maxConcurrent = take('--max-concurrent');
-    else if (arg === '--server-source' || arg.startsWith('--server-source=')) options.serverSource = path.resolve(take('--server-source'));
+    else if (arg === '--compile-timeout' || arg.startsWith('--compile-timeout='))
+      options.compileTimeout = take('--compile-timeout');
+    else if (arg === '--max-concurrent' || arg.startsWith('--max-concurrent='))
+      options.maxConcurrent = take('--max-concurrent');
+    else if (arg === '--server-source' || arg.startsWith('--server-source='))
+      options.serverSource = path.resolve(take('--server-source'));
     else if (arg === '--build') options.build = true;
     else if (arg === '--force') options.force = true;
     else if (arg === '--allow-shell-escape') options.allowShellEscape = true;
-		else if (arg === '--external-database') options.externalDatabase = true;
+    else if (arg === '--external-database') options.externalDatabase = true;
     else throw new Error(`unknown option: ${arg}`);
   }
   if (!['slim', 'full'].includes(options.profile)) throw new Error('--profile must be slim or full');
-	if (!['none', 'token', 'postgres'].includes(options.auth)) throw new Error('--auth must be none, token, or postgres');
-	if (!['postgres', 'pglite'].includes(options.database)) throw new Error('--database must be postgres or pglite');
-	if (options.database === 'pglite' && options.auth !== 'postgres') throw new Error('--database pglite requires --auth postgres');
-	if (options.externalDatabase && (options.auth !== 'postgres' || options.database !== 'postgres')) throw new Error('--external-database requires --auth postgres --database postgres');
-	if (options.preset && options.auth === 'none') throw new Error('--auth none cannot be used with a deployment preset');
+  if (!['none', 'token', 'postgres'].includes(options.auth)) throw new Error('--auth must be none, token, or postgres');
+  if (!['postgres', 'pglite'].includes(options.database)) throw new Error('--database must be postgres or pglite');
+  if (options.database === 'pglite' && options.auth !== 'postgres')
+    throw new Error('--database pglite requires --auth postgres');
+  if (options.externalDatabase && (options.auth !== 'postgres' || options.database !== 'postgres'))
+    throw new Error('--external-database requires --auth postgres --database postgres');
+  if (options.preset && options.auth === 'none') throw new Error('--auth none cannot be used with a deployment preset');
   if (!options.engines) options.engines = options.profile === 'slim' ? 'xelatex' : 'xelatex,lualatex,pdflatex';
   if (options.save && !options.build) throw new Error('--save requires --build');
   return options;
 }
 
-function readPreset(args) {
-	let value = '';
-	for (let i = 0; i < args.length; i += 1) {
-		if (args[i] === '--preset') {
-			if (i + 1 >= args.length) throw new Error('--preset requires a value');
-			value = args[i + 1];
-			i += 1;
-		} else if (args[i].startsWith('--preset=')) {
-			value = args[i].slice('--preset='.length);
-		}
-	}
-	return value;
+function readPreset(args: string[]): keyof typeof DEPLOYMENT_PRESETS | '' {
+  let value = '';
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === '--preset') {
+      if (i + 1 >= args.length) throw new Error('--preset requires a value');
+      value = args[i + 1];
+      i += 1;
+    } else if (args[i].startsWith('--preset=')) {
+      value = args[i].slice('--preset='.length);
+    }
+  }
+  if (value && !Object.hasOwn(DEPLOYMENT_PRESETS, value))
+    throw new Error('--preset must be railway-serverless, lightsail-tokyo, or railway');
+  return value as keyof typeof DEPLOYMENT_PRESETS | '';
 }
 
-async function bundle(options) {
+type BundleOptions = ReturnType<typeof parseBundleOptions>;
+
+async function bundle(options: BundleOptions) {
   await ensureSource(options.serverSource);
   await prepareOutput(options.out, options.force);
-  const template = path.join(packageRoot, 'templates', options.profile === 'slim' ? 'Dockerfile.slim' : 'Dockerfile.full');
+  const template = path.join(
+    packageRoot,
+    'templates',
+    options.profile === 'slim' ? 'Dockerfile.slim' : 'Dockerfile.full',
+  );
   await cp(options.serverSource, path.join(options.out, 'server'), {
     recursive: true,
     filter(source) {
@@ -141,23 +207,37 @@ async function bundle(options) {
     },
   });
   await cp(template, path.join(options.out, 'Dockerfile'));
-  await cp(path.join(packageRoot, 'templates', 'rename-compat-fonts.py'), path.join(options.out, 'rename-compat-fonts.py'));
+  await cp(
+    path.join(packageRoot, 'templates', 'rename-compat-fonts.py'),
+    path.join(options.out, 'rename-compat-fonts.py'),
+  );
   await writeFile(path.join(options.out, '.dockerignore'), 'server/dist\nserver/.git\n*.tar\n*.zip\n', 'utf8');
   await writeFile(path.join(options.out, '.env.example'), renderEnv(options), 'utf8');
   await writeFile(path.join(options.out, 'compose.yaml'), renderCompose(options), 'utf8');
   await writeFile(path.join(options.out, 'README.md'), renderReadme(options), 'utf8');
-  await writeFile(path.join(options.out, 'latexmk-deploy.json'), `${JSON.stringify({
-    schemaVersion: 1,
-    generatedAt: new Date().toISOString(),
-    profile: options.profile,
-    authMode: options.auth,
-		databaseMode: options.database,
-		deploymentPreset: options.preset || 'custom',
-		externalDatabase: options.externalDatabase,
-    imageTag: options.tag,
-    engines: options.engines.split(',').map((value) => value.trim()).filter(Boolean),
-    shellEscapeAllowed: options.allowShellEscape,
-  }, null, 2)}\n`, 'utf8');
+  await writeFile(
+    path.join(options.out, 'latexmk-deploy.json'),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        generatedAt: new Date().toISOString(),
+        profile: options.profile,
+        authMode: options.auth,
+        databaseMode: options.database,
+        deploymentPreset: options.preset || 'custom',
+        externalDatabase: options.externalDatabase,
+        imageTag: options.tag,
+        engines: options.engines
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean),
+        shellEscapeAllowed: options.allowShellEscape,
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  );
   console.log(`deployment bundle: ${options.out}`);
   if (options.build) {
     await run('docker', ['build', '--tag', options.tag, options.out]);
@@ -170,70 +250,78 @@ async function bundle(options) {
   }
 }
 
-async function ensureSource(source) {
+async function ensureSource(source: string) {
   const info = await stat(source).catch(() => null);
   if (!info?.isDirectory()) throw new Error(`server source directory not found: ${source}`);
   const goMod = await stat(path.join(source, 'go.mod')).catch(() => null);
   if (!goMod?.isFile()) throw new Error(`server source does not contain go.mod: ${source}`);
 }
 
-async function prepareOutput(out, force) {
+async function prepareOutput(out: string, force: boolean) {
   const existing = await stat(out).catch(() => null);
   if (existing) {
     const entries = existing.isDirectory() ? await readdir(out) : ['not-a-directory'];
-    if (entries.length > 0 && !force) throw new Error(`output exists and is not empty: ${out}; pass --force to replace it`);
+    if (entries.length > 0 && !force)
+      throw new Error(`output exists and is not empty: ${out}; pass --force to replace it`);
     await rm(out, { recursive: true, force: true });
   }
   await mkdir(out, { recursive: true });
 }
 
-function renderEnv(options) {
+function renderEnv(options: BundleOptions) {
   const lines = [
     'PORT=8080',
     `LATEXMK_IMAGE_PROFILE=${options.profile === 'slim' ? 'xelatex-cjk-slim' : 'texlive-full'}`,
     `LATEXMK_AUTH_MODE=${options.auth}`,
-	`LATEXMK_DATABASE_MODE=${options.database}`,
+    `LATEXMK_DATABASE_MODE=${options.database}`,
     `LATEXMK_ENGINES=${options.engines}`,
     `LATEXMK_ALLOW_SHELL_ESCAPE=${options.allowShellEscape}`,
     `LATEXMK_COMPILE_TIMEOUT=${options.compileTimeout}`,
     `LATEXMK_MAX_CONCURRENT_COMPILES=${options.maxConcurrent}`,
-		`LATEXMK_MAX_QUEUED_JOBS=${options.maxQueued}`,
+    `LATEXMK_MAX_QUEUED_JOBS=${options.maxQueued}`,
     `LATEXMK_MAX_UPLOAD_BYTES=${options.maxUploadBytes}`,
     `LATEXMK_MAX_EXPANDED_BYTES=${options.maxExpandedBytes}`,
     `LATEXMK_MAX_ARTIFACT_BYTES=${options.maxArtifactBytes}`,
     `LATEXMK_MAX_FILES=${options.maxFiles}`,
-		`LATEXMK_MAX_LOG_BYTES=${options.maxLogBytes}`,
-		`LATEXMK_MAX_STATE_BYTES=${options.maxStateBytes}`,
-		`LATEXMK_MAX_UPLOAD_SESSIONS=${options.maxUploadSessions}`,
-		`LATEXMK_RESULT_RETENTION=${options.resultRetention}`,
-		`LATEXMK_SNAPSHOT_RETENTION=${options.snapshotRetention}`,
-		`LATEXMK_BLOB_RETENTION=${options.blobRetention}`,
-		`LATEXMK_STATE_SWEEP_INTERVAL=${options.stateSweepInterval}`,
-		`LATEXMK_STATE_DIR=${options.stateDir}`,
-	'LATEXMK_CORS_ORIGINS=',
+    `LATEXMK_MAX_LOG_BYTES=${options.maxLogBytes}`,
+    `LATEXMK_MAX_STATE_BYTES=${options.maxStateBytes}`,
+    `LATEXMK_MAX_UPLOAD_SESSIONS=${options.maxUploadSessions}`,
+    `LATEXMK_RESULT_RETENTION=${options.resultRetention}`,
+    `LATEXMK_SNAPSHOT_RETENTION=${options.snapshotRetention}`,
+    `LATEXMK_BLOB_RETENTION=${options.blobRetention}`,
+    `LATEXMK_STATE_SWEEP_INTERVAL=${options.stateSweepInterval}`,
+    `LATEXMK_STATE_DIR=${options.stateDir}`,
+    'LATEXMK_CORS_ORIGINS=',
   ];
   if (options.auth === 'token') lines.push('LATEXMK_API_TOKEN=replace-with-a-long-random-token');
-	if (options.auth === 'postgres' && options.database === 'postgres' && options.externalDatabase) {
-		lines.push('DATABASE_URL=postgres://latexmk:replace-with-external-secret@your-postgres-host:5432/latexmk?sslmode=require');
-		lines.push('LATEXMK_BOOTSTRAP_TOKEN=replace-with-a-long-random-bootstrap-token');
-	}
-	if (options.auth === 'postgres' && options.database === 'postgres' && !options.externalDatabase) {
+  if (options.auth === 'postgres' && options.database === 'postgres' && options.externalDatabase) {
+    lines.push(
+      'DATABASE_URL=postgres://latexmk:replace-with-external-secret@your-postgres-host:5432/latexmk?sslmode=require',
+    );
+    lines.push('LATEXMK_BOOTSTRAP_TOKEN=replace-with-a-long-random-bootstrap-token');
+  }
+  if (options.auth === 'postgres' && options.database === 'postgres' && !options.externalDatabase) {
     lines.push('DATABASE_URL=postgres://latexmk:replace-me@postgres:5432/latexmk?sslmode=disable');
     lines.push('LATEXMK_BOOTSTRAP_TOKEN=replace-with-a-long-random-bootstrap-token');
     lines.push('POSTGRES_PASSWORD=replace-me');
-	}
-	if (options.auth === 'postgres' && options.database === 'pglite') {
-		lines.push('DATABASE_URL=postgres://postgres:postgres@pglite:5432/postgres?sslmode=disable');
-		lines.push('LATEXMK_BOOTSTRAP_TOKEN=replace-with-a-long-random-bootstrap-token');
-	}
+  }
+  if (options.auth === 'postgres' && options.database === 'pglite') {
+    lines.push('DATABASE_URL=postgres://postgres:postgres@pglite:5432/postgres?sslmode=disable');
+    lines.push('LATEXMK_BOOTSTRAP_TOKEN=replace-with-a-long-random-bootstrap-token');
+  }
   return `${lines.join('\n')}\n`;
 }
 
-function renderCompose(options) {
+function renderCompose(options: BundleOptions) {
   const fullPostgres = options.auth === 'postgres' && options.database === 'postgres' && !options.externalDatabase;
   const pglite = options.auth === 'postgres' && options.database === 'pglite';
-  const depends = fullPostgres ? '    depends_on:\n      postgres:\n        condition: service_healthy\n' : pglite ? '    depends_on:\n      pglite:\n        condition: service_started\n' : '';
-  const database = fullPostgres ? `
+  const depends = fullPostgres
+    ? '    depends_on:\n      postgres:\n        condition: service_healthy\n'
+    : pglite
+      ? '    depends_on:\n      pglite:\n        condition: service_started\n'
+      : '';
+  const database = fullPostgres
+    ? `
   postgres:
     image: postgres:17-alpine
     environment:
@@ -247,25 +335,33 @@ function renderCompose(options) {
       interval: 5s
       timeout: 3s
       retries: 20
-` : pglite ? `
+`
+    : pglite
+      ? `
   pglite:
     image: node:22-bookworm-slim
     working_dir: /srv
     command: sh -c "npm install --no-save @electric-sql/pglite-socket@0.0.7 && ./node_modules/.bin/pglite-server --db=/var/lib/pglite --host=0.0.0.0 --port=5432"
     volumes:
       - latexmk-pglite:/var/lib/pglite
-` : '';
+`
+      : '';
   const volumes = [];
   if (options.stateVolume) volumes.push('  latexmk-state:');
   if (fullPostgres) volumes.push('  latexmk-postgres:');
   if (pglite) volumes.push('  latexmk-pglite:');
-  const stateMount = options.stateVolume ? `    volumes:
+  const stateMount = options.stateVolume
+    ? `    volumes:
       - latexmk-state:${options.stateDir}
-` : '';
-  const volumeSection = volumes.length > 0 ? `
+`
+    : '';
+  const volumeSection =
+    volumes.length > 0
+      ? `
 volumes:
 ${volumes.join('\n')}
-` : '';
+`
+      : '';
   return `services:
   server:
     build: .
@@ -285,7 +381,7 @@ ${volumes.join('\n')}
 ${stateMount}${depends}${database}${volumeSection}`;
 }
 
-function renderReadme(options) {
+function renderReadme(options: BundleOptions) {
   return `# latexmk PaaS bundle
 
 Profile: **${options.profile}**  
@@ -321,8 +417,8 @@ request timeout above the value of \`LATEXMK_COMPILE_TIMEOUT\`.
 `;
 }
 
-function run(command, args) {
-  return new Promise((resolve, reject) => {
+function run(command: string, args: string[]) {
+  return new Promise<void>((resolve, reject) => {
     const child = spawn(command, args, { stdio: 'inherit' });
     child.on('error', reject);
     child.on('exit', (code, signal) => {
@@ -358,9 +454,11 @@ Options:
 }
 
 main(process.argv.slice(2)).then(
-  (code) => { process.exitCode = code; },
-  (error) => {
-    console.error(`latexmk-deploy: ${error.message}`);
+  (code) => {
+    process.exitCode = code;
+  },
+  (error: unknown) => {
+    console.error(`latexmk-deploy: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 2;
   },
 );

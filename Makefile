@@ -1,20 +1,25 @@
-.PHONY: build test fmt vet bundle-slim bundle-full
+.PHONY: build test fmt format-check lint vet typecheck bundle-slim bundle-full
 
 build:
-	go build ./packages/cli/cmd/latexmk
-	go build ./packages/server/cmd/server
-
-fmt:
-	gofmt -w packages/cli packages/server
-
-vet:
-	go vet ./packages/cli/... ./packages/server/...
+	pnpm build
 
 test:
-	go test ./packages/cli/... ./packages/server/...
+	pnpm test
+
+fmt:
+	pnpm format
+
+format-check:
+	pnpm format:check
+
+lint vet:
+	pnpm lint
+
+typecheck:
+	pnpm typecheck
 
 bundle-slim:
-	corepack pnpm bundle:slim
+	pnpm bundle:slim
 
 bundle-full:
-	corepack pnpm bundle:full
+	pnpm bundle:full

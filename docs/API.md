@@ -60,7 +60,7 @@ uncontrolled `latexmk` arguments.
 HTTP-level input failures return a 4xx JSON body:
 
 ```json
-{"error":"description"}
+{ "error": "description" }
 ```
 
 Once a job enters compilation, the server returns HTTP 200 and
@@ -115,7 +115,7 @@ per-blob size, project size, session capacity, and other limits; it creates a
 Response:
 
 ```json
-{"uploadId":"upl_…","missing":["…"],"expiresAt":"2026-07-16T00:15:00Z"}
+{ "uploadId": "upl_…", "missing": ["…"], "expiresAt": "2026-07-16T00:15:00Z" }
 ```
 
 ### `PUT /v1/uploads/{uploadId}/blobs/{sha256}`
@@ -171,7 +171,7 @@ an administrator; database-token permissions follow the user's `role`.
 ### `POST /v1/admin/users`
 
 ```json
-{"name":"Researcher A","email":"a@example.edu","role":"member"}
+{ "name": "Researcher A", "email": "a@example.edu", "role": "member" }
 ```
 
 ### `GET /v1/admin/users`
@@ -181,13 +181,13 @@ Returns `{"users":[...]}`.
 ### `PATCH /v1/admin/users/{id}`
 
 ```json
-{"enabled":false}
+{ "enabled": false }
 ```
 
 ### `POST /v1/admin/users/{id}/tokens`
 
 ```json
-{"name":"laptop"}
+{ "name": "laptop" }
 ```
 
 The plaintext token is returned only once. The database stores only its SHA-256

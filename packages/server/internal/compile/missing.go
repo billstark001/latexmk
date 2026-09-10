@@ -17,7 +17,9 @@ const (
 )
 
 var missingFilePatterns = []*regexp.Regexp{
-	regexp.MustCompile("(?i)(?:latex error: file|package [^\\r\\n]* error: file)\\s+[`'\"]([^`'\"\\r\\n]+)[`'\"]\\s+not found"),
+	regexp.MustCompile(
+		"(?i)(?:latex error: file|package [^\\r\\n]* error: file)\\s+[`'\"]([^`'\"\\r\\n]+)[`'\"]\\s+not found",
+	),
 	regexp.MustCompile("(?i)i can't find file\\s+[`'\"]([^`'\"\\r\\n]+)[`'\"]"),
 }
 

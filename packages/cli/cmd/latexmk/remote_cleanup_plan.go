@@ -44,8 +44,12 @@ type remoteCleanupOutput struct {
 	Report    protocol.CleanupReport `json:"report"`
 }
 
-func createRemoteCleanupPlan(server, projectID, scope string, report protocol.CleanupReport) (remoteCleanupPlan, error) {
-	if report.ProjectID != projectID || report.Scope != scope || !report.DryRun || !validCleanupPlanDigest(report.PlanDigest) {
+func createRemoteCleanupPlan(
+	server, projectID, scope string,
+	report protocol.CleanupReport,
+) (remoteCleanupPlan, error) {
+	if report.ProjectID != projectID || report.Scope != scope || !report.DryRun ||
+		!validCleanupPlanDigest(report.PlanDigest) {
 		return remoteCleanupPlan{}, errors.New("server returned an invalid cleanup preview")
 	}
 	idBytes := make([]byte, 16)
@@ -53,7 +57,17 @@ func createRemoteCleanupPlan(server, projectID, scope string, report protocol.Cl
 		return remoteCleanupPlan{}, err
 	}
 	now := time.Now().UTC()
-	plan := remoteCleanupPlan{Version: cleanupPlanVersion, Kind: "remote", ID: hex.EncodeToString(idBytes), Server: server, ProjectID: projectID, Scope: scope, PlanDigest: report.PlanDigest, CreatedAt: now, ExpiresAt: now.Add(cleanupPlanTTL)}
+	plan := remoteCleanupPlan{
+		Version:    cleanupPlanVersion,
+		Kind:       "remote",
+		ID:         hex.EncodeToString(idBytes),
+		Server:     server,
+		ProjectID:  projectID,
+		Scope:      scope,
+		PlanDigest: report.PlanDigest,
+		CreatedAt:  now,
+		ExpiresAt:  now.Add(cleanupPlanTTL),
+	}
 	if !validRemoteCleanupPlan(plan, plan.ID) {
 		return remoteCleanupPlan{}, errors.New("remote cleanup plan contents are invalid")
 	}
@@ -170,11 +184,17 @@ func loadRemoteCleanupPlan(planID string) (remoteCleanupPlan, string, error) {
 }
 
 func validRemoteCleanupPlan(plan remoteCleanupPlan, id string) bool {
-	if plan.Version != cleanupPlanVersion || plan.Kind != "remote" || plan.ID != id || !validCleanupPlanDigest(plan.PlanDigest) {
+	if plan.Version != cleanupPlanVersion || plan.Kind != "remote" || plan.ID != id ||
+		!validCleanupPlanDigest(plan.PlanDigest) {
 		return false
 	}
 	parsed, err := url.Parse(plan.Server)
-	if err != nil || plan.Server != strings.TrimRight(strings.TrimSpace(plan.Server), "/") || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if err != nil || plan.Server != strings.TrimRight(strings.TrimSpace(plan.Server), "/") ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.Host == "" ||
+		parsed.User != nil ||
+		parsed.RawQuery != "" ||
+		parsed.Fragment != "" {
 		return false
 	}
 	if plan.Scope != "results" && plan.Scope != "snapshot" && plan.Scope != "project" && plan.Scope != "cache" {
@@ -192,7 +212,8 @@ func validRemoteCleanupProjectID(value string) bool {
 		return false
 	}
 	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' ||
+			r == '-' {
 			continue
 		}
 		return false

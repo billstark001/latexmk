@@ -14,11 +14,11 @@ node packages/deploy/dist/index.js bundle \
   --out dist/railway-serverless
 ```
 
-| Preset | Intended use | Compile / queue | State cache | Retention |
-|---|---|---:|---:|---:|
-| `railway-serverless` | Short-lived Railway instance, low-to-medium use | 1 / 2 | 256 MiB tmpfs | results 24 h; snapshots/blobs 48 h |
-| `lightsail-tokyo` | Always-on 2 GiB Lightsail instance in Tokyo | 1 / 12 | 3 GiB volume | 7 days |
-| `railway` | Always-on Railway service | 1 / 5 | 512 MiB volume | 72 h |
+| Preset               | Intended use                                    | Compile / queue |    State cache |                          Retention |
+| -------------------- | ----------------------------------------------- | --------------: | -------------: | ---------------------------------: |
+| `railway-serverless` | Short-lived Railway instance, low-to-medium use |           1 / 2 |  256 MiB tmpfs | results 24 h; snapshots/blobs 48 h |
+| `lightsail-tokyo`    | Always-on 2 GiB Lightsail instance in Tokyo     |          1 / 12 |   3 GiB volume |                             7 days |
+| `railway`            | Always-on Railway service                       |           1 / 5 | 512 MiB volume |                               72 h |
 
 All three presets keep a single compiler running at a time. This is deliberate:
 XeLaTeX, Biber, TikZ, large images, and CJK fonts can transiently consume far
@@ -59,33 +59,33 @@ CPU, memory, and temporary-disk requirements.
 
 ## Important environment variables
 
-| Variable | Default |
-|---|---|
-| `PORT` | `8080` |
-| `LATEXMK_AUTH_MODE` | `token` |
-| `LATEXMK_API_TOKEN_FILE` | empty; mutually exclusive with `LATEXMK_API_TOKEN` |
-| `LATEXMK_IMAGE_PROFILE` | `development` |
-| `LATEXMK_ENGINES` | `xelatex,lualatex,pdflatex` |
-| `LATEXMK_COMPILE_TIMEOUT` | `2m` |
-| `LATEXMK_MAX_UPLOAD_BYTES` | `64MiB` per v2 blob |
-| `LATEXMK_MAX_EXPANDED_BYTES` | `256MiB` per project |
-| `LATEXMK_MAX_ARTIFACT_BYTES` | `128MiB` |
-| `LATEXMK_MAX_FILES` | `10000` |
-| `LATEXMK_MAX_CONCURRENT_COMPILES` | `CPU/2`, minimum 1 |
-| `LATEXMK_MAX_QUEUED_JOBS` | `100` |
-| `LATEXMK_MAX_UPLOAD_SESSIONS` | `64` |
-| `LATEXMK_MAX_LOG_BYTES` | `8MiB` per stream |
-| `LATEXMK_MAX_STATE_BYTES` | `2GiB` |
-| `LATEXMK_RESULT_RETENTION` | `168h` |
-| `LATEXMK_SNAPSHOT_RETENTION` | `168h` |
-| `LATEXMK_BLOB_RETENTION` | `168h` |
-| `LATEXMK_STATE_SWEEP_INTERVAL` | `1h` |
-| `LATEXMK_ALLOW_SHELL_ESCAPE` | `false` |
-| `LATEXMK_ENABLE_LEGACY_COMPILE` | `false` |
-| `LATEXMK_TEMP_DIR` | system temporary directory |
-| `LATEXMK_STATE_DIR` | `/tmp/latexmk-state` |
-| `LATEXMK_DATABASE_MODE` | `postgres` (`pglite` is supported) |
-| `LATEXMK_CORS_ORIGINS` | empty (same-origin); comma-separated exact Dashboard origins |
+| Variable                          | Default                                                      |
+| --------------------------------- | ------------------------------------------------------------ |
+| `PORT`                            | `8080`                                                       |
+| `LATEXMK_AUTH_MODE`               | `token`                                                      |
+| `LATEXMK_API_TOKEN_FILE`          | empty; mutually exclusive with `LATEXMK_API_TOKEN`           |
+| `LATEXMK_IMAGE_PROFILE`           | `development`                                                |
+| `LATEXMK_ENGINES`                 | `xelatex,lualatex,pdflatex`                                  |
+| `LATEXMK_COMPILE_TIMEOUT`         | `2m`                                                         |
+| `LATEXMK_MAX_UPLOAD_BYTES`        | `64MiB` per v2 blob                                          |
+| `LATEXMK_MAX_EXPANDED_BYTES`      | `256MiB` per project                                         |
+| `LATEXMK_MAX_ARTIFACT_BYTES`      | `128MiB`                                                     |
+| `LATEXMK_MAX_FILES`               | `10000`                                                      |
+| `LATEXMK_MAX_CONCURRENT_COMPILES` | `CPU/2`, minimum 1                                           |
+| `LATEXMK_MAX_QUEUED_JOBS`         | `100`                                                        |
+| `LATEXMK_MAX_UPLOAD_SESSIONS`     | `64`                                                         |
+| `LATEXMK_MAX_LOG_BYTES`           | `8MiB` per stream                                            |
+| `LATEXMK_MAX_STATE_BYTES`         | `2GiB`                                                       |
+| `LATEXMK_RESULT_RETENTION`        | `168h`                                                       |
+| `LATEXMK_SNAPSHOT_RETENTION`      | `168h`                                                       |
+| `LATEXMK_BLOB_RETENTION`          | `168h`                                                       |
+| `LATEXMK_STATE_SWEEP_INTERVAL`    | `1h`                                                         |
+| `LATEXMK_ALLOW_SHELL_ESCAPE`      | `false`                                                      |
+| `LATEXMK_ENABLE_LEGACY_COMPILE`   | `false`                                                      |
+| `LATEXMK_TEMP_DIR`                | system temporary directory                                   |
+| `LATEXMK_STATE_DIR`               | `/tmp/latexmk-state`                                         |
+| `LATEXMK_DATABASE_MODE`           | `postgres` (`pglite` is supported)                           |
+| `LATEXMK_CORS_ORIGINS`            | empty (same-origin); comma-separated exact Dashboard origins |
 
 Invalid booleans, durations, byte sizes, resource limits, or CORS origins fail
 server startup instead of silently falling back. A CORS origin must be an exact

@@ -47,7 +47,12 @@ func New(targets []Target, interval, debounce time.Duration) (*Tracker, error) {
 		ordered = append(ordered, target)
 	}
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Name < ordered[j].Name })
-	tracker := &Tracker{targets: ordered, states: make(map[string]fileState, len(ordered)), interval: interval, debounce: debounce}
+	tracker := &Tracker{
+		targets:  ordered,
+		states:   make(map[string]fileState, len(ordered)),
+		interval: interval,
+		debounce: debounce,
+	}
 	for _, target := range ordered {
 		tracker.states[target.Path] = statFile(target.Path)
 	}

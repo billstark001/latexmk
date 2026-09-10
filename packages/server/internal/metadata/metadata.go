@@ -1,3 +1,4 @@
+// Package metadata reports service capabilities and installed toolchain versions.
 package metadata
 
 import (

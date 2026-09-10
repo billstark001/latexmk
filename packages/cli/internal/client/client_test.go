@@ -29,14 +29,18 @@ func TestUnpackResponseRejectsArtifactTraversal(t *testing.T) {
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 	result := []byte(`{"protocolVersion":1,"requestId":"req_test","success":true,"exitCode":0}`)
-	if err := tw.WriteHeader(&tar.Header{Name: "result.json", Mode: 0o644, Size: int64(len(result)), Typeflag: tar.TypeReg}); err != nil {
+	if err := tw.WriteHeader(
+		&tar.Header{Name: "result.json", Mode: 0o644, Size: int64(len(result)), Typeflag: tar.TypeReg},
+	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tw.Write(result); err != nil {
 		t.Fatal(err)
 	}
 	payload := []byte("bad")
-	if err := tw.WriteHeader(&tar.Header{Name: "artifacts/../../escape", Mode: 0o644, Size: int64(len(payload)), Typeflag: tar.TypeReg}); err != nil {
+	if err := tw.WriteHeader(
+		&tar.Header{Name: "artifacts/../../escape", Mode: 0o644, Size: int64(len(payload)), Typeflag: tar.TypeReg},
+	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tw.Write(payload); err != nil {
@@ -58,13 +62,19 @@ func TestUnpackResponseDoesNotInstallHashMismatch(t *testing.T) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	result := []byte(`{"protocolVersion":1,"requestId":"req_test","success":true,"exitCode":0,"artifacts":[{"path":"main.pdf","size":3,"sha256":"0000000000000000000000000000000000000000000000000000000000000000"}]}`)
-	if err := tw.WriteHeader(&tar.Header{Name: "result.json", Mode: 0o644, Size: int64(len(result)), Typeflag: tar.TypeReg}); err != nil {
+	result := []byte(
+		`{"protocolVersion":1,"requestId":"req_test","success":true,"exitCode":0,"artifacts":[{"path":"main.pdf","size":3,"sha256":"0000000000000000000000000000000000000000000000000000000000000000"}]}`,
+	)
+	if err := tw.WriteHeader(
+		&tar.Header{Name: "result.json", Mode: 0o644, Size: int64(len(result)), Typeflag: tar.TypeReg},
+	); err != nil {
 		t.Fatal(err)
 	}
 	_, _ = tw.Write(result)
 	payload := []byte("pdf")
-	if err := tw.WriteHeader(&tar.Header{Name: "artifacts/main.pdf", Mode: 0o644, Size: int64(len(payload)), Typeflag: tar.TypeReg}); err != nil {
+	if err := tw.WriteHeader(
+		&tar.Header{Name: "artifacts/main.pdf", Mode: 0o644, Size: int64(len(payload)), Typeflag: tar.TypeReg},
+	); err != nil {
 		t.Fatal(err)
 	}
 	_, _ = tw.Write(payload)
@@ -111,9 +121,17 @@ func TestJobMethodsUseStablePathsAndOrdering(t *testing.T) {
 				{ID: "job_a", ProjectID: "project", Status: "queued", CreatedAt: newer},
 			}})
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/jobs/job_a":
-			_ = json.NewEncoder(w).Encode(protocol.Job{ID: "job_a", ProjectID: "project", Status: "queued", CreatedAt: newer})
+			_ = json.NewEncoder(
+				w,
+			).Encode(
+				protocol.Job{ID: "job_a", ProjectID: "project", Status: "queued", CreatedAt: newer},
+			)
 		case r.Method == http.MethodDelete && r.URL.Path == "/v1/jobs/job_a":
-			_ = json.NewEncoder(w).Encode(protocol.Job{ID: "job_a", ProjectID: "project", Status: "cancelled", CreatedAt: newer})
+			_ = json.NewEncoder(
+				w,
+			).Encode(
+				protocol.Job{ID: "job_a", ProjectID: "project", Status: "cancelled", CreatedAt: newer},
+			)
 		default:
 			http.NotFound(w, r)
 		}
@@ -169,10 +187,15 @@ func TestArtifactListAndDownloadUseOpaqueIDAndHash(t *testing.T) {
 	logData := []byte("compiler log")
 	pdfHash := sha256.Sum256(pdf)
 	logHash := sha256.Sum256(logData)
-	result := protocol.CompileResult{ProtocolVersion: 2, RequestID: "job_result", Success: true, Artifacts: []protocol.Artifact{
-		{Path: "main.log", Size: int64(len(logData)), SHA256: hex.EncodeToString(logHash[:])},
-		{Path: "main.pdf", Size: int64(len(pdf)), SHA256: hex.EncodeToString(pdfHash[:])},
-	}}
+	result := protocol.CompileResult{
+		ProtocolVersion: 2,
+		RequestID:       "job_result",
+		Success:         true,
+		Artifacts: []protocol.Artifact{
+			{Path: "main.log", Size: int64(len(logData)), SHA256: hex.EncodeToString(logHash[:])},
+			{Path: "main.pdf", Size: int64(len(pdf)), SHA256: hex.EncodeToString(pdfHash[:])},
+		},
+	}
 	resultJSON, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +226,8 @@ func TestArtifactListAndDownloadUseOpaqueIDAndHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(artifacts) != 2 || len(artifacts[1].ID) != 32 || artifacts[1].Path != "main.pdf" || artifacts[1].MIMEType != "application/pdf" {
+	if len(artifacts) != 2 || len(artifacts[1].ID) != 32 || artifacts[1].Path != "main.pdf" ||
+		artifacts[1].MIMEType != "application/pdf" {
 		t.Fatalf("artifacts = %#v", artifacts)
 	}
 	root := filepath.Join(t.TempDir(), "output")
@@ -225,9 +249,14 @@ func TestLogsShareBoundedTailBudgetAcrossSources(t *testing.T) {
 	stderr := []byte("err1\nerr2\n")
 	compiler := []byte("a\nb\nc\nd\n")
 	compilerHash := sha256.Sum256(compiler)
-	result := protocol.CompileResult{ProtocolVersion: 2, RequestID: "job_logs", Success: false, Artifacts: []protocol.Artifact{
-		{Path: "main.log", Size: int64(len(compiler)), SHA256: hex.EncodeToString(compilerHash[:])},
-	}}
+	result := protocol.CompileResult{
+		ProtocolVersion: 2,
+		RequestID:       "job_logs",
+		Success:         false,
+		Artifacts: []protocol.Artifact{
+			{Path: "main.log", Size: int64(len(compiler)), SHA256: hex.EncodeToString(compilerHash[:])},
+		},
+	}
 	resultJSON, _ := json.Marshal(result)
 	archive := buildResultArchive(t, []tarEntry{
 		{name: "result.json", payload: resultJSON},
@@ -265,12 +294,21 @@ func TestLogsShareBoundedTailBudgetAcrossSources(t *testing.T) {
 }
 
 func TestDiagnosticsIndexKeepsRawLogLocations(t *testing.T) {
-	stdout := []byte("This is pdfTeX\n(./main.tex\n./main.tex:7: Undefined control sequence.\nl.7 \\badcommand\nLaTeX Warning: Citation `missing' undefined on input line 12.\n")
-	compiler := []byte("(./main.tex\n./main.tex:7: Undefined control sequence.\nl.7 \\badcommand\nLaTeX Warning: Citation `missing' undefined on input line 12.\n")
+	stdout := []byte(
+		"This is pdfTeX\n(./main.tex\n./main.tex:7: Undefined control sequence.\nl.7 \\badcommand\nLaTeX Warning: Citation `missing' undefined on input line 12.\n",
+	)
+	compiler := []byte(
+		"(./main.tex\n./main.tex:7: Undefined control sequence.\nl.7 \\badcommand\nLaTeX Warning: Citation `missing' undefined on input line 12.\n",
+	)
 	compilerHash := sha256.Sum256(compiler)
-	result := protocol.CompileResult{ProtocolVersion: 2, RequestID: "job_diagnostics", Success: false, Artifacts: []protocol.Artifact{
-		{Path: "main.log", Size: int64(len(compiler)), SHA256: hex.EncodeToString(compilerHash[:])},
-	}}
+	result := protocol.CompileResult{
+		ProtocolVersion: 2,
+		RequestID:       "job_diagnostics",
+		Success:         false,
+		Artifacts: []protocol.Artifact{
+			{Path: "main.log", Size: int64(len(compiler)), SHA256: hex.EncodeToString(compilerHash[:])},
+		},
+	}
 	resultJSON, _ := json.Marshal(result)
 	archive := buildResultArchive(t, []tarEntry{
 		{name: "result.json", payload: resultJSON},
@@ -298,14 +336,19 @@ func TestDiagnosticsIndexKeepsRawLogLocations(t *testing.T) {
 		t.Fatalf("diagnostics output = %#v", output)
 	}
 	errorDiagnostic := output.Diagnostics[0]
-	if errorDiagnostic.Severity != "error" || errorDiagnostic.File != "main.tex" || errorDiagnostic.FileInferred || errorDiagnostic.Line != 7 || errorDiagnostic.Context != `\badcommand` {
+	if errorDiagnostic.Severity != "error" || errorDiagnostic.File != "main.tex" || errorDiagnostic.FileInferred ||
+		errorDiagnostic.Line != 7 ||
+		errorDiagnostic.Context != `\badcommand` {
 		t.Fatalf("error diagnostic = %#v", errorDiagnostic)
 	}
-	if len(errorDiagnostic.LogLocations) != 2 || errorDiagnostic.LogLocations[0] != (LogLocation{Source: "stdout", Path: "stdout.log", StartLine: 3, EndLine: 4}) || errorDiagnostic.LogLocations[1] != (LogLocation{Source: "compiler", Path: "main.log", StartLine: 2, EndLine: 3}) {
+	if len(errorDiagnostic.LogLocations) != 2 ||
+		errorDiagnostic.LogLocations[0] != (LogLocation{Source: "stdout", Path: "stdout.log", StartLine: 3, EndLine: 4}) ||
+		errorDiagnostic.LogLocations[1] != (LogLocation{Source: "compiler", Path: "main.log", StartLine: 2, EndLine: 3}) {
 		t.Fatalf("error locations = %#v", errorDiagnostic.LogLocations)
 	}
 	warning := output.Diagnostics[1]
-	if warning.Severity != "warning" || warning.File != "main.tex" || !warning.FileInferred || warning.Line != 12 || len(warning.LogLocations) != 2 {
+	if warning.Severity != "warning" || warning.File != "main.tex" || !warning.FileInferred || warning.Line != 12 ||
+		len(warning.LogLocations) != 2 {
 		t.Fatalf("warning diagnostic = %#v", warning)
 	}
 }
@@ -336,7 +379,8 @@ func TestDiagnosticStreamIndexesClassicTeXErrorAsInferred(t *testing.T) {
 		t.Fatalf("diagnostics = %#v", parser.diagnostics)
 	}
 	diagnostic := parser.diagnostics[0]
-	if diagnostic.File != "chapters/body.tex" || !diagnostic.Inferred || diagnostic.Line != 23 || diagnostic.Context != `\usepackage{missing}` {
+	if diagnostic.File != "chapters/body.tex" || !diagnostic.Inferred || diagnostic.Line != 23 ||
+		diagnostic.Context != `\usepackage{missing}` {
 		t.Fatalf("diagnostic = %#v", diagnostic)
 	}
 	if diagnostic.Location != (LogLocation{Source: "compiler", Path: "main.log", StartLine: 2, EndLine: 4}) {
@@ -377,7 +421,9 @@ func TestResultStateErrorMarksQueuedResultUnavailable(t *testing.T) {
 
 func TestUnpackResponseRejectsProtocolBeforeWriting(t *testing.T) {
 	payload := []byte("pdf")
-	result := []byte(`{"protocolVersion":99,"requestId":"req_test","success":true,"exitCode":0,"artifacts":[{"path":"main.pdf","size":3,"sha256":"c35b21d6ca39aa7cc3b79a705d989f1a6e88b99ab43988d74048799e3db926a3"}]}`)
+	result := []byte(
+		`{"protocolVersion":99,"requestId":"req_test","success":true,"exitCode":0,"artifacts":[{"path":"main.pdf","size":3,"sha256":"c35b21d6ca39aa7cc3b79a705d989f1a6e88b99ab43988d74048799e3db926a3"}]}`,
+	)
 	archive := buildResultArchive(t, []tarEntry{
 		{name: "result.json", payload: result},
 		{name: "artifacts/main.pdf", payload: payload},
@@ -402,18 +448,47 @@ func TestCompileUsesQueuedIncrementalProtocol(t *testing.T) {
 	}
 	var planned protocol.UploadPlanRequest
 	var uploaded []byte
-	resultArchive := buildResultArchive(t, []tarEntry{{name: "result.json", payload: []byte(`{"protocolVersion":2,"requestId":"job_test","success":true,"exitCode":0,"inputFiles":["main.tex"]}`)}})
+	resultArchive := buildResultArchive(
+		t,
+		[]tarEntry{
+			{
+				name: "result.json",
+				payload: []byte(
+					`{"protocolVersion":2,"requestId":"job_test","success":true,"exitCode":0,"inputFiles":["main.tex"]}`,
+				),
+			},
+		},
+	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/meta":
-			_ = json.NewEncoder(w).Encode(protocol.Metadata{ProtocolVersion: 2, Capabilities: protocol.Capabilities{IncrementalUpload: true, QueuedJobs: true, DependencyInputs: true}})
+			_ = json.NewEncoder(
+				w,
+			).Encode(
+				protocol.Metadata{
+					ProtocolVersion: 2,
+					Capabilities: protocol.Capabilities{
+						IncrementalUpload: true,
+						QueuedJobs:        true,
+						DependencyInputs:  true,
+					},
+				},
+			)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/uploads/plans":
 			if err := json.NewDecoder(r.Body).Decode(&planned); err != nil {
 				t.Error(err)
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(protocol.UploadPlan{UploadID: "upl_test", Missing: []string{planned.Files[0].SHA256}, ExpiresAt: time.Now().Add(time.Minute)})
+			_ = json.NewEncoder(
+				w,
+			).Encode(
+				protocol.UploadPlan{
+					UploadID:  "upl_test",
+					Missing:   []string{planned.Files[0].SHA256},
+					ExpiresAt: time.Now().Add(time.Minute),
+				},
+			)
 		case r.Method == http.MethodPut && r.URL.Path == "/v1/uploads/upl_test/blobs/"+planned.Files[0].SHA256:
 			uploaded, _ = io.ReadAll(r.Body)
 			w.WriteHeader(http.StatusNoContent)
@@ -435,7 +510,16 @@ func TestCompileUsesQueuedIncrementalProtocol(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.ProjectRoot = root
-	output, err := client.Compile(context.Background(), protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex", Interaction: "nonstopmode"}, root)
+	output, err := client.Compile(
+		context.Background(),
+		protocol.CompileRequest{
+			ProtocolVersion: protocol.Version,
+			Entry:           "main.tex",
+			Engine:          "xelatex",
+			Interaction:     "nonstopmode",
+		},
+		root,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,18 +545,48 @@ func TestStartCompileReturnsImmutableJobWithoutPolling(t *testing.T) {
 		requests = append(requests, r.Method+" "+r.URL.Path)
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/meta":
-			_ = json.NewEncoder(w).Encode(protocol.Metadata{ProtocolVersion: 2, Capabilities: protocol.Capabilities{IncrementalUpload: true, QueuedJobs: true, DependencyInputs: true, NeedsFiles: true}})
+			_ = json.NewEncoder(
+				w,
+			).Encode(
+				protocol.Metadata{
+					ProtocolVersion: 2,
+					Capabilities: protocol.Capabilities{
+						IncrementalUpload: true,
+						QueuedJobs:        true,
+						DependencyInputs:  true,
+						NeedsFiles:        true,
+					},
+				},
+			)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/uploads/plans":
 			if err := json.NewDecoder(r.Body).Decode(&planned); err != nil {
 				t.Error(err)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(protocol.UploadPlan{UploadID: "upl_detach", Missing: []string{planned.Files[0].SHA256}, ExpiresAt: time.Now().Add(time.Minute)})
+			_ = json.NewEncoder(
+				w,
+			).Encode(
+				protocol.UploadPlan{
+					UploadID:  "upl_detach",
+					Missing:   []string{planned.Files[0].SHA256},
+					ExpiresAt: time.Now().Add(time.Minute),
+				},
+			)
 		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/v1/uploads/upl_detach/blobs/"):
 			_, _ = io.Copy(io.Discard, r.Body)
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/uploads/upl_detach/commit":
-			_ = json.NewEncoder(w).Encode(protocol.Job{ID: "job_detach", ProjectID: planned.ProjectID, SnapshotID: "snap_detach", Status: "queued", CreatedAt: time.Now()})
+			_ = json.NewEncoder(
+				w,
+			).Encode(
+				protocol.Job{
+					ID:         "job_detach",
+					ProjectID:  planned.ProjectID,
+					SnapshotID: "snap_detach",
+					Status:     "queued",
+					CreatedAt:  time.Now(),
+				},
+			)
 		default:
 			t.Errorf("detached compile made unexpected request: %s %s", r.Method, r.URL.Path)
 			http.NotFound(w, r)
@@ -484,7 +598,15 @@ func TestStartCompileReturnsImmutableJobWithoutPolling(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.ProjectRoot = root
-	out, err := c.StartCompile(context.Background(), protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex", Interaction: "nonstopmode"})
+	out, err := c.StartCompile(
+		context.Background(),
+		protocol.CompileRequest{
+			ProtocolVersion: protocol.Version,
+			Entry:           "main.tex",
+			Engine:          "xelatex",
+			Interaction:     "nonstopmode",
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +635,10 @@ func TestStartCompileRequiresQueuedCapabilities(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.ProjectRoot = root
-	_, err = c.StartCompile(context.Background(), protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex"})
+	_, err = c.StartCompile(
+		context.Background(),
+		protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex"},
+	)
 	var capabilityErr *CapabilityError
 	if !errors.As(err, &capabilityErr) || capabilityErr.Capability != "detached queued compilation" {
 		t.Fatalf("error = %#v", err)
@@ -528,7 +653,12 @@ func TestProjectManifestUsesCachedInputsForDynamicReferences(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "chapter.tex"), []byte("chapter"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := dependency.SaveCachedInputs(root, "main.tex", "xelatex", []string{"main.tex", "chapter.tex"}); err != nil {
+	if err := dependency.SaveCachedInputs(
+		root,
+		"main.tex",
+		"xelatex",
+		[]string{"main.tex", "chapter.tex"},
+	); err != nil {
 		t.Fatal(err)
 	}
 	c, err := New("http://127.0.0.1:1", "", time.Second, false)
@@ -651,7 +781,15 @@ func TestCompileLegacyArchiveExcludesUnrelatedFiles(t *testing.T) {
 	}
 	var uploaded []string
 	var receivedRequest protocol.CompileRequest
-	resultArchive := buildResultArchive(t, []tarEntry{{name: "result.json", payload: []byte(`{"protocolVersion":1,"requestId":"req_test","success":true,"exitCode":0}`)}})
+	resultArchive := buildResultArchive(
+		t,
+		[]tarEntry{
+			{
+				name:    "result.json",
+				payload: []byte(`{"protocolVersion":1,"requestId":"req_test","success":true,"exitCode":0}`),
+			},
+		},
+	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/meta":
@@ -665,7 +803,7 @@ func TestCompileLegacyArchiveExcludesUnrelatedFiles(t *testing.T) {
 			}
 			for {
 				part, err := reader.NextPart()
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) {
 					break
 				}
 				if err != nil {
@@ -696,7 +834,7 @@ func TestCompileLegacyArchiveExcludesUnrelatedFiles(t *testing.T) {
 				tarReader := tar.NewReader(gz)
 				for {
 					header, err := tarReader.Next()
-					if err == io.EOF {
+					if errors.Is(err, io.EOF) {
 						break
 					}
 					if err != nil {
@@ -722,7 +860,11 @@ func TestCompileLegacyArchiveExcludesUnrelatedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.ProjectRoot = root
-	output, err := c.Compile(context.Background(), protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex"}, root)
+	output, err := c.Compile(
+		context.Background(),
+		protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex"},
+		root,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -749,15 +891,37 @@ func TestCompileRetriesMissingFilesWithNewAllowedManifest(t *testing.T) {
 		}
 	}
 	responses := [][]byte{
-		buildResultArchive(t, []tarEntry{{name: "result.json", payload: []byte(`{"protocolVersion":1,"requestId":"req_first","success":false,"exitCode":12,"needsFiles":["needed.tex"]}`)}}),
-		buildResultArchive(t, []tarEntry{{name: "result.json", payload: []byte(`{"protocolVersion":1,"requestId":"req_second","success":true,"exitCode":0}`)}}),
+		buildResultArchive(
+			t,
+			[]tarEntry{
+				{
+					name: "result.json",
+					payload: []byte(
+						`{"protocolVersion":1,"requestId":"req_first","success":false,"exitCode":12,"needsFiles":["needed.tex"]}`,
+					),
+				},
+			},
+		),
+		buildResultArchive(
+			t,
+			[]tarEntry{
+				{
+					name:    "result.json",
+					payload: []byte(`{"protocolVersion":1,"requestId":"req_second","success":true,"exitCode":0}`),
+				},
+			},
+		),
 	}
 	var uploads [][]string
 	var requests []protocol.CompileRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/meta":
-			_ = json.NewEncoder(w).Encode(protocol.Metadata{ProtocolVersion: 1, Capabilities: protocol.Capabilities{NeedsFiles: true}})
+			_ = json.NewEncoder(
+				w,
+			).Encode(
+				protocol.Metadata{ProtocolVersion: 1, Capabilities: protocol.Capabilities{NeedsFiles: true}},
+			)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/compile":
 			req, files, err := readCompileMultipart(r)
 			if err != nil {
@@ -785,7 +949,11 @@ func TestCompileRetriesMissingFilesWithNewAllowedManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.ProjectRoot = root
-	output, err := c.Compile(context.Background(), protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex"}, root)
+	output, err := c.Compile(
+		context.Background(),
+		protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex"},
+		root,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -814,12 +982,26 @@ func TestCompileRefusesMissingFileOutsideLocalPolicy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("SECRET=value"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	response := buildResultArchive(t, []tarEntry{{name: "result.json", payload: []byte(`{"protocolVersion":1,"requestId":"req_failed","success":false,"exitCode":12,"needsFiles":[".env"]}`)}})
+	response := buildResultArchive(
+		t,
+		[]tarEntry{
+			{
+				name: "result.json",
+				payload: []byte(
+					`{"protocolVersion":1,"requestId":"req_failed","success":false,"exitCode":12,"needsFiles":[".env"]}`,
+				),
+			},
+		},
+	)
 	compileCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/meta":
-			_ = json.NewEncoder(w).Encode(protocol.Metadata{ProtocolVersion: 1, Capabilities: protocol.Capabilities{NeedsFiles: true}})
+			_ = json.NewEncoder(
+				w,
+			).Encode(
+				protocol.Metadata{ProtocolVersion: 1, Capabilities: protocol.Capabilities{NeedsFiles: true}},
+			)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/compile":
 			compileCalls++
 			w.Header().Set("Content-Type", "application/vnd.latexmk.result+tar.gz")
@@ -835,7 +1017,11 @@ func TestCompileRefusesMissingFileOutsideLocalPolicy(t *testing.T) {
 	}
 	c.ProjectRoot = root
 	c.Exclude = []string{".env"}
-	output, err := c.Compile(context.Background(), protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex"}, root)
+	output, err := c.Compile(
+		context.Background(),
+		protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex"},
+		root,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -852,13 +1038,27 @@ func TestCompileManifestModeDoesNotNegotiateMissingFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte("main"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	response := buildResultArchive(t, []tarEntry{{name: "result.json", payload: []byte(`{"protocolVersion":1,"requestId":"req_failed","success":false,"exitCode":12,"needsFiles":["extra.tex"]}`)}})
+	response := buildResultArchive(
+		t,
+		[]tarEntry{
+			{
+				name: "result.json",
+				payload: []byte(
+					`{"protocolVersion":1,"requestId":"req_failed","success":false,"exitCode":12,"needsFiles":["extra.tex"]}`,
+				),
+			},
+		},
+	)
 	compileCalls := 0
 	var received protocol.CompileRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/meta":
-			_ = json.NewEncoder(w).Encode(protocol.Metadata{ProtocolVersion: 1, Capabilities: protocol.Capabilities{NeedsFiles: true}})
+			_ = json.NewEncoder(
+				w,
+			).Encode(
+				protocol.Metadata{ProtocolVersion: 1, Capabilities: protocol.Capabilities{NeedsFiles: true}},
+			)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/compile":
 			compileCalls++
 			var err error
@@ -881,7 +1081,11 @@ func TestCompileManifestModeDoesNotNegotiateMissingFiles(t *testing.T) {
 	}
 	c.ProjectRoot = root
 	c.UploadMode = "manifest"
-	output, err := c.Compile(context.Background(), protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex"}, root)
+	output, err := c.Compile(
+		context.Background(),
+		protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex"},
+		root,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -906,7 +1110,11 @@ func TestCompileRejectsIncompleteDependenciesBeforeNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.ProjectRoot = root
-	_, err = c.Compile(context.Background(), protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex"}, root)
+	_, err = c.Compile(
+		context.Background(),
+		protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex", Engine: "xelatex"},
+		root,
+	)
 	if err == nil {
 		t.Fatal("expected dynamic dependency to block compilation")
 	}
@@ -938,7 +1146,13 @@ func TestWriteArtifactRejectsSymlinkParent(t *testing.T) {
 	}
 	payload := []byte("pdf")
 	digest := sha256.Sum256(payload)
-	err := writeArtifact(root, "linked/main.pdf", bytes.NewReader(payload), int64(len(payload)), hex.EncodeToString(digest[:]))
+	err := writeArtifact(
+		root,
+		"linked/main.pdf",
+		bytes.NewReader(payload),
+		int64(len(payload)),
+		hex.EncodeToString(digest[:]),
+	)
 	if err == nil {
 		t.Fatal("expected symlink parent rejection")
 	}
@@ -958,7 +1172,9 @@ func buildResultArchive(t *testing.T, entries []tarEntry) []byte {
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 	for _, entry := range entries {
-		if err := tw.WriteHeader(&tar.Header{Name: entry.name, Mode: 0o644, Size: int64(len(entry.payload)), Typeflag: tar.TypeReg}); err != nil {
+		if err := tw.WriteHeader(
+			&tar.Header{Name: entry.name, Mode: 0o644, Size: int64(len(entry.payload)), Typeflag: tar.TypeReg},
+		); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := tw.Write(entry.payload); err != nil {
@@ -983,7 +1199,7 @@ func readCompileMultipart(r *http.Request) (protocol.CompileRequest, []string, e
 	}
 	for {
 		part, err := reader.NextPart()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -1004,7 +1220,7 @@ func readCompileMultipart(r *http.Request) (protocol.CompileRequest, []string, e
 			tr := tar.NewReader(gz)
 			for {
 				header, err := tr.Next()
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) {
 					break
 				}
 				if err != nil {
@@ -1040,7 +1256,11 @@ func TestCompileCacheRequiresAdvertisedCapability(t *testing.T) {
 					http.Error(w, "unexpected", 500)
 					return
 				}
-				json.NewEncoder(w).Encode(protocol.Metadata{Capabilities: protocol.Capabilities{QueuedJobs: true, IncrementalUpload: true}})
+				if err := json.NewEncoder(w).Encode(protocol.Metadata{
+					Capabilities: protocol.Capabilities{QueuedJobs: true, IncrementalUpload: true},
+				}); err != nil {
+					t.Error(err)
+				}
 			}))
 			defer server.Close()
 			c, err := New(server.URL, "", time.Second, false)
@@ -1051,7 +1271,11 @@ func TestCompileCacheRequiresAdvertisedCapability(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(c.ProjectRoot, "main.tex"), []byte("hello"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			req := protocol.CompileRequest{Entry: "main.tex", Engine: "xelatex", Auxiliary: protocol.AuxiliaryOptions{Server: "reuse"}}
+			req := protocol.CompileRequest{
+				Entry:     "main.tex",
+				Engine:    "xelatex",
+				Auxiliary: protocol.AuxiliaryOptions{Server: "reuse"},
+			}
 			if detached {
 				_, err = c.StartCompile(context.Background(), req)
 			} else {

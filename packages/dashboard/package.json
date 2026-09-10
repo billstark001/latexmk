@@ -2,22 +2,23 @@
   "name": "@latexmk/dashboard",
   "version": "0.2.0",
   "private": true,
-	"type": "module",
+  "type": "module",
   "scripts": {
-	"dev": "vite",
-	"build": "tsc --noEmit && vite build",
-	"test": "tsc --noEmit",
-	"lint": "tsc --noEmit",
-	"clean": "rm -rf dist"
-	},
-	"dependencies": {
-		"@preact/signals": "^2.9.2",
-		"lucide-preact": "^0.468.0",
-		"preact": "^10.26.4"
-	},
-	"devDependencies": {
-		"@preact/preset-vite": "^2.10.1",
-		"typescript": "^5.7.3",
-		"vite": "^6.2.0"
-	}
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "test": "tsc --noEmit",
+    "lint": "oxlint --config ../../.oxlintrc.json --type-aware src vite.config.ts",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@preact/signals": "^2.11.2",
+    "lucide-preact": "^1.43.0",
+    "preact": "^10.29.8"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2"
+  }
 }

@@ -14,15 +14,22 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.5'
+          go-version: '1.27.x'
           cache-dependency-path: |
-            packages/cli/go.mod
-            packages/server/go.mod
+            packages/cli/go.sum
+            packages/server/go.sum
+            tools/go.sum
+      - uses: pnpm/action-setup@v6
+        with:
+          version: '12'
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
           cache: pnpm
-      - run: corepack enable pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
       - run: pnpm test
-      - run: go vet ./packages/cli/... ./packages/server/...
+      - run: pnpm --filter @latexmk/cli --filter @latexmk/server test:race
+      - run: pnpm build

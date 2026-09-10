@@ -6,6 +6,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,18 +15,24 @@ import (
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
 )
 
-func Write(path string, output compile.Output) error {
+func Write(path string, output compile.Output) (err error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { err = errors.Join(err, f.Close()) }()
 	gz := gzip.NewWriter(f)
 	gz.Name = ""
 	gz.ModTime = time.Unix(0, 0)
 	tw := tar.NewWriter(gz)
 	writeBytes := func(name string, data []byte) error {
-		header := &tar.Header{Name: name, Mode: 0o644, Size: int64(len(data)), ModTime: time.Unix(0, 0), Typeflag: tar.TypeReg}
+		header := &tar.Header{
+			Name:     name,
+			Mode:     0o644,
+			Size:     int64(len(data)),
+			ModTime:  time.Unix(0, 0),
+			Typeflag: tar.TypeReg,
+		}
 		if err := tw.WriteHeader(header); err != nil {
 			return err
 		}
@@ -51,7 +58,13 @@ func Write(path string, output compile.Output) error {
 		if err != nil {
 			return err
 		}
-		header := &tar.Header{Name: "artifacts/" + filepath.ToSlash(artifact.RelativePath), Mode: 0o644, Size: artifact.Size, ModTime: time.Unix(0, 0), Typeflag: tar.TypeReg}
+		header := &tar.Header{
+			Name:     "artifacts/" + filepath.ToSlash(artifact.RelativePath),
+			Mode:     0o644,
+			Size:     artifact.Size,
+			ModTime:  time.Unix(0, 0),
+			Typeflag: tar.TypeReg,
+		}
 		if err := tw.WriteHeader(header); err != nil {
 			_ = in.Close()
 			return err

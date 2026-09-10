@@ -1,3 +1,4 @@
+// Package config resolves CLI options, environment variables, and project configuration.
 package config
 
 import (

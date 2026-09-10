@@ -101,7 +101,7 @@ func (c *Client) Diagnostics(ctx context.Context, jobID string) (DiagnosticsOutp
 	if err != nil {
 		return DiagnosticsOutput{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	diagnostics, logs, incomplete, err := readDiagnostics(resp.Body, declared)
 	if err != nil {
 		return DiagnosticsOutput{}, err
@@ -117,7 +117,7 @@ func readDiagnostics(r io.Reader, declared map[string]protocol.Artifact) ([]Diag
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("open result gzip: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	tarReader := tar.NewReader(gz)
 	raw := make([]rawDiagnostic, 0, 16)
 	logs := make([]DiagnosticLog, 0, 4)
@@ -137,7 +137,7 @@ func readDiagnostics(r io.Reader, declared map[string]protocol.Artifact) ([]Diag
 		if archiveEntries > 20_000 || header.Size < 0 || header.Size > 512<<20 {
 			return nil, nil, false, errors.New("result archive exceeds safety limits")
 		}
-		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+		if header.Typeflag != tar.TypeReg {
 			return nil, nil, false, fmt.Errorf("unexpected result entry type for %q", header.Name)
 		}
 		source, path, expected, selected := classifyLogEntry(header.Name, "all", declared)
@@ -271,7 +271,10 @@ func (p *diagnosticStream) parseLine(line string) {
 			return
 		}
 	}
-	if match := sourceLinePattern.FindStringSubmatch(trimmed); match != nil && p.pending >= 0 && p.pending < len(p.diagnostics) {
+	if match := sourceLinePattern.FindStringSubmatch(
+		trimmed,
+	); match != nil && p.pending >= 0 &&
+		p.pending < len(p.diagnostics) {
 		lineNumber, err := strconv.Atoi(match[1])
 		if err == nil {
 			p.diagnostics[p.pending].Line = lineNumber
@@ -314,7 +317,10 @@ func (p *diagnosticStream) parseLine(line string) {
 	}
 	if strings.Contains(trimmed, "Fatal error occurred") {
 		p.add(rawDiagnostic{
-			Severity: "error", File: p.currentFile, Inferred: p.currentFile != "", Message: boundedDiagnosticText(trimmed),
+			Severity: "error",
+			File:     p.currentFile,
+			Inferred: p.currentFile != "",
+			Message:  boundedDiagnosticText(trimmed),
 			Location: p.location(p.lineNumber),
 		})
 	}
@@ -364,8 +370,13 @@ func mergeDiagnostics(raw []rawDiagnostic) ([]Diagnostic, bool) {
 		}
 		indices[key] = len(result)
 		result = append(result, Diagnostic{
-			Severity: item.Severity, File: item.File, FileInferred: item.Inferred, Line: item.Line, Message: item.Message,
-			Context: item.Context, LogLocations: []LogLocation{item.Location},
+			Severity:     item.Severity,
+			File:         item.File,
+			FileInferred: item.Inferred,
+			Line:         item.Line,
+			Message:      item.Message,
+			Context:      item.Context,
+			LogLocations: []LogLocation{item.Location},
 		})
 	}
 	return result, incomplete
@@ -405,7 +416,8 @@ func diagnosticFile(value string) string {
 	value = strings.TrimPrefix(value, "./")
 	clean := path.Clean(value)
 	windowsAbsolute := len(clean) >= 3 && clean[1] == ':' && clean[2] == '/'
-	if clean == "" || clean == "." || path.IsAbs(clean) || windowsAbsolute || clean == ".." || strings.HasPrefix(clean, "../") {
+	if clean == "" || clean == "." || path.IsAbs(clean) || windowsAbsolute || clean == ".." ||
+		strings.HasPrefix(clean, "../") {
 		return ""
 	}
 	return clean

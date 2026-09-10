@@ -38,7 +38,7 @@ Failure:
   "error": {
     "code": "not_found",
     "message": "server returned 404 Not Found: job not found",
-    "details": {"httpStatus": 404},
+    "details": { "httpStatus": 404 },
     "retryable": false
   }
 }

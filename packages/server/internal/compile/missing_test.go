@@ -10,7 +10,11 @@ import (
 func TestDetectMissingFilesFromTeXDiagnostics(t *testing.T) {
 	root := t.TempDir()
 	logPath := filepath.Join(root, "main.log")
-	if err := os.WriteFile(logPath, []byte("! Package pdftex.def Error: File `figures/plot.png' not found: using draft setting.\n"), 0o600); err != nil {
+	if err := os.WriteFile(
+		logPath,
+		[]byte("! Package pdftex.def Error: File `figures/plot.png' not found: using draft setting.\n"),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
 	got := detectMissingFiles(

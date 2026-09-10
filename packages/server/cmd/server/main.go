@@ -76,7 +76,17 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("server starting", "addr", cfg.Addr, "version", version, "profile", cfg.ImageProfile, "auth_mode", cfg.AuthMode)
+		logger.Info(
+			"server starting",
+			"addr",
+			cfg.Addr,
+			"version",
+			version,
+			"profile",
+			cfg.ImageProfile,
+			"auth_mode",
+			cfg.AuthMode,
+		)
 		errCh <- httpServer.ListenAndServe()
 	}()
 

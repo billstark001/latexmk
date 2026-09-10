@@ -96,12 +96,12 @@ func (m *Manager) readCompileCache(path string) (compileCacheRecord, error) {
 	if err != nil {
 		return record, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
 		return record, err
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	payload, err := io.ReadAll(io.LimitReader(gz, limit+1))
 	if err != nil {
 		return record, err
@@ -118,7 +118,9 @@ func (m *Manager) readCompileCache(path string) (compileCacheRecord, error) {
 	var total int64
 	seen := make(map[string]bool)
 	for _, file := range record.Files {
-		if !validProjectPath(file.Path) || filepath.ToSlash(filepath.Clean(file.Path)) != file.Path || !reusableAuxiliary(file.Path) || seen[file.Path] {
+		if !validProjectPath(file.Path) || filepath.ToSlash(filepath.Clean(file.Path)) != file.Path ||
+			!reusableAuxiliary(file.Path) ||
+			seen[file.Path] {
 			return record, errors.New("invalid cached auxiliary path")
 		}
 		seen[file.Path] = true
@@ -225,7 +227,12 @@ func (m *Manager) RestoreCompileCache(snapshot Snapshot, key, workspace string) 
 
 // SaveCompileCache publishes a complete successful generation atomically. An
 // older submitted job cannot replace a cache from a newer successful job.
-func (m *Manager) SaveCompileCache(snapshot Snapshot, key, workspace, jobID string, submitted time.Time, output compile.Output) (int, error) {
+func (m *Manager) SaveCompileCache(
+	snapshot Snapshot,
+	key, workspace, jobID string,
+	submitted time.Time,
+	output compile.Output,
+) (int, error) {
 	if !output.Result.Success || output.Result.TimedOut {
 		return 0, nil
 	}
@@ -295,7 +302,10 @@ func (m *Manager) SaveCompileCache(snapshot Snapshot, key, workspace, jobID stri
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if prior, err := m.readCompileCache(path); err == nil && (prior.Submitted.After(submitted) || (prior.Submitted.Equal(submitted) && prior.JobID > jobID)) {
+	if prior, err := m.readCompileCache(
+		path,
+	); err == nil &&
+		(prior.Submitted.After(submitted) || (prior.Submitted.Equal(submitted) && prior.JobID > jobID)) {
 		return 0, nil
 	}
 	var replaced int64
@@ -318,7 +328,7 @@ func (m *Manager) SaveCompileCache(snapshot Snapshot, key, workspace, jobID stri
 	if err != nil {
 		return 0, err
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	_, err = tmp.Write(buffer.Bytes())
 	closeErr := tmp.Close()
 	if err != nil {
@@ -383,7 +393,7 @@ func (m *Manager) CompileCacheStats(ownerID, projectID string) (int, int64, stri
 			return 0, 0, "", errors.New("invalid cache file")
 		}
 		total += info.Size()
-		fmt.Fprintf(hash, "%s\x00%d\x00%d\n", filepath.Base(path), info.Size(), info.ModTime().UnixNano())
+		_, _ = fmt.Fprintf(hash, "%s\x00%d\x00%d\n", filepath.Base(path), info.Size(), info.ModTime().UnixNano())
 	}
 	return len(paths), total, hex.EncodeToString(hash.Sum(nil)), nil
 }

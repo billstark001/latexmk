@@ -1,4 +1,4 @@
 interface:
-  display_name: "LaTeXmk Compile"
-  short_description: "Compile LaTeX projects with the remote latexmk CLI."
-  default_prompt: "Use $latexmk-compile to check the compiler service and build this LaTeX project."
+  display_name: 'LaTeXmk Compile'
+  short_description: 'Compile LaTeX projects with the remote latexmk CLI.'
+  default_prompt: 'Use $latexmk-compile to check the compiler service and build this LaTeX project.'

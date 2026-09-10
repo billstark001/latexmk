@@ -178,7 +178,11 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		return fail(err)
 	}
 	if opts.detach && (opts.watch || opts.dryRun || listOnly) {
-		return failAgentArguments("compile.start", opts.jsonOutput, errors.New("--detach cannot be combined with --watch, --dry-run, or files"))
+		return failAgentArguments(
+			"compile.start",
+			opts.jsonOutput,
+			errors.New("--detach cannot be combined with --watch, --dry-run, or files"),
+		)
 	}
 	if err := normalizeCompilePaths(&opts, cwd); err != nil {
 		if opts.detach {
@@ -206,7 +210,10 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		}
 		c.ProjectID = resolution.ID
 		if resolution.Created {
-			fmt.Fprintln(os.Stderr, "latexmk: created a local project ID in .latexmk-cache; run 'latexmk cache ignore' in Git projects")
+			fmt.Fprintln(
+				os.Stderr,
+				"latexmk: created a local project ID in .latexmk-cache; run 'latexmk cache ignore' in Git projects",
+			)
 		}
 	}
 	c.Exclude = opts.exclude
@@ -259,11 +266,22 @@ func runDetachedCompile(c *client.Client, request protocol.CompileRequest, opts 
 	for _, warning := range out.Warnings {
 		fmt.Fprintln(os.Stderr, "latexmk: warning:", warning)
 	}
-	fmt.Printf("job ID: %s\nproject ID: %s\nsnapshot ID: %s\nstatus: %s\n", out.Job.ID, out.Job.ProjectID, out.Job.SnapshotID, out.Job.Status)
+	fmt.Printf(
+		"job ID: %s\nproject ID: %s\nsnapshot ID: %s\nstatus: %s\n",
+		out.Job.ID,
+		out.Job.ProjectID,
+		out.Job.SnapshotID,
+		out.Job.Status,
+	)
 	return 0
 }
 
-func compileWithTimeout(parent context.Context, c *client.Client, request protocol.CompileRequest, opts compileOptions) (client.CompileOutput, error) {
+func compileWithTimeout(
+	parent context.Context,
+	c *client.Client,
+	request protocol.CompileRequest,
+	opts compileOptions,
+) (client.CompileOutput, error) {
 	ctx, cancel := context.WithTimeout(parent, opts.timeout)
 	defer cancel()
 	return c.Compile(ctx, request, opts.outDir)
@@ -286,12 +304,28 @@ func reportCompile(out client.CompileOutput, err error, opts compileOptions) int
 			_, _ = os.Stderr.Write(out.Stderr)
 		}
 		if cache := out.Result.CompileCache; cache != nil {
-			fmt.Fprintf(os.Stderr, "latexmk: compile cache=%s restored=%d stored=%d reason=%s\n", cache.Status, cache.RestoredFiles, cache.StoredFiles, cache.Reason)
+			fmt.Fprintf(
+				os.Stderr,
+				"latexmk: compile cache=%s restored=%d stored=%d reason=%s\n",
+				cache.Status,
+				cache.RestoredFiles,
+				cache.StoredFiles,
+				cache.Reason,
+			)
 			if cache.Warning != "" {
 				fmt.Fprintln(os.Stderr, "latexmk: compile cache:", cache.Warning)
 			}
 		}
-		fmt.Fprintf(os.Stderr, "latexmk: request=%s server=%s profile=%s engine=%s duration=%dms artifacts=%d\n", out.Result.RequestID, out.Result.ServerVersion, out.Result.ImageProfile, out.Result.Engine, out.Result.DurationMS, len(out.Result.Artifacts))
+		fmt.Fprintf(
+			os.Stderr,
+			"latexmk: request=%s server=%s profile=%s engine=%s duration=%dms artifacts=%d\n",
+			out.Result.RequestID,
+			out.Result.ServerVersion,
+			out.Result.ImageProfile,
+			out.Result.Engine,
+			out.Result.DurationMS,
+			len(out.Result.Artifacts),
+		)
 		if out.Result.StdoutTruncated || out.Result.StderrTruncated {
 			fmt.Fprintln(os.Stderr, "latexmk: warning: server truncated compiler output")
 		}
@@ -318,7 +352,13 @@ func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOpt
 	if err != nil {
 		return fail(fmt.Errorf("initialize watch manifest: %w", err))
 	}
-	fmt.Fprintf(os.Stderr, "latexmk: watching %d selected files (interval=%s debounce=%s)\n", len(files), opts.watchInterval, opts.watchDebounce)
+	fmt.Fprintf(
+		os.Stderr,
+		"latexmk: watching %d selected files (interval=%s debounce=%s)\n",
+		len(files),
+		opts.watchInterval,
+		opts.watchDebounce,
+	)
 	for {
 		refreshed, _, refreshErr := c.Manifest(request.Entry, request.Engine)
 		if refreshErr != nil {
@@ -344,7 +384,10 @@ func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOpt
 		}
 		if selectedFilesChanged(before, after) {
 			files = after
-			fmt.Fprintln(os.Stderr, "latexmk: selected files changed during compilation; scheduling another immutable compile")
+			fmt.Fprintln(
+				os.Stderr,
+				"latexmk: selected files changed during compilation; scheduling another immutable compile",
+			)
 			if !waitForContext(ctx, opts.watchDebounce) {
 				fmt.Fprintln(os.Stderr, "latexmk: watch stopped")
 				return 0
@@ -388,7 +431,13 @@ func watchTargets(opts compileOptions, files []projectarchive.File) []projectwat
 	}
 	if opts.manifestFile != "" {
 		if clean, err := dependency.NormalizeExplicitManifestPath(opts.manifestFile); err == nil {
-			targets = append(targets, projectwatch.Target{Name: "dependency manifest " + clean, Path: filepath.Join(opts.projectRoot, filepath.FromSlash(clean))})
+			targets = append(
+				targets,
+				projectwatch.Target{
+					Name: "dependency manifest " + clean,
+					Path: filepath.Join(opts.projectRoot, filepath.FromSlash(clean)),
+				},
+			)
 		}
 	}
 	if !opts.gitIgnore {
@@ -757,12 +806,29 @@ func printManifest(opts compileOptions) int {
 			return fail(fmt.Errorf("load dependency cache: %w", err))
 		}
 	}
-	result, err := dependency.SelectWithOptions(opts.entry, candidates, dependency.SelectionOptions{Mode: opts.uploadMode, ExplicitFiles: explicit, CachedFiles: cached, HistoryAvailable: historyAvailable})
+	result, err := dependency.SelectWithOptions(
+		opts.entry,
+		candidates,
+		dependency.SelectionOptions{
+			Mode:             opts.uploadMode,
+			ExplicitFiles:    explicit,
+			CachedFiles:      cached,
+			HistoryAvailable: historyAvailable,
+		},
+	)
 	if err != nil {
 		return fail(fmt.Errorf("select project dependencies: %w", err))
 	}
 	if opts.jsonOutput {
-		view := manifestView{ProjectRoot: opts.projectRoot, Entry: opts.entry, UploadMode: opts.uploadMode, Resolved: result.Resolved, Files: result.Files, Stats: result.Stats, Diagnostics: result.Diagnostics}
+		view := manifestView{
+			ProjectRoot: opts.projectRoot,
+			Entry:       opts.entry,
+			UploadMode:  opts.uploadMode,
+			Resolved:    result.Resolved,
+			Files:       result.Files,
+			Stats:       result.Stats,
+			Diagnostics: result.Diagnostics,
+		}
 		if err := json.NewEncoder(os.Stdout).Encode(view); err != nil {
 			return fail(err)
 		}
@@ -771,7 +837,15 @@ func printManifest(opts compileOptions) int {
 		}
 		return 0
 	}
-	fmt.Printf("project root: %s\nentry: %s\nupload mode: %s\nresolved: %t\nfiles: %d\nbytes: %d\n", opts.projectRoot, opts.entry, opts.uploadMode, result.Resolved, result.Stats.Files, result.Stats.Bytes)
+	fmt.Printf(
+		"project root: %s\nentry: %s\nupload mode: %s\nresolved: %t\nfiles: %d\nbytes: %d\n",
+		opts.projectRoot,
+		opts.entry,
+		opts.uploadMode,
+		result.Resolved,
+		result.Stats.Files,
+		result.Stats.Bytes,
+	)
 	for _, file := range result.Files {
 		fmt.Printf("%10d  %s  %s  (%s)\n", file.Size, file.SHA256, file.Path, file.Reason)
 	}
@@ -779,7 +853,10 @@ func printManifest(opts compileOptions) int {
 		fmt.Fprintf(os.Stderr, "latexmk: dependency: %s\n", dependency.FormatDiagnostic(diagnostic))
 	}
 	if !result.Resolved {
-		fmt.Fprintln(os.Stderr, "latexmk: dependency discovery has unresolved references; fix them or review --upload-mode all")
+		fmt.Fprintln(
+			os.Stderr,
+			"latexmk: dependency discovery has unresolved references; fix them or review --upload-mode all",
+		)
 		return 1
 	}
 	return 0
@@ -868,7 +945,16 @@ func runMeta(args []string, doctor bool) int {
 		_ = json.NewEncoder(os.Stdout).Encode(meta)
 		return 0
 	}
-	fmt.Printf("service: %s %s\nprotocol: %d\nprofile: %s\nauth: %s\ndatabase: %s\nengines: %s\n", meta.Service, meta.Version, meta.ProtocolVersion, meta.ImageProfile, meta.AuthMode, meta.Database, strings.Join(meta.Capabilities.Engines, ", "))
+	fmt.Printf(
+		"service: %s %s\nprotocol: %d\nprofile: %s\nauth: %s\ndatabase: %s\nengines: %s\n",
+		meta.Service,
+		meta.Version,
+		meta.ProtocolVersion,
+		meta.ImageProfile,
+		meta.AuthMode,
+		meta.Database,
+		strings.Join(meta.Capabilities.Engines, ", "),
+	)
 	for _, name := range []string{"latexmk", "xelatex", "lualatex", "pdflatex", "biber"} {
 		if v := meta.Toolchain[name]; v != "" {
 			fmt.Printf("%s: %s\n", name, v)
@@ -905,7 +991,10 @@ func runInit(args []string) int {
 	}
 	fmt.Println(path)
 	fmt.Fprintln(os.Stderr, "latexmk: recommended: run 'latexmk cache ignore' to protect the local project identity")
-	fmt.Fprintln(os.Stderr, "latexmk: warning: 'git clean -fdX' deletes ignored cache files; the next compile creates a new project ID")
+	fmt.Fprintln(
+		os.Stderr,
+		"latexmk: warning: 'git clean -fdX' deletes ignored cache files; the next compile creates a new project ID",
+	)
 	return 0
 }
 
@@ -952,7 +1041,20 @@ func runClean(args []string) int {
 	if dir == "." {
 		dir = "."
 	}
-	extensions := []string{".aux", ".bbl", ".bcf", ".blg", ".fdb_latexmk", ".fls", ".log", ".out", ".run.xml", ".synctex.gz", ".toc", ".xdv"}
+	extensions := []string{
+		".aux",
+		".bbl",
+		".bcf",
+		".blg",
+		".fdb_latexmk",
+		".fls",
+		".log",
+		".out",
+		".run.xml",
+		".synctex.gz",
+		".toc",
+		".xdv",
+	}
 	removed := 0
 	for _, ext := range extensions {
 		p := filepath.Join(dir, stem+ext)
@@ -1067,7 +1169,14 @@ func runRemoteClean(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	opts := remoteCleanOptions{server: cfg.Server, token: cfg.Token, timeout: cfg.Timeout, insecure: cfg.InsecureSkipVerify, projectRoot: cfg.ProjectRoot, projectID: cfg.ProjectID}
+	opts := remoteCleanOptions{
+		server:      cfg.Server,
+		token:       cfg.Token,
+		timeout:     cfg.Timeout,
+		insecure:    cfg.InsecureSkipVerify,
+		projectRoot: cfg.ProjectRoot,
+		projectID:   cfg.ProjectID,
+	}
 	if err := parseRemoteCleanArgs(args, &opts); err != nil {
 		return fail(err)
 	}
@@ -1089,7 +1198,11 @@ func runRemoteClean(args []string) int {
 	} else if opts.projectID == "" {
 		opts.projectID, err = client.ResolveProjectID(opts.projectRoot, false)
 		if errors.Is(err, client.ErrProjectIDNotFound) {
-			return fail(errors.New("this project has no local project ID; compile it once, or use --project-id/--legacy-project-id to clean older data"))
+			return fail(
+				errors.New(
+					"this project has no local project ID; compile it once, or use --project-id/--legacy-project-id to clean older data",
+				),
+			)
 		}
 	}
 	if err != nil {
@@ -1132,18 +1245,28 @@ func runRemoteClean(args []string) int {
 			return fail(err)
 		}
 		if opts.jsonOutput {
-			_ = json.NewEncoder(os.Stdout).Encode(remoteCleanupOutput{PlanID: plan.ID, ExpiresAt: &plan.ExpiresAt, Report: report})
+			_ = json.NewEncoder(
+				os.Stdout,
+			).Encode(
+				remoteCleanupOutput{PlanID: plan.ID, ExpiresAt: &plan.ExpiresAt, Report: report},
+			)
 			return 0
 		}
 		writeRemoteCleanupReport(report)
-		fmt.Printf("plan ID: %s\nexpires: %s\npreview only; apply with --plan-id %s --yes\n", plan.ID, plan.ExpiresAt.Format(time.RFC3339), plan.ID)
+		fmt.Printf(
+			"plan ID: %s\nexpires: %s\npreview only; apply with --plan-id %s --yes\n",
+			plan.ID,
+			plan.ExpiresAt.Format(time.RFC3339),
+			plan.ID,
+		)
 		return 0
 	}
 	report, err := c.CleanupProjectWithPlan(ctx, plan.ProjectID, plan.Scope, plan.PlanDigest)
 	if err != nil {
 		return fail(err)
 	}
-	if report.ProjectID != plan.ProjectID || report.Scope != plan.Scope || report.DryRun || report.PlanDigest != plan.PlanDigest {
+	if report.ProjectID != plan.ProjectID || report.Scope != plan.Scope || report.DryRun ||
+		report.PlanDigest != plan.PlanDigest {
 		return fail(errors.New("server returned an inconsistent cleanup result"))
 	}
 	if err := consumeRemoteCleanupPlan(planPath); err != nil {
@@ -1165,7 +1288,12 @@ func writeRemoteCleanupReport(report protocol.CleanupReport) {
 	}
 	fmt.Printf("project ID: %s\nscope: %s\ndry run: %t\n", report.ProjectID, report.Scope, report.DryRun)
 	if report.Scope == "snapshot" || report.Scope == "project" {
-		fmt.Printf("snapshot: %t (%d files, %d bytes)\n", report.SnapshotPresent, report.SnapshotFiles, report.SnapshotBytes)
+		fmt.Printf(
+			"snapshot: %t (%d files, %d bytes)\n",
+			report.SnapshotPresent,
+			report.SnapshotFiles,
+			report.SnapshotBytes,
+		)
 	}
 	if report.Scope == "results" || report.Scope == "project" {
 		fmt.Printf("results: %d (%d bytes)\n", report.Results, report.ResultBytes)

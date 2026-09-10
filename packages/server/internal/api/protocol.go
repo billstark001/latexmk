@@ -1,3 +1,4 @@
+// Package api defines request, result, and capability representations for the compiler service.
 package api
 
 import (

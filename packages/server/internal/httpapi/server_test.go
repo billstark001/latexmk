@@ -17,7 +17,18 @@ import (
 
 func newTestServer(t *testing.T, legacy bool) *Server {
 	t.Helper()
-	cfg := config.Config{AuthMode: "none", StateDir: t.TempDir(), Engines: []string{"xelatex"}, MaxFiles: 10, MaxUploadBytes: 1024, MaxExpandedBytes: 1024, MaxStateBytes: 4096, MaxQueuedJobs: 2, MaxConcurrentCompiles: 1, EnableLegacyCompile: legacy}
+	cfg := config.Config{
+		AuthMode:              "none",
+		StateDir:              t.TempDir(),
+		Engines:               []string{"xelatex"},
+		MaxFiles:              10,
+		MaxUploadBytes:        1024,
+		MaxExpandedBytes:      1024,
+		MaxStateBytes:         4096,
+		MaxQueuedJobs:         2,
+		MaxConcurrentCompiles: 1,
+		EnableLegacyCompile:   legacy,
+	}
 	projects, err := project.New(cfg, nil)
 	if err != nil {
 		t.Fatal(err)

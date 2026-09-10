@@ -21,11 +21,27 @@ import (
 
 func cacheFixture(t *testing.T) (*Manager, Snapshot, string) {
 	t.Helper()
-	m, err := New(config.Config{StateDir: t.TempDir(), MaxStateBytes: 1 << 20, MaxCompileCacheBytes: 4096, MaxFiles: 100, CompileCacheRetention: time.Hour}, nil)
+	m, err := New(
+		config.Config{
+			StateDir:              t.TempDir(),
+			MaxStateBytes:         1 << 20,
+			MaxCompileCacheBytes:  4096,
+			MaxFiles:              100,
+			CompileCacheRetention: time.Hour,
+		},
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := Snapshot{OwnerID: "alice", ProjectID: "paper", Files: []api.ProjectFile{{Path: "main.tex", SHA256: strings.Repeat("a", 64), Size: 1}, {Path: "refs.bib", SHA256: strings.Repeat("b", 64), Size: 1}}}
+	s := Snapshot{
+		OwnerID:   "alice",
+		ProjectID: "paper",
+		Files: []api.ProjectFile{
+			{Path: "main.tex", SHA256: strings.Repeat("a", 64), Size: 1},
+			{Path: "refs.bib", SHA256: strings.Repeat("b", 64), Size: 1},
+		},
+	}
 	key := CompileCacheKey(api.CompileRequest{Entry: "main.tex", Engine: "xelatex"}, api.Metadata{}, "")
 	return m, s, key
 }
@@ -42,7 +58,15 @@ func cacheOutput(t *testing.T, root string, data map[string]string) compile.Outp
 			t.Fatal(err)
 		}
 		hash := sha256.Sum256([]byte(content))
-		out.Files = append(out.Files, compile.File{RelativePath: name, AbsolutePath: path, Size: int64(len(content)), SHA256: hex.EncodeToString(hash[:])})
+		out.Files = append(
+			out.Files,
+			compile.File{
+				RelativePath: name,
+				AbsolutePath: path,
+				Size:         int64(len(content)),
+				SHA256:       hex.EncodeToString(hash[:]),
+			},
+		)
 	}
 	return out
 }
@@ -50,7 +74,17 @@ func cacheOutput(t *testing.T, root string, data map[string]string) compile.Outp
 func TestCompileCacheWarmStartAndInvalidation(t *testing.T) {
 	m, s, key := cacheFixture(t)
 	root := t.TempDir()
-	out := cacheOutput(t, root, map[string]string{"main.aux": "labels", "main.bbl": "bibliography", "main.pdf": "pdf", "main.fdb_latexmk": "old state", "main.fls": "old paths"})
+	out := cacheOutput(
+		t,
+		root,
+		map[string]string{
+			"main.aux":         "labels",
+			"main.bbl":         "bibliography",
+			"main.pdf":         "pdf",
+			"main.fdb_latexmk": "old state",
+			"main.fls":         "old paths",
+		},
+	)
 	if n, err := m.SaveCompileCache(s, key, root, "job1", time.Now(), out); err != nil || n != 2 {
 		t.Fatalf("save: %d %v", n, err)
 	}
@@ -164,7 +198,9 @@ func TestCompileCacheRejectsCorruptionAndDoesNotOverwriteSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	dst := t.TempDir()
-	os.WriteFile(filepath.Join(dst, "main.aux"), []byte("source"), 0600)
+	if err := os.WriteFile(filepath.Join(dst, "main.aux"), []byte("source"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if info := m.RestoreCompileCache(s, key, dst); info.Status != "miss" {
 		t.Fatal("overwrote source")
 	}
@@ -187,9 +223,15 @@ func TestCompileCacheRejectsCorruptionAndDoesNotOverwriteSources(t *testing.T) {
 		mutate(&copyRecord)
 		var buf bytes.Buffer
 		gz := gzip.NewWriter(&buf)
-		json.NewEncoder(gz).Encode(copyRecord)
-		gz.Close()
-		os.WriteFile(path, buf.Bytes(), 0600)
+		if err := json.NewEncoder(gz).Encode(copyRecord); err != nil {
+			t.Fatal(err)
+		}
+		if err := gz.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, buf.Bytes(), 0600); err != nil {
+			t.Fatal(err)
+		}
 		if info := m.RestoreCompileCache(s, key, t.TempDir()); info.Status != "miss" {
 			t.Fatal("invalid cache accepted")
 		}
@@ -229,7 +271,9 @@ func TestCompileCacheSymlinksQuotasExpiryAndCleanup(t *testing.T) {
 	}
 	path, _ := m.compileCachePath(s, key)
 	old := time.Now().Add(-2 * time.Hour)
-	os.Chtimes(path, old, old)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
 	if info := m.RestoreCompileCache(s, key, t.TempDir()); info.Status != "miss" {
 		t.Fatal("restored expired cache")
 	}

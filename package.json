@@ -2,16 +2,34 @@
   "name": "latexmk",
   "version": "0.2.0",
   "private": true,
-  "packageManager": "pnpm@11.13.1",
-  "engines": {
-    "node": ">=22"
-  },
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
     "clean": "pnpm -r clean",
     "bundle:slim": "pnpm --filter @latexmk/deploy build && node packages/deploy/dist/index.js bundle --profile slim --out dist/paas-slim",
-    "bundle:full": "pnpm --filter @latexmk/deploy build && node packages/deploy/dist/index.js bundle --profile full --out dist/paas-full"
+    "bundle:full": "pnpm --filter @latexmk/deploy build && node packages/deploy/dist/index.js bundle --profile full --out dist/paas-full",
+    "format": "oxfmt --write . && pnpm --filter @latexmk/cli --filter @latexmk/server format",
+    "format:check": "oxfmt --check . && pnpm --filter @latexmk/cli --filter @latexmk/server format:check",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "deps:update": "ncu --packageFile '{package.json,packages/*/package.json}' --upgrade && pnpm install"
+  },
+  "devDependencies": {
+    "cross-env": "^10.1.0",
+    "npm-check-updates": "^23.1.0",
+    "oxfmt": "^0.67.0",
+    "oxlint": "^1.82.0",
+    "oxlint-tsgolint": "^7.0.2001"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.x",
+      "onFail": "download"
+    }
+  },
+  "engines": {
+    "node": ">=24",
+    "pnpm": ">=12 <13"
   }
 }

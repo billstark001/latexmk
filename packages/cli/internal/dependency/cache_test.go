@@ -9,7 +9,12 @@ import (
 
 func TestDependencyCacheRoundTripIsScopedByEntryAndEngine(t *testing.T) {
 	root := t.TempDir()
-	if err := SaveCachedInputs(root, "main.tex", "xelatex", []string{"main.tex", "sections/body.tex", "main.tex"}); err != nil {
+	if err := SaveCachedInputs(
+		root,
+		"main.tex",
+		"xelatex",
+		[]string{"main.tex", "sections/body.tex", "main.tex"},
+	); err != nil {
 		t.Fatal(err)
 	}
 	inputs, found, err := LoadCachedInputs(root, "main.tex", "xelatex")

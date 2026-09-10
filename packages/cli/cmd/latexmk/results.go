@@ -120,7 +120,14 @@ func runLogs(args []string) int {
 		return 0
 	}
 	for _, entry := range logs.Entries {
-		fmt.Printf("== %s: %s (%d/%d bytes) ==\n%s", entry.Source, entry.Path, entry.ReturnedBytes, entry.TotalBytes, entry.Content)
+		fmt.Printf(
+			"== %s: %s (%d/%d bytes) ==\n%s",
+			entry.Source,
+			entry.Path,
+			entry.ReturnedBytes,
+			entry.TotalBytes,
+			entry.Content,
+		)
 		if entry.Content != "" && !strings.HasSuffix(entry.Content, "\n") {
 			fmt.Println()
 		}
@@ -165,9 +172,18 @@ func runDiagnostics(args []string) int {
 		}
 		locations := make([]string, 0, len(diagnostic.LogLocations))
 		for _, location := range diagnostic.LogLocations {
-			locations = append(locations, fmt.Sprintf("%s:%s:%d-%d", location.Source, location.Path, location.StartLine, location.EndLine))
+			locations = append(
+				locations,
+				fmt.Sprintf("%s:%s:%d-%d", location.Source, location.Path, location.StartLine, location.EndLine),
+			)
 		}
-		fmt.Printf("%s\t%s\t%s\t[%s]\n", diagnostic.Severity, position, diagnostic.Message, strings.Join(locations, ", "))
+		fmt.Printf(
+			"%s\t%s\t%s\t[%s]\n",
+			diagnostic.Severity,
+			position,
+			diagnostic.Message,
+			strings.Join(locations, ", "),
+		)
 	}
 	if diagnostics.Incomplete {
 		fmt.Fprintln(os.Stderr, "latexmk: diagnostic index is incomplete; inspect the raw logs")

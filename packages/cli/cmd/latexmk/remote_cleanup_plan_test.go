@@ -11,7 +11,12 @@ import (
 
 func TestRemoteCleanupPlanIsPrivateAndContainsNoToken(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	report := protocol.CleanupReport{ProjectID: "project-test", Scope: "results", DryRun: true, PlanDigest: strings.Repeat("a", 64)}
+	report := protocol.CleanupReport{
+		ProjectID:  "project-test",
+		Scope:      "results",
+		DryRun:     true,
+		PlanDigest: strings.Repeat("a", 64),
+	}
 	plan, err := createRemoteCleanupPlan("https://latex.example.edu", report.ProjectID, report.Scope, report)
 	if err != nil {
 		t.Fatal(err)

@@ -52,7 +52,14 @@ type Manager struct {
 	workers     sync.WaitGroup
 }
 
-func New(cfg config.Config, meta api.Metadata, runner *compile.Runner, projects *project.Manager, db *store.Postgres, logger *slog.Logger) *Manager {
+func New(
+	cfg config.Config,
+	meta api.Metadata,
+	runner *compile.Runner,
+	projects *project.Manager,
+	db *store.Postgres,
+	logger *slog.Logger,
+) *Manager {
 	return &Manager{
 		cfg: cfg, meta: meta, runner: runner, projects: projects, db: db, logger: logger,
 		// Cancellation is cooperative: a cancelled identifier can still be in
@@ -73,20 +80,46 @@ func (m *Manager) Start(ctx context.Context) {
 				rec, decodeErr := recordFromRow(job)
 				if decodeErr != nil {
 					now := time.Now().UTC()
-					_ = m.db.UpdateJob(ctx, job.ID, map[string]any{"status": "failed", "error": "queued job has no valid immutable snapshot; submit it again", "finished_at": &now})
-					m.logger.Warn("discarded queued job without immutable snapshot", "job_id", job.ID, "error", decodeErr)
+					_ = m.db.UpdateJob(
+						ctx,
+						job.ID,
+						map[string]any{
+							"status":      "failed",
+							"error":       "queued job has no valid immutable snapshot; submit it again",
+							"finished_at": &now,
+						},
+					)
+					m.logger.Warn(
+						"discarded queued job without immutable snapshot",
+						"job_id",
+						job.ID,
+						"error",
+						decodeErr,
+					)
 					continue
 				}
 				if err := m.projects.PinSnapshot(rec.Snapshot); err != nil {
 					now := time.Now().UTC()
-					_ = m.db.UpdateJob(ctx, job.ID, map[string]any{"status": "failed", "error": "queued job snapshot is invalid; submit it again", "finished_at": &now})
+					_ = m.db.UpdateJob(
+						ctx,
+						job.ID,
+						map[string]any{
+							"status":      "failed",
+							"error":       "queued job snapshot is invalid; submit it again",
+							"finished_at": &now,
+						},
+					)
 					m.logger.Warn("discarded queued job with invalid snapshot", "job_id", job.ID, "error", err)
 					continue
 				}
 				// A crash may leave a job marked running. It is safe to retry:
 				// every execution gets a new isolated workspace and archive.
 				if job.Status == "running" {
-					if err := m.db.UpdateJob(ctx, job.ID, map[string]any{"status": "queued", "started_at": nil}); err != nil {
+					if err := m.db.UpdateJob(
+						ctx,
+						job.ID,
+						map[string]any{"status": "queued", "started_at": nil},
+					); err != nil {
 						m.projects.ReleaseSnapshot(rec.Snapshot.ID)
 						m.logger.Error("could not reset running job for recovery", "job_id", job.ID, "error", err)
 						continue
@@ -112,7 +145,12 @@ func (m *Manager) Start(ctx context.Context) {
 	}()
 }
 
-func (m *Manager) Enqueue(ctx context.Context, ownerID string, snapshot project.Snapshot, request api.CompileRequest) (api.Job, error) {
+func (m *Manager) Enqueue(
+	ctx context.Context,
+	ownerID string,
+	snapshot project.Snapshot,
+	request api.CompileRequest,
+) (api.Job, error) {
 	if err := m.runner.ValidateRequest(request); err != nil {
 		return api.Job{}, err
 	}
@@ -147,7 +185,18 @@ func (m *Manager) Enqueue(ctx context.Context, ownerID string, snapshot project.
 		return api.Job{}, err
 	}
 	now := time.Now().UTC()
-	rec := record{Job: api.Job{ID: id, ProjectID: snapshot.ProjectID, SnapshotID: snapshot.ID, Status: "queued", CreatedAt: now}, OwnerID: ownerID, Request: request, Snapshot: snapshot}
+	rec := record{
+		Job: api.Job{
+			ID:         id,
+			ProjectID:  snapshot.ProjectID,
+			SnapshotID: snapshot.ID,
+			Status:     "queued",
+			CreatedAt:  now,
+		},
+		OwnerID:  ownerID,
+		Request:  request,
+		Snapshot: snapshot,
+	}
 	if err := m.save(ctx, rec); err != nil {
 		m.admissionMu.Unlock()
 		return api.Job{}, err
@@ -278,14 +327,22 @@ func (m *Manager) CleanupProject(ctx context.Context, ownerID, projectID, scope 
 	return m.cleanupProject(ctx, ownerID, projectID, scope, true, "")
 }
 
-func (m *Manager) CleanupProjectWithPlan(ctx context.Context, ownerID, projectID, scope, expectedDigest string) (api.CleanupReport, error) {
+func (m *Manager) CleanupProjectWithPlan(
+	ctx context.Context,
+	ownerID, projectID, scope, expectedDigest string,
+) (api.CleanupReport, error) {
 	if expectedDigest == "" {
 		return api.CleanupReport{}, errors.New("cleanup plan digest is required")
 	}
 	return m.cleanupProject(ctx, ownerID, projectID, scope, false, expectedDigest)
 }
 
-func (m *Manager) cleanupProject(ctx context.Context, ownerID, projectID, scope string, dryRun bool, expectedDigest string) (api.CleanupReport, error) {
+func (m *Manager) cleanupProject(
+	ctx context.Context,
+	ownerID, projectID, scope string,
+	dryRun bool,
+	expectedDigest string,
+) (api.CleanupReport, error) {
 	report := api.CleanupReport{ProjectID: projectID, Scope: scope, DryRun: dryRun}
 	if !project.ValidProjectID(projectID) {
 		return report, errors.New("project ID is invalid")
@@ -327,14 +384,21 @@ func (m *Manager) cleanupProject(ctx context.Context, ownerID, projectID, scope 
 		if len(report.ActiveJobs) > 0 && !dryRun {
 			return report, errors.New("project has active jobs; wait for them to finish or cancel queued jobs")
 		}
-		report.CompileCaches, report.CompileCacheBytes, report.CompileCacheDigest, err = m.projects.CompileCacheStats(ownerID, projectID)
+		report.CompileCaches, report.CompileCacheBytes, report.CompileCacheDigest, err = m.projects.CompileCacheStats(
+			ownerID,
+			projectID,
+		)
 		if err != nil {
 			return report, err
 		}
 	}
 	snapshotID := ""
 	if scope == "snapshot" || scope == "project" {
-		report.SnapshotPresent, report.SnapshotFiles, report.SnapshotBytes, err = m.projects.SnapshotStats(ctx, ownerID, projectID)
+		report.SnapshotPresent, report.SnapshotFiles, report.SnapshotBytes, err = m.projects.SnapshotStats(
+			ctx,
+			ownerID,
+			projectID,
+		)
 		if err != nil {
 			return report, err
 		}
@@ -396,7 +460,12 @@ func (m *Manager) cleanupProject(ctx context.Context, ownerID, projectID, scope 
 	return report, nil
 }
 
-func cleanupReportDigest(report api.CleanupReport, terminalIDs []string, resultTargets []cleanupResultTarget, snapshotID string) (string, error) {
+func cleanupReportDigest(
+	report api.CleanupReport,
+	terminalIDs []string,
+	resultTargets []cleanupResultTarget,
+	snapshotID string,
+) (string, error) {
 	report.DryRun = false
 	report.PlanDigest = ""
 	report.ReclaimedBytes = 0
@@ -427,7 +496,10 @@ func (m *Manager) projectRecords(ctx context.Context, ownerID, projectID string)
 		}
 		out := make([]record, 0, len(rows))
 		for _, row := range rows {
-			out = append(out, record{OwnerID: row.OwnerID, Job: api.Job{ID: row.ID, ProjectID: row.ProjectID, Status: row.Status}})
+			out = append(
+				out,
+				record{OwnerID: row.OwnerID, Job: api.Job{ID: row.ID, ProjectID: row.ProjectID, Status: row.Status}},
+			)
 		}
 		return out, nil
 	}
@@ -502,7 +574,11 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 		m.finish(ctx, rec, nil, "could not create compile workspace", false)
 		return
 	}
-	defer os.RemoveAll(root)
+	defer func() {
+		if err := os.RemoveAll(root); err != nil {
+			m.logger.Warn("could not remove compile workspace", "error", err)
+		}
+	}()
 	workspace := filepath.Join(root, "project")
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
 		m.finish(ctx, rec, nil, "could not initialize compile workspace", false)
@@ -525,7 +601,8 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	defer cancelCompile()
 	compileStarted := time.Now()
 	output := m.runner.Run(compileCtx, workspace, rec.Request, rec.Job.ID)
-	if cacheInfo != nil && cacheInfo.Status == "hit" && !output.Result.Success && !output.Result.TimedOut && compileCtx.Err() == nil {
+	if cacheInfo != nil && cacheInfo.Status == "hit" && !output.Result.Success && !output.Result.TimedOut &&
+		compileCtx.Err() == nil {
 		// Auxiliary files can refer to macros removed by an ordinary TeX edit.
 		// Retry once from the immutable source snapshot, within the same deadline.
 		cacheInfo.ColdRetry = true
@@ -553,7 +630,14 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 		return
 	}
 	if cacheInfo != nil && output.Result.Success && ctx.Err() == nil {
-		count, cacheErr := m.projects.SaveCompileCache(rec.Snapshot, cacheKey, workspace, rec.Job.ID, rec.Job.CreatedAt, output)
+		count, cacheErr := m.projects.SaveCompileCache(
+			rec.Snapshot,
+			cacheKey,
+			workspace,
+			rec.Job.ID,
+			rec.Job.CreatedAt,
+			output,
+		)
 		cacheInfo.StoredFiles = count
 		if cacheErr != nil {
 			cacheInfo.Warning = cacheErr.Error()
@@ -563,7 +647,13 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	m.finish(ctx, rec, &output.Result, output.Result.Error, true)
 }
 
-func (m *Manager) finish(ctx context.Context, rec record, result *api.CompileResult, message string, resultArchived bool) {
+func (m *Manager) finish(
+	ctx context.Context,
+	rec record,
+	result *api.CompileResult,
+	message string,
+	resultArchived bool,
+) {
 	now := time.Now().UTC()
 	if !resultArchived && result != nil && result.Success {
 		failed := *result
@@ -593,7 +683,15 @@ func (m *Manager) finish(ctx context.Context, rec record, result *api.CompileRes
 		return
 	}
 	m.projects.ReleaseSnapshot(rec.Snapshot.ID)
-	m.logger.Info("compile job finished", "job_id", rec.Job.ID, "status", rec.Job.Status, "duration_ms", resultDuration(result))
+	m.logger.Info(
+		"compile job finished",
+		"job_id",
+		rec.Job.ID,
+		"status",
+		rec.Job.Status,
+		"duration_ms",
+		resultDuration(result),
+	)
 }
 
 func (m *Manager) cancel(ctx context.Context, id, message string) error {
@@ -774,7 +872,23 @@ func (m *Manager) save(ctx context.Context, rec record) error {
 	if err != nil {
 		return err
 	}
-	return m.db.CreateJob(ctx, store.CompileJob{ID: rec.Job.ID, OwnerID: rec.OwnerID, ProjectID: rec.Job.ProjectID, SnapshotID: rec.Snapshot.ID, SnapshotManifest: snapshot, Status: rec.Job.Status, Request: request, Result: result, Error: rec.Job.Error, CreatedAt: rec.Job.CreatedAt, StartedAt: rec.Job.StartedAt, FinishedAt: rec.Job.FinishedAt})
+	return m.db.CreateJob(
+		ctx,
+		store.CompileJob{
+			ID:               rec.Job.ID,
+			OwnerID:          rec.OwnerID,
+			ProjectID:        rec.Job.ProjectID,
+			SnapshotID:       rec.Snapshot.ID,
+			SnapshotManifest: snapshot,
+			Status:           rec.Job.Status,
+			Request:          request,
+			Result:           result,
+			Error:            rec.Job.Error,
+			CreatedAt:        rec.Job.CreatedAt,
+			StartedAt:        rec.Job.StartedAt,
+			FinishedAt:       rec.Job.FinishedAt,
+		},
+	)
 }
 
 func marshalResult(result *api.CompileResult) ([]byte, error) {
@@ -789,7 +903,15 @@ func recordFromRow(row store.CompileJob) (record, error) {
 	if err := json.Unmarshal(row.Request, &request); err != nil {
 		return record{}, fmt.Errorf("decode queued job request: %w", err)
 	}
-	job := api.Job{ID: row.ID, ProjectID: row.ProjectID, Status: row.Status, CreatedAt: row.CreatedAt, StartedAt: row.StartedAt, FinishedAt: row.FinishedAt, Error: row.Error}
+	job := api.Job{
+		ID:         row.ID,
+		ProjectID:  row.ProjectID,
+		Status:     row.Status,
+		CreatedAt:  row.CreatedAt,
+		StartedAt:  row.StartedAt,
+		FinishedAt: row.FinishedAt,
+		Error:      row.Error,
+	}
 	if len(row.Result) > 0 {
 		var result api.CompileResult
 		if err := json.Unmarshal(row.Result, &result); err != nil {

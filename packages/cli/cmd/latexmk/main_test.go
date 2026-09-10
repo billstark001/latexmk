@@ -163,7 +163,16 @@ func TestParseCompileArgsUploadMode(t *testing.T) {
 
 func TestParseCompileArgsManifestFiles(t *testing.T) {
 	opts := compileOptions{timeout: time.Minute, uploadMode: "auto"}
-	args := []string{"--upload-mode", "manifest", "--manifest", ".latexmk-files", "--include-file", "chapter.tex", "--include-file=figure.pdf", "main.tex"}
+	args := []string{
+		"--upload-mode",
+		"manifest",
+		"--manifest",
+		".latexmk-files",
+		"--include-file",
+		"chapter.tex",
+		"--include-file=figure.pdf",
+		"main.tex",
+	}
 	if err := parseCompileArgs(args, &opts); err != nil {
 		t.Fatal(err)
 	}
@@ -176,8 +185,15 @@ func TestParseCompileArgsManifestFiles(t *testing.T) {
 }
 
 func TestParseCompileArgsWatchOptions(t *testing.T) {
-	opts := compileOptions{timeout: time.Minute, watchInterval: 500 * time.Millisecond, watchDebounce: 500 * time.Millisecond}
-	if err := parseCompileArgs([]string{"--watch", "--watch-interval", "25ms", "--watch-debounce=75ms", "main.tex"}, &opts); err != nil {
+	opts := compileOptions{
+		timeout:       time.Minute,
+		watchInterval: 500 * time.Millisecond,
+		watchDebounce: 500 * time.Millisecond,
+	}
+	if err := parseCompileArgs(
+		[]string{"--watch", "--watch-interval", "25ms", "--watch-debounce=75ms", "main.tex"},
+		&opts,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if !opts.watch || opts.watchInterval != 25*time.Millisecond || opts.watchDebounce != 75*time.Millisecond {
@@ -200,22 +216,34 @@ func TestParseCompileArgsDetach(t *testing.T) {
 }
 
 func TestCapabilityErrorUsesStableAgentCode(t *testing.T) {
-	code, details, retryable, exitCode := classifyAgentError(&client.CapabilityError{Capability: "detached queued compilation"})
-	if code != "unsupported_capability" || retryable || exitCode != 1 || details["capability"] != "detached queued compilation" {
+	code, details, retryable, exitCode := classifyAgentError(
+		&client.CapabilityError{Capability: "detached queued compilation"},
+	)
+	if code != "unsupported_capability" || retryable || exitCode != 1 ||
+		details["capability"] != "detached queued compilation" {
 		t.Fatalf("classification = %q %#v %t %d", code, details, retryable, exitCode)
 	}
 }
 
 func TestParseResultCommandArgs(t *testing.T) {
 	opts := resultCommandOptions{timeout: time.Minute, source: "all", tailLines: 200, maxBytes: 64 << 10}
-	if err := parseResultCommandArgs("logs", []string{"job_test", "--source", "compiler", "--tail", "25", "--max-bytes", "4096", "--json"}, &opts); err != nil {
+	if err := parseResultCommandArgs(
+		"logs",
+		[]string{"job_test", "--source", "compiler", "--tail", "25", "--max-bytes", "4096", "--json"},
+		&opts,
+	); err != nil {
 		t.Fatal(err)
 	}
-	if opts.jobID != "job_test" || opts.source != "compiler" || opts.tailLines != 25 || opts.maxBytes != 4096 || !opts.jsonOutput {
+	if opts.jobID != "job_test" || opts.source != "compiler" || opts.tailLines != 25 || opts.maxBytes != 4096 ||
+		!opts.jsonOutput {
 		t.Fatalf("log options = %#v", opts)
 	}
 	opts = resultCommandOptions{timeout: time.Minute}
-	if err := parseResultCommandArgs("artifacts.get", []string{"job_test", strings.Repeat("a", 32), "--out-dir", "build"}, &opts); err != nil {
+	if err := parseResultCommandArgs(
+		"artifacts.get",
+		[]string{"job_test", strings.Repeat("a", 32), "--out-dir", "build"},
+		&opts,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if opts.jobID != "job_test" || opts.artifactID != strings.Repeat("a", 32) || opts.outDir != "build" {
@@ -263,10 +291,13 @@ func TestWatchTargetsOnlyAddsSelectedFilesAndPolicyControls(t *testing.T) {
 	}
 	mainPath := filepath.Join(project, "main.tex")
 	bodyPath := filepath.Join(project, "sections", "body.tex")
-	targets := watchTargets(compileOptions{projectRoot: project, gitIgnore: true, manifestFile: ".latexmk-files"}, []projectarchive.File{
-		{Path: "main.tex", Source: mainPath},
-		{Path: "sections/body.tex", Source: bodyPath},
-	})
+	targets := watchTargets(
+		compileOptions{projectRoot: project, gitIgnore: true, manifestFile: ".latexmk-files"},
+		[]projectarchive.File{
+			{Path: "main.tex", Source: mainPath},
+			{Path: "sections/body.tex", Source: bodyPath},
+		},
+	)
 	paths := make(map[string]bool)
 	for _, target := range targets {
 		paths[target.Path] = true
@@ -295,7 +326,8 @@ func TestJobsListJSONUsesVersionedEnvelope(t *testing.T) {
 	older := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	newer := older.Add(time.Minute)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/jobs" || r.URL.Query().Get("limit") != "2" || r.Header.Get("Authorization") != "Bearer secret-token" {
+		if r.URL.Path != "/v1/jobs" || r.URL.Query().Get("limit") != "2" ||
+			r.Header.Get("Authorization") != "Bearer secret-token" {
 			http.Error(w, "unexpected request", http.StatusBadRequest)
 			return
 		}
@@ -306,7 +338,20 @@ func TestJobsListJSONUsesVersionedEnvelope(t *testing.T) {
 	}))
 	defer server.Close()
 	code, stdout, stderr := captureCommandOutput(t, func() int {
-		return run([]string{"latexmk", "jobs", "list", "--server", server.URL, "--token", "secret-token", "--limit", "2", "--json"})
+		return run(
+			[]string{
+				"latexmk",
+				"jobs",
+				"list",
+				"--server",
+				server.URL,
+				"--token",
+				"secret-token",
+				"--limit",
+				"2",
+				"--json",
+			},
+		)
 	})
 	if code != 0 || stderr != "" {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
@@ -329,7 +374,9 @@ func TestJobsListJSONUsesVersionedEnvelope(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if envelope.SchemaVersion != 1 || !envelope.OK || envelope.Command != "jobs.list" || envelope.Data.Count != 2 || envelope.Data.Limit != 2 || envelope.Data.Jobs[0].ID != "job_new" {
+	if envelope.SchemaVersion != 1 || !envelope.OK || envelope.Command != "jobs.list" || envelope.Data.Count != 2 ||
+		envelope.Data.Limit != 2 ||
+		envelope.Data.Jobs[0].ID != "job_new" {
 		t.Fatalf("envelope = %#v", envelope)
 	}
 }
@@ -344,7 +391,19 @@ func TestJobsJSONErrorIsStableAndDoesNotExposeToken(t *testing.T) {
 	}))
 	defer server.Close()
 	code, stdout, stderr := captureCommandOutput(t, func() int {
-		return run([]string{"latexmk", "jobs", "show", "job_missing", "--server", server.URL, "--token", "secret-token", "--json"})
+		return run(
+			[]string{
+				"latexmk",
+				"jobs",
+				"show",
+				"job_missing",
+				"--server",
+				server.URL,
+				"--token",
+				"secret-token",
+				"--json",
+			},
+		)
 	})
 	if code != 1 || stderr != "" {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
@@ -356,7 +415,9 @@ func TestJobsJSONErrorIsStableAndDoesNotExposeToken(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if envelope.OK || envelope.Command != "jobs.show" || envelope.Error == nil || envelope.Error.Code != "not_found" || envelope.Error.Retryable || envelope.Error.Details["httpStatus"] != float64(http.StatusNotFound) {
+	if envelope.OK || envelope.Command != "jobs.show" || envelope.Error == nil || envelope.Error.Code != "not_found" ||
+		envelope.Error.Retryable ||
+		envelope.Error.Details["httpStatus"] != float64(http.StatusNotFound) {
 		t.Fatalf("error envelope = %#v", envelope)
 	}
 }
@@ -380,10 +441,18 @@ func TestJobsInvalidArgumentsUseJSONError(t *testing.T) {
 
 func TestParseServerCache(t *testing.T) {
 	opts := compileOptions{timeout: time.Minute, watchInterval: time.Second, watchDebounce: time.Second}
-	if err := parseCompileArgs([]string{"--server-cache", "reuse", "--force", "main.tex"}, &opts); err != nil || opts.auxiliary.Server != "reuse" || !opts.force {
+	if err := parseCompileArgs(
+		[]string{"--server-cache", "reuse", "--force", "main.tex"},
+		&opts,
+	); err != nil || opts.auxiliary.Server != "reuse" ||
+		!opts.force {
 		t.Fatalf("parse %+v %v", opts, err)
 	}
-	if err := parseCompileArgs([]string{"--server-cache=none", "main.tex"}, &opts); err != nil || opts.auxiliary.Server != "none" {
+	if err := parseCompileArgs(
+		[]string{"--server-cache=none", "main.tex"},
+		&opts,
+	); err != nil ||
+		opts.auxiliary.Server != "none" {
 		t.Fatal("none override failed")
 	}
 	if err := parseCompileArgs([]string{"--server-cache=invalid", "main.tex"}, &opts); err == nil {

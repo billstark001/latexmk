@@ -36,13 +36,35 @@ printf 'INPUT main.tex\nOUTPUT main.aux\nOUTPUT main.pdf\n' > main.fls
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	cfg := config.Config{StateDir: t.TempDir(), TempDir: t.TempDir(), Engines: []string{"xelatex"}, MaxFiles: 100, MaxUploadBytes: 4096, MaxExpandedBytes: 4096, MaxArtifactBytes: 4096, MaxConcurrentCompiles: 1, MaxQueuedJobs: 20, MaxStateBytes: 1 << 20, MaxLogBytes: 4096, CompileTimeout: 5 * time.Second, ShutdownTimeout: time.Second, CompileCacheRetention: time.Hour, MaxCompileCacheBytes: 4096}
+	cfg := config.Config{
+		StateDir:              t.TempDir(),
+		TempDir:               t.TempDir(),
+		Engines:               []string{"xelatex"},
+		MaxFiles:              100,
+		MaxUploadBytes:        4096,
+		MaxExpandedBytes:      4096,
+		MaxArtifactBytes:      4096,
+		MaxConcurrentCompiles: 1,
+		MaxQueuedJobs:         20,
+		MaxStateBytes:         1 << 20,
+		MaxLogBytes:           4096,
+		CompileTimeout:        5 * time.Second,
+		ShutdownTimeout:       time.Second,
+		CompileCacheRetention: time.Hour,
+		MaxCompileCacheBytes:  4096,
+	}
 	projects, err := project.New(cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	m := New(cfg, api.Metadata{}, compile.NewRunner(cfg), projects, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	req := api.CompileRequest{ProtocolVersion: api.ProtocolVersion, Entry: "main.tex", Engine: "xelatex", Interaction: "nonstopmode", Auxiliary: api.AuxiliaryOptions{Server: "reuse"}}
+	req := api.CompileRequest{
+		ProtocolVersion: api.ProtocolVersion,
+		Entry:           "main.tex",
+		Engine:          "xelatex",
+		Interaction:     "nonstopmode",
+		Auxiliary:       api.AuxiliaryOptions{Server: "reuse"},
+	}
 	run := func(content string, request api.CompileRequest) api.Job {
 		t.Helper()
 		snapshot := commitTestSnapshot(t, projects, request, []byte(content))
@@ -61,11 +83,13 @@ printf 'INPUT main.tex\nOUTPUT main.aux\nOUTPUT main.pdf\n' > main.fls
 		return job
 	}
 	first := run("source", req)
-	if first.Status != "succeeded" || first.Result.CompileCache.Status != "miss" || first.Result.CompileCache.StoredFiles != 1 {
+	if first.Status != "succeeded" || first.Result.CompileCache.Status != "miss" ||
+		first.Result.CompileCache.StoredFiles != 1 {
 		t.Fatalf("first %+v %+v", first, first.Result.CompileCache)
 	}
 	second := run("edited source", req)
-	if second.Status != "succeeded" || second.Result.CompileCache.Status != "hit" || second.Result.CompileCache.RestoredFiles != 1 {
+	if second.Status != "succeeded" || second.Result.CompileCache.Status != "hit" ||
+		second.Result.CompileCache.RestoredFiles != 1 {
 		t.Fatalf("second %+v", second)
 	}
 	failed := run("FAIL", req)
@@ -78,7 +102,11 @@ printf 'INPUT main.tex\nOUTPUT main.aux\nOUTPUT main.pdf\n' > main.fls
 	}
 	forced := req
 	forced.Force = true
-	if job := run("fixed source", forced); job.Result.CompileCache.Status != "bypass" || job.Result.CompileCache.StoredFiles != 1 {
+	if job := run(
+		"fixed source",
+		forced,
+	); job.Result.CompileCache.Status != "bypass" ||
+		job.Result.CompileCache.StoredFiles != 1 {
 		t.Fatal("force did not rebuild cache")
 	}
 	retry := run("COLDONLY", req)
@@ -97,7 +125,13 @@ printf 'INPUT main.tex\nOUTPUT main.aux\nOUTPUT main.pdf\n' > main.fls
 	if preview.CompileCaches != 1 || preview.CompileCacheBytes == 0 {
 		t.Fatalf("preview %+v", preview)
 	}
-	if _, err := m.CleanupProjectWithPlan(context.Background(), "member", "paper", "cache", preview.PlanDigest); err != nil {
+	if _, err := m.CleanupProjectWithPlan(
+		context.Background(),
+		"member",
+		"paper",
+		"cache",
+		preview.PlanDigest,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if job := run("source", req); job.Result.CompileCache.Status != "miss" {

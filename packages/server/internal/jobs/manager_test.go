@@ -32,8 +32,20 @@ func TestQueueAcceptsMultipleJobsAndAllowsQueuedCancellation(t *testing.T) {
 	content := []byte("\\documentclass{article}")
 	digest := sha256.Sum256(content)
 	sha := hex.EncodeToString(digest[:])
-	request := api.CompileRequest{ProtocolVersion: api.ProtocolVersion, Entry: "main.tex", Engine: "xelatex", Interaction: "nonstopmode"}
-	plan, err := projects.Plan("member", api.UploadPlanRequest{ProjectID: "paper", Request: request, Files: []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}}})
+	request := api.CompileRequest{
+		ProtocolVersion: api.ProtocolVersion,
+		Entry:           "main.tex",
+		Engine:          "xelatex",
+		Interaction:     "nonstopmode",
+	}
+	plan, err := projects.Plan(
+		"member",
+		api.UploadPlanRequest{
+			ProjectID: "paper",
+			Request:   request,
+			Files:     []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +56,14 @@ func TestQueueAcceptsMultipleJobsAndAllowsQueuedCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := New(cfg, api.Metadata{}, compile.NewRunner(cfg), projects, nil, slog.New(slog.NewTextHandler(testWriter{t}, nil)))
+	manager := New(
+		cfg,
+		api.Metadata{},
+		compile.NewRunner(cfg),
+		projects,
+		nil,
+		slog.New(slog.NewTextHandler(testWriter{t}, nil)),
+	)
 	first, err := manager.Enqueue(context.Background(), "member", snapshot, request)
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +89,11 @@ func TestQueueAcceptsMultipleJobsAndAllowsQueuedCancellation(t *testing.T) {
 
 func TestQueuedTransitionCannotOverwriteCancellation(t *testing.T) {
 	cfg := config.Config{MaxConcurrentCompiles: 1, MaxQueuedJobs: 2}
-	manager := &Manager{cfg: cfg, jobs: make(map[string]record), logger: slog.New(slog.NewTextHandler(testWriter{t}, nil))}
+	manager := &Manager{
+		cfg:    cfg,
+		jobs:   make(map[string]record),
+		logger: slog.New(slog.NewTextHandler(testWriter{t}, nil)),
+	}
 	now := time.Now().UTC()
 	original := record{OwnerID: "member", Job: api.Job{ID: "job_race", Status: "queued", CreatedAt: now}}
 	manager.jobs[original.Job.ID] = original
@@ -113,7 +136,14 @@ func TestSuccessfulCompileRequiresArchivedResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := New(cfg, api.Metadata{}, compile.NewRunner(config.Config{MaxConcurrentCompiles: 1}), projects, nil, slog.New(slog.NewTextHandler(testWriter{t}, nil)))
+	manager := New(
+		cfg,
+		api.Metadata{},
+		compile.NewRunner(config.Config{MaxConcurrentCompiles: 1}),
+		projects,
+		nil,
+		slog.New(slog.NewTextHandler(testWriter{t}, nil)),
+	)
 	now := time.Now().UTC()
 	rec := record{OwnerID: "member", Job: api.Job{ID: "job_archive_failed", Status: "running", CreatedAt: now}}
 	if err := manager.save(context.Background(), rec); err != nil {
@@ -125,7 +155,8 @@ func TestSuccessfulCompileRequiresArchivedResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != "failed" || got.Error != "could not package compile result" || got.Result == nil || got.Result.Success {
+	if got.Status != "failed" || got.Error != "could not package compile result" || got.Result == nil ||
+		got.Result.Success {
 		t.Fatalf("job = %#v, want failed packaging status", got)
 	}
 }
@@ -140,9 +171,21 @@ func TestQueuedJobKeepsSnapshotCapturedAtEnqueue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := api.CompileRequest{ProtocolVersion: api.ProtocolVersion, Entry: "main.tex", Engine: "xelatex", Interaction: "nonstopmode"}
+	request := api.CompileRequest{
+		ProtocolVersion: api.ProtocolVersion,
+		Entry:           "main.tex",
+		Engine:          "xelatex",
+		Interaction:     "nonstopmode",
+	}
 	first := commitTestSnapshot(t, projects, request, []byte("first version"))
-	manager := New(cfg, api.Metadata{}, compile.NewRunner(cfg), projects, nil, slog.New(slog.NewTextHandler(testWriter{t}, nil)))
+	manager := New(
+		cfg,
+		api.Metadata{},
+		compile.NewRunner(cfg),
+		projects,
+		nil,
+		slog.New(slog.NewTextHandler(testWriter{t}, nil)),
+	)
 	job, err := manager.Enqueue(context.Background(), "member", first, request)
 	if err != nil {
 		t.Fatal(err)
@@ -192,22 +235,55 @@ func TestLegacyFinishedJobWithoutSnapshotRemainsReadable(t *testing.T) {
 }
 
 func TestCleanupPlanRejectsChangedTargets(t *testing.T) {
-	cfg := config.Config{StateDir: t.TempDir(), Engines: []string{"xelatex"}, MaxFiles: 10, MaxUploadBytes: 1024, MaxExpandedBytes: 1024, MaxConcurrentCompiles: 1, MaxQueuedJobs: 4, MaxStateBytes: 4096}
+	cfg := config.Config{
+		StateDir:              t.TempDir(),
+		Engines:               []string{"xelatex"},
+		MaxFiles:              10,
+		MaxUploadBytes:        1024,
+		MaxExpandedBytes:      1024,
+		MaxConcurrentCompiles: 1,
+		MaxQueuedJobs:         4,
+		MaxStateBytes:         4096,
+	}
 	projects, err := project.New(cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := api.CompileRequest{ProtocolVersion: api.ProtocolVersion, Entry: "main.tex", Engine: "xelatex", Interaction: "nonstopmode"}
+	request := api.CompileRequest{
+		ProtocolVersion: api.ProtocolVersion,
+		Entry:           "main.tex",
+		Engine:          "xelatex",
+		Interaction:     "nonstopmode",
+	}
 	commitTestSnapshot(t, projects, request, []byte("first version"))
-	manager := New(cfg, api.Metadata{}, compile.NewRunner(cfg), projects, nil, slog.New(slog.NewTextHandler(testWriter{t}, nil)))
+	manager := New(
+		cfg,
+		api.Metadata{},
+		compile.NewRunner(cfg),
+		projects,
+		nil,
+		slog.New(slog.NewTextHandler(testWriter{t}, nil)),
+	)
 	now := time.Now().UTC()
-	manager.jobs["job_first"] = record{OwnerID: "member", Job: api.Job{ID: "job_first", ProjectID: "paper", Status: "cancelled", CreatedAt: now, FinishedAt: &now}}
+	manager.jobs["job_first"] = record{
+		OwnerID: "member",
+		Job:     api.Job{ID: "job_first", ProjectID: "paper", Status: "cancelled", CreatedAt: now, FinishedAt: &now},
+	}
 	preview, err := manager.CleanupProject(context.Background(), "member", "paper", "project")
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager.jobs["job_second"] = record{OwnerID: "member", Job: api.Job{ID: "job_second", ProjectID: "paper", Status: "cancelled", CreatedAt: now, FinishedAt: &now}}
-	if _, err := manager.CleanupProjectWithPlan(context.Background(), "member", "paper", "project", preview.PlanDigest); err == nil {
+	manager.jobs["job_second"] = record{
+		OwnerID: "member",
+		Job:     api.Job{ID: "job_second", ProjectID: "paper", Status: "cancelled", CreatedAt: now, FinishedAt: &now},
+	}
+	if _, err := manager.CleanupProjectWithPlan(
+		context.Background(),
+		"member",
+		"paper",
+		"project",
+		preview.PlanDigest,
+	); err == nil {
 		t.Fatal("expected a changed target set to invalidate the cleanup plan")
 	}
 	if _, err := projects.Snapshot(context.Background(), "member", "paper"); err != nil {
@@ -216,16 +292,40 @@ func TestCleanupPlanRejectsChangedTargets(t *testing.T) {
 }
 
 func TestCleanupProjectBlocksActiveJobsAndAppliesExactPreview(t *testing.T) {
-	cfg := config.Config{StateDir: t.TempDir(), Engines: []string{"xelatex"}, MaxFiles: 10, MaxUploadBytes: 1024, MaxExpandedBytes: 1024, MaxConcurrentCompiles: 1, MaxQueuedJobs: 4, MaxStateBytes: 4096}
+	cfg := config.Config{
+		StateDir:              t.TempDir(),
+		Engines:               []string{"xelatex"},
+		MaxFiles:              10,
+		MaxUploadBytes:        1024,
+		MaxExpandedBytes:      1024,
+		MaxConcurrentCompiles: 1,
+		MaxQueuedJobs:         4,
+		MaxStateBytes:         4096,
+	}
 	projects, err := project.New(cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := api.CompileRequest{ProtocolVersion: api.ProtocolVersion, Entry: "main.tex", Engine: "xelatex", Interaction: "nonstopmode"}
+	request := api.CompileRequest{
+		ProtocolVersion: api.ProtocolVersion,
+		Entry:           "main.tex",
+		Engine:          "xelatex",
+		Interaction:     "nonstopmode",
+	}
 	commitTestSnapshot(t, projects, request, []byte("source"))
-	manager := New(cfg, api.Metadata{}, compile.NewRunner(cfg), projects, nil, slog.New(slog.NewTextHandler(testWriter{t}, nil)))
+	manager := New(
+		cfg,
+		api.Metadata{},
+		compile.NewRunner(cfg),
+		projects,
+		nil,
+		slog.New(slog.NewTextHandler(testWriter{t}, nil)),
+	)
 	now := time.Now().UTC()
-	manager.jobs["job_active"] = record{OwnerID: "member", Job: api.Job{ID: "job_active", ProjectID: "paper", Status: "queued", CreatedAt: now}}
+	manager.jobs["job_active"] = record{
+		OwnerID: "member",
+		Job:     api.Job{ID: "job_active", ProjectID: "paper", Status: "queued", CreatedAt: now},
+	}
 	preview, err := manager.CleanupProject(context.Background(), "member", "paper", "project")
 	if err != nil {
 		t.Fatal(err)
@@ -233,7 +333,13 @@ func TestCleanupProjectBlocksActiveJobsAndAppliesExactPreview(t *testing.T) {
 	if len(preview.ActiveJobs) != 1 {
 		t.Fatalf("active jobs = %v", preview.ActiveJobs)
 	}
-	if _, err := manager.CleanupProjectWithPlan(context.Background(), "member", "paper", "project", preview.PlanDigest); err == nil {
+	if _, err := manager.CleanupProjectWithPlan(
+		context.Background(),
+		"member",
+		"paper",
+		"project",
+		preview.PlanDigest,
+	); err == nil {
 		t.Fatal("expected active job to block project cleanup")
 	}
 	finished := time.Now().UTC()
@@ -245,14 +351,27 @@ func TestCleanupProjectBlocksActiveJobsAndAppliesExactPreview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report, err := manager.CleanupProjectWithPlan(context.Background(), "member", "paper", "project", preview.PlanDigest)
+	report, err := manager.CleanupProjectWithPlan(
+		context.Background(),
+		"member",
+		"paper",
+		"project",
+		preview.PlanDigest,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if report.DryRun || report.PlanDigest != preview.PlanDigest {
 		t.Fatalf("unexpected cleanup report: %#v", report)
 	}
-	if _, err := projects.Snapshot(context.Background(), "member", "paper"); !errors.Is(err, store.ErrProjectSnapshotNotFound) {
+	if _, err := projects.Snapshot(
+		context.Background(),
+		"member",
+		"paper",
+	); !errors.Is(
+		err,
+		store.ErrProjectSnapshotNotFound,
+	) {
 		t.Fatalf("snapshot still present: %v", err)
 	}
 	if _, err := manager.Get(context.Background(), "member", "job_active"); err == nil {
@@ -260,7 +379,12 @@ func TestCleanupProjectBlocksActiveJobsAndAppliesExactPreview(t *testing.T) {
 	}
 }
 
-func commitTestSnapshot(t *testing.T, projects *project.Manager, request api.CompileRequest, content []byte) project.Snapshot {
+func commitTestSnapshot(
+	t *testing.T,
+	projects *project.Manager,
+	request api.CompileRequest,
+	content []byte,
+) project.Snapshot {
 	t.Helper()
 	digest := sha256.Sum256(content)
 	sha := hex.EncodeToString(digest[:])

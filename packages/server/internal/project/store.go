@@ -93,8 +93,15 @@ func New(cfg config.Config, db *store.Postgres) (*Manager, error) {
 		return nil, fmt.Errorf("state directory already exceeds LATEXMK_MAX_STATE_BYTES (%d bytes)", cfg.MaxStateBytes)
 	}
 	return &Manager{
-		cfg: cfg, db: db, stateDir: stateDir,
-		sessions: make(map[string]session), snapshots: make(map[string]storedSnapshot), pins: make(map[string]pinnedSnapshot), stateBytes: stateBytes,
+		cfg:      cfg,
+		db:       db,
+		stateDir: stateDir,
+		sessions: make(
+			map[string]session,
+		),
+		snapshots:  make(map[string]storedSnapshot),
+		pins:       make(map[string]pinnedSnapshot),
+		stateBytes: stateBytes,
 	}, nil
 }
 
@@ -152,14 +159,26 @@ func (m *Manager) Plan(ownerID string, request api.UploadPlanRequest) (api.Uploa
 	missing := make([]string, 0, len(expected))
 	for digest, size := range expected {
 		if m.cfg.MaxUploadBytes > 0 && size > m.cfg.MaxUploadBytes {
-			return api.UploadPlan{}, fmt.Errorf("file %q exceeds the per-blob upload limit of %d bytes", filePathForDigest(request.Files, digest), m.cfg.MaxUploadBytes)
+			return api.UploadPlan{}, fmt.Errorf(
+				"file %q exceeds the per-blob upload limit of %d bytes",
+				filePathForDigest(request.Files, digest),
+				m.cfg.MaxUploadBytes,
+			)
 		}
 		if !m.hasBlob(ownerID, digest, size) {
 			missing = append(missing, digest)
 		}
 	}
 	sort.Strings(missing)
-	m.sessions[id] = session{id: id, ownerID: ownerID, projectID: request.ProjectID, request: request.Request, files: append([]api.ProjectFile(nil), request.Files...), expected: expected, expires: now.Add(uploadLifetime)}
+	m.sessions[id] = session{
+		id:        id,
+		ownerID:   ownerID,
+		projectID: request.ProjectID,
+		request:   request.Request,
+		files:     append([]api.ProjectFile(nil), request.Files...),
+		expected:  expected,
+		expires:   now.Add(uploadLifetime),
+	}
 	return api.UploadPlan{UploadID: id, Missing: missing, ExpiresAt: now.Add(uploadLifetime)}, nil
 }
 
@@ -213,7 +232,7 @@ func (m *Manager) PutBlob(ownerID, uploadID, digest string, body io.Reader) erro
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 	hash := sha256.New()
 	n, copyErr := io.Copy(io.MultiWriter(tmp, hash), io.LimitReader(body, size+1))
 	closeErr := tmp.Close()
@@ -297,7 +316,10 @@ func (m *Manager) Commit(ctx context.Context, ownerID, uploadID string) (Snapsho
 			release()
 			return Snapshot{}, api.CompileRequest{}, err
 		}
-		if err := m.db.SaveSnapshot(ctx, store.ProjectSnapshot{OwnerID: ownerID, ProjectID: s.projectID, Manifest: manifest}); err != nil {
+		if err := m.db.SaveSnapshot(
+			ctx,
+			store.ProjectSnapshot{OwnerID: ownerID, ProjectID: s.projectID, Manifest: manifest},
+		); err != nil {
 			release()
 			return Snapshot{}, api.CompileRequest{}, fmt.Errorf("save project snapshot: %w", err)
 		}
@@ -405,7 +427,12 @@ func NewSnapshot(ownerID, projectID string, files []api.ProjectFile) (Snapshot, 
 		return Snapshot{}, err
 	}
 	digest := sha256.Sum256(encoded)
-	return Snapshot{ID: "src_" + hex.EncodeToString(digest[:16]), OwnerID: ownerID, ProjectID: projectID, Files: canonical}, nil
+	return Snapshot{
+		ID:        "src_" + hex.EncodeToString(digest[:16]),
+		OwnerID:   ownerID,
+		ProjectID: projectID,
+		Files:     canonical,
+	}, nil
 }
 
 // ValidateSnapshot rejects a modified or incomplete snapshot manifest.
@@ -562,20 +589,32 @@ func (m *Manager) Prune(ctx context.Context) (int64, error) {
 	var reclaimed int64
 	var err error
 	if m.cfg.ResultRetention > 0 {
-		reclaimed, err = removeExpiredRegularFiles(filepath.Join(m.stateDir, "results"), now.Add(-m.cfg.ResultRetention), nil)
+		reclaimed, err = removeExpiredRegularFiles(
+			filepath.Join(m.stateDir, "results"),
+			now.Add(-m.cfg.ResultRetention),
+			nil,
+		)
 		if err != nil {
 			return 0, err
 		}
 	}
 	if m.cfg.CompileCacheRetention > 0 {
-		removed, removeErr := removeExpiredRegularFiles(filepath.Join(m.stateDir, "compile-cache"), now.Add(-m.cfg.CompileCacheRetention), nil)
+		removed, removeErr := removeExpiredRegularFiles(
+			filepath.Join(m.stateDir, "compile-cache"),
+			now.Add(-m.cfg.CompileCacheRetention),
+			nil,
+		)
 		if removeErr != nil {
 			return 0, removeErr
 		}
 		reclaimed += removed
 	}
 	if m.cfg.BlobRetention > 0 {
-		removed, removeErr := removeExpiredRegularFiles(filepath.Join(m.stateDir, "blobs"), now.Add(-m.cfg.BlobRetention), references)
+		removed, removeErr := removeExpiredRegularFiles(
+			filepath.Join(m.stateDir, "blobs"),
+			now.Add(-m.cfg.BlobRetention),
+			references,
+		)
 		if removeErr != nil {
 			return 0, removeErr
 		}
@@ -764,7 +803,7 @@ func (m *Manager) WriteResult(ownerID, jobID string, output compile.Output) (str
 	if err != nil {
 		return "", err
 	}
-	var reserve int64 = int64(len(output.Stdout) + len(output.Stderr) + 4096)
+	reserve := int64(len(output.Stdout) + len(output.Stderr) + 4096)
 	for _, file := range output.Files {
 		reserve += file.Size + 1024
 	}
@@ -814,7 +853,8 @@ func (m *Manager) hasBlob(ownerID, digest string, size int64) bool {
 
 func safeDestination(root, rel string) (string, error) {
 	clean := filepath.Clean(filepath.FromSlash(rel))
-	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+	if clean == "." || filepath.IsAbs(clean) || clean == ".." ||
+		strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", errors.New("project path escapes workspace")
 	}
 	rootAbs, err := filepath.Abs(root)
@@ -833,7 +873,8 @@ func validProjectPath(value string) bool {
 		return false
 	}
 	clean := filepath.Clean(filepath.FromSlash(value))
-	return clean != "." && clean != ".." && !filepath.IsAbs(clean) && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
+	return clean != "." && clean != ".." && !filepath.IsAbs(clean) &&
+		!strings.HasPrefix(clean, ".."+string(filepath.Separator))
 }
 
 func validProjectID(value string) bool {
@@ -841,7 +882,8 @@ func validProjectID(value string) bool {
 		return false
 	}
 	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' ||
+			r == '-' {
 			continue
 		}
 		return false

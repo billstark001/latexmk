@@ -180,7 +180,13 @@ func reportJob(command string, job protocol.Job, jsonOutput bool) int {
 		}
 		return 0
 	}
-	fmt.Printf("job ID: %s\nproject ID: %s\nstatus: %s\ncreated: %s\n", job.ID, job.ProjectID, job.Status, job.CreatedAt.Format(time.RFC3339))
+	fmt.Printf(
+		"job ID: %s\nproject ID: %s\nstatus: %s\ncreated: %s\n",
+		job.ID,
+		job.ProjectID,
+		job.Status,
+		job.CreatedAt.Format(time.RFC3339),
+	)
 	if job.SnapshotID != "" {
 		fmt.Printf("snapshot ID: %s\n", job.SnapshotID)
 	}

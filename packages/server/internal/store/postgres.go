@@ -141,7 +141,11 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 	if err := p.db.WithContext(ctx).AutoMigrate(&User{}, &apiToken{}, &ProjectSnapshot{}, &CompileJob{}); err != nil {
 		return fmt.Errorf("migrate database: %w", err)
 	}
-	if err := p.db.WithContext(ctx).Exec(`CREATE UNIQUE INDEX IF NOT EXISTS latexmk_users_email_unique ON latexmk_users (lower(email)) WHERE email <> ''`).Error; err != nil {
+	if err := p.db.WithContext(
+		ctx,
+	).Exec(
+		`CREATE UNIQUE INDEX IF NOT EXISTS latexmk_users_email_unique ON latexmk_users (lower(email)) WHERE email <> ''`,
+	).Error; err != nil {
 		return fmt.Errorf("create user email index: %w", err)
 	}
 	return nil
@@ -310,7 +314,15 @@ func (p *Postgres) DeleteSnapshotsBefore(ctx context.Context, cutoff time.Time) 
 }
 
 func (p *Postgres) DeleteSnapshot(ctx context.Context, ownerID, projectID string) (bool, error) {
-	result := p.db.WithContext(ctx).Where("owner_id = ? AND project_id = ?", ownerID, projectID).Delete(&ProjectSnapshot{})
+	result := p.db.WithContext(
+		ctx,
+	).Where(
+		"owner_id = ? AND project_id = ?",
+		ownerID,
+		projectID,
+	).Delete(
+		&ProjectSnapshot{},
+	)
 	return result.RowsAffected > 0, result.Error
 }
 
@@ -341,7 +353,16 @@ func (p *Postgres) ListJobs(ctx context.Context, ownerID string, limit int) ([]C
 
 func (p *Postgres) ListPendingJobs(ctx context.Context) ([]CompileJob, error) {
 	var jobs []CompileJob
-	if err := p.db.WithContext(ctx).Where("status IN ?", []string{"queued", "running"}).Order("created_at ASC").Find(&jobs).Error; err != nil {
+	if err := p.db.WithContext(
+		ctx,
+	).Where(
+		"status IN ?",
+		[]string{"queued", "running"},
+	).Order(
+		"created_at ASC",
+	).Find(
+		&jobs,
+	).Error; err != nil {
 		return nil, err
 	}
 	return jobs, nil
@@ -349,7 +370,17 @@ func (p *Postgres) ListPendingJobs(ctx context.Context) ([]CompileJob, error) {
 
 func (p *Postgres) ListProjectJobs(ctx context.Context, ownerID, projectID string) ([]CompileJob, error) {
 	var jobs []CompileJob
-	if err := p.db.WithContext(ctx).Where("owner_id = ? AND project_id = ?", ownerID, projectID).Order("created_at DESC").Find(&jobs).Error; err != nil {
+	if err := p.db.WithContext(
+		ctx,
+	).Where(
+		"owner_id = ? AND project_id = ?",
+		ownerID,
+		projectID,
+	).Order(
+		"created_at DESC",
+	).Find(
+		&jobs,
+	).Error; err != nil {
 		return nil, err
 	}
 	return jobs, nil
@@ -357,7 +388,12 @@ func (p *Postgres) ListProjectJobs(ctx context.Context, ownerID, projectID strin
 
 func (p *Postgres) DeleteTerminalProjectJobs(ctx context.Context, ownerID, projectID string) error {
 	return p.db.WithContext(ctx).
-		Where("owner_id = ? AND project_id = ? AND status IN ?", ownerID, projectID, []string{"succeeded", "failed", "cancelled"}).
+		Where(
+			"owner_id = ? AND project_id = ? AND status IN ?",
+			ownerID,
+			projectID,
+			[]string{"succeeded", "failed", "cancelled"},
+		).
 		Delete(&CompileJob{}).Error
 }
 
@@ -405,7 +441,11 @@ func (p *Postgres) TransitionJob(ctx context.Context, id, expectedStatus string,
 
 func (p *Postgres) DeleteTerminalJobsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
 	result := p.db.WithContext(ctx).
-		Where("status IN ? AND finished_at IS NOT NULL AND finished_at < ?", []string{"succeeded", "failed", "cancelled"}, cutoff).
+		Where(
+			"status IN ? AND finished_at IS NOT NULL AND finished_at < ?",
+			[]string{"succeeded", "failed", "cancelled"},
+			cutoff,
+		).
 		Delete(&CompileJob{})
 	return result.RowsAffected, result.Error
 }

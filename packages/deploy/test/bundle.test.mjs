@@ -12,7 +12,11 @@ test('bundle creates a standalone slim context', async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'latexmk-deploy-test-'));
   const out = path.join(temp, 'bundle');
   try {
-    const result = spawnSync(process.execPath, [path.join(root, 'dist', 'index.js'), 'bundle', '--profile', 'slim', '--auth', 'none', '--out', out], { encoding: 'utf8' });
+    const result = spawnSync(
+      process.execPath,
+      [path.join(root, 'dist', 'index.js'), 'bundle', '--profile', 'slim', '--auth', 'none', '--out', out],
+      { encoding: 'utf8' },
+    );
     assert.equal(result.status, 0, result.stderr);
     assert.equal((await stat(path.join(out, 'Dockerfile'))).isFile(), true);
     assert.equal((await stat(path.join(out, 'server', 'go.mod'))).isFile(), true);
@@ -28,7 +32,25 @@ test('serverless preset emits bounded ephemeral-cache settings', async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'latexmk-deploy-preset-test-'));
   const out = path.join(temp, 'bundle');
   try {
-    const result = spawnSync(process.execPath, [path.join(root, 'dist', 'index.js'), 'bundle', '--profile', 'slim', '--preset', 'railway-serverless', '--auth', 'postgres', '--database', 'postgres', '--external-database', '--out', out], { encoding: 'utf8' });
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.join(root, 'dist', 'index.js'),
+        'bundle',
+        '--profile',
+        'slim',
+        '--preset',
+        'railway-serverless',
+        '--auth',
+        'postgres',
+        '--database',
+        'postgres',
+        '--external-database',
+        '--out',
+        out,
+      ],
+      { encoding: 'utf8' },
+    );
     assert.equal(result.status, 0, result.stderr);
     const env = await readFile(path.join(out, '.env.example'), 'utf8');
     assert.match(env, /LATEXMK_MAX_CONCURRENT_COMPILES=1/);

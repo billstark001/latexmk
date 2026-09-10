@@ -104,7 +104,10 @@ func (c *Client) ListArtifacts(ctx context.Context, jobID string) ([]ArtifactInf
 	return artifacts, nil
 }
 
-func (c *Client) DownloadArtifact(ctx context.Context, jobID, artifactIDValue, outputRoot string) (DownloadedArtifact, error) {
+func (c *Client) DownloadArtifact(
+	ctx context.Context,
+	jobID, artifactIDValue, outputRoot string,
+) (DownloadedArtifact, error) {
 	artifacts, err := c.ListArtifacts(ctx, jobID)
 	if err != nil {
 		return DownloadedArtifact{}, err
@@ -126,7 +129,7 @@ func (c *Client) DownloadArtifact(ctx context.Context, jobID, artifactIDValue, o
 	if err != nil {
 		return DownloadedArtifact{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if err := extractSelectedArtifact(resp.Body, outputRoot, selected); err != nil {
 		return DownloadedArtifact{}, err
 	}
@@ -134,7 +137,10 @@ func (c *Client) DownloadArtifact(ctx context.Context, jobID, artifactIDValue, o
 	if err != nil {
 		return DownloadedArtifact{}, err
 	}
-	return DownloadedArtifact{ArtifactInfo: selected, LocalPath: filepath.Join(rootAbs, filepath.FromSlash(selected.Path))}, nil
+	return DownloadedArtifact{
+		ArtifactInfo: selected,
+		LocalPath:    filepath.Join(rootAbs, filepath.FromSlash(selected.Path)),
+	}, nil
 }
 
 func (c *Client) Logs(ctx context.Context, jobID, source string, tailLines int, maxBytes int64) (LogsOutput, error) {
@@ -178,7 +184,7 @@ func (c *Client) Logs(ctx context.Context, jobID, source string, tailLines int, 
 	if err != nil {
 		return LogsOutput{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	output := LogsOutput{JobID: jobID, Source: source, TailLines: tailLines, MaxBytes: maxBytes}
 	entries, returned, err := readBoundedLogs(resp.Body, source, tailLines, maxBytes, selectedLogs, declared)
 	if err != nil {
@@ -208,7 +214,9 @@ func artifactID(path string) string {
 
 func validateArtifactMetadata(artifact protocol.Artifact) error {
 	clean := filepath.Clean(filepath.FromSlash(artifact.Path))
-	if artifact.Path == "" || clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.ToSlash(clean) != artifact.Path {
+	if artifact.Path == "" || clean == "." || filepath.IsAbs(clean) || clean == ".." ||
+		strings.HasPrefix(clean, ".."+string(filepath.Separator)) ||
+		filepath.ToSlash(clean) != artifact.Path {
 		return fmt.Errorf("job declares unsafe artifact path %q", artifact.Path)
 	}
 	if artifact.Size < 0 || len(artifact.SHA256) != 64 {
@@ -235,7 +243,7 @@ func extractSelectedArtifact(r io.Reader, outputRoot string, selected ArtifactIn
 	if err != nil {
 		return fmt.Errorf("open result gzip: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	tarReader := tar.NewReader(gz)
 	target := "artifacts/" + selected.Path
 	entries := 0
@@ -251,7 +259,7 @@ func extractSelectedArtifact(r io.Reader, outputRoot string, selected ArtifactIn
 		if entries > 20_000 || header.Size < 0 || header.Size > 512<<20 {
 			return errors.New("result archive exceeds safety limits")
 		}
-		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+		if header.Typeflag != tar.TypeReg {
 			return fmt.Errorf("unexpected result entry type for %q", header.Name)
 		}
 		if header.Name != target {
@@ -268,12 +276,19 @@ func extractSelectedArtifact(r io.Reader, outputRoot string, selected ArtifactIn
 	return errors.New("result archive omitted the selected artifact")
 }
 
-func readBoundedLogs(r io.Reader, source string, tailLines int, maxBytes int64, selectedLogs int, declared map[string]protocol.Artifact) ([]LogEntry, int64, error) {
+func readBoundedLogs(
+	r io.Reader,
+	source string,
+	tailLines int,
+	maxBytes int64,
+	selectedLogs int,
+	declared map[string]protocol.Artifact,
+) ([]LogEntry, int64, error) {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return nil, 0, fmt.Errorf("open result gzip: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	tarReader := tar.NewReader(gz)
 	entries := make([]LogEntry, 0, 4)
 	var perEntry int64
@@ -297,7 +312,7 @@ func readBoundedLogs(r io.Reader, source string, tailLines int, maxBytes int64, 
 		if archiveEntries > 20_000 || header.Size < 0 || header.Size > 512<<20 {
 			return nil, 0, errors.New("result archive exceeds safety limits")
 		}
-		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+		if header.Typeflag != tar.TypeReg {
 			return nil, 0, fmt.Errorf("unexpected result entry type for %q", header.Name)
 		}
 		entrySource, path, expected, selected := classifyLogEntry(header.Name, source, declared)
@@ -341,7 +356,10 @@ func readBoundedLogs(r io.Reader, source string, tailLines int, maxBytes int64, 
 	return entries, returnedTotal, nil
 }
 
-func classifyLogEntry(name, source string, declared map[string]protocol.Artifact) (string, string, *protocol.Artifact, bool) {
+func classifyLogEntry(
+	name, source string,
+	declared map[string]protocol.Artifact,
+) (string, string, *protocol.Artifact, bool) {
 	switch name {
 	case "stdout.log":
 		return "stdout", name, nil, source == "all" || source == "stdout"

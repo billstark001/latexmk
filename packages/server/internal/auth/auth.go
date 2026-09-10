@@ -1,3 +1,4 @@
+// Package auth authenticates requests and manages service users and tokens.
 package auth
 
 import (
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/store"
 )

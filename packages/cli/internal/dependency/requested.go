@@ -54,7 +54,11 @@ func ResolveRequestedFiles(requested []string, candidates []projectarchive.File)
 				paths = append(paths, file.Path)
 			}
 			sort.Strings(paths)
-			return nil, fmt.Errorf("requested file %q is ambiguous (%s); add the intended path to an explicit manifest", clean, strings.Join(paths, ", "))
+			return nil, fmt.Errorf(
+				"requested file %q is ambiguous (%s); add the intended path to an explicit manifest",
+				clean,
+				strings.Join(paths, ", "),
+			)
 		}
 	}
 	result := make([]projectarchive.File, 0, len(selected))

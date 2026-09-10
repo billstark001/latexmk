@@ -1,0 +1,44 @@
+version: '2'
+run:
+  timeout: 5m
+  allow-serial-runners: true
+  relative-path-mode: cfg
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - errcheck
+    - errorlint
+    - govet
+    - ineffassign
+    - nolintlint
+    - staticcheck
+    - unused
+  settings:
+    staticcheck:
+      checks: ['all', '-QF*']
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+  exclusions:
+    generated: strict
+    presets: []
+formatters:
+  enable:
+    - goimports
+    - golines
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/billstark001/latexmk
+    golines:
+      max-len: 120
+      tab-len: 4
+      shorten-comments: false
+      reformat-tags: false
+      chain-split-dots: false
+  exclusions:
+    generated: strict
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

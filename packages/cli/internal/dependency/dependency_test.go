@@ -164,7 +164,13 @@ func TestCachedInputsCoverDynamicReferencesWithoutBypassingPolicy(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := SelectWithCachedInputs("main.tex", "auto", candidates, []string{"main.tex", "chapter.tex", "private.tex"}, true)
+	result, err := SelectWithCachedInputs(
+		"main.tex",
+		"auto",
+		candidates,
+		[]string{"main.tex", "chapter.tex", "private.tex"},
+		true,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +215,11 @@ func TestExplicitManifestCoversDynamicReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := SelectWithOptions("main.tex", candidates, SelectionOptions{Mode: "auto", ExplicitFiles: []string{"chapter.tex"}})
+	result, err := SelectWithOptions(
+		"main.tex",
+		candidates,
+		SelectionOptions{Mode: "auto", ExplicitFiles: []string{"chapter.tex"}},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,11 +240,16 @@ func TestManifestModeUsesOnlyExactDeclaredFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := SelectWithOptions("main.tex", candidates, SelectionOptions{Mode: "manifest", ExplicitFiles: []string{"declared.dat"}})
+	result, err := SelectWithOptions(
+		"main.tex",
+		candidates,
+		SelectionOptions{Mode: "manifest", ExplicitFiles: []string{"declared.dat"}},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Resolved || len(result.Files) != 2 || result.Files[0].Path != "declared.dat" || result.Files[1].Path != "main.tex" {
+	if !result.Resolved || len(result.Files) != 2 || result.Files[0].Path != "declared.dat" ||
+		result.Files[1].Path != "main.tex" {
 		t.Fatalf("manifest-only result = %#v", result)
 	}
 }
@@ -247,11 +262,16 @@ func TestExplicitManifestCannotRestoreFilteredFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := SelectWithOptions("main.tex", candidates, SelectionOptions{Mode: "manifest", ExplicitFiles: []string{"private.tex"}})
+	result, err := SelectWithOptions(
+		"main.tex",
+		candidates,
+		SelectionOptions{Mode: "manifest", ExplicitFiles: []string{"private.tex"}},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Resolved || len(result.Files) != 1 || len(result.Diagnostics) != 1 || result.Diagnostics[0].Kind != "explicit" {
+	if result.Resolved || len(result.Files) != 1 || len(result.Diagnostics) != 1 ||
+		result.Diagnostics[0].Kind != "explicit" {
 		t.Fatalf("filtered explicit result = %#v", result)
 	}
 }

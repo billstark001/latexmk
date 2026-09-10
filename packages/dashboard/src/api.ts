@@ -20,19 +20,35 @@ export class ApiClient {
     return response.json() as Promise<T>;
   }
 
-  meta() { return this.request<Metadata>('/v1/meta'); }
-  jobs() { return this.request<{ jobs: Job[] }>('/v1/jobs?limit=100'); }
-  job(id: string) { return this.request<Job>(`/v1/jobs/${encodeURIComponent(id)}`); }
-  cancelJob(id: string) { return this.request<Job>(`/v1/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
-  users() { return this.request<{ users: User[] }>('/v1/admin/users'); }
+  meta() {
+    return this.request<Metadata>('/v1/meta');
+  }
+  jobs() {
+    return this.request<{ jobs: Job[] }>('/v1/jobs?limit=100');
+  }
+  job(id: string) {
+    return this.request<Job>(`/v1/jobs/${encodeURIComponent(id)}`);
+  }
+  cancelJob(id: string) {
+    return this.request<Job>(`/v1/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+  users() {
+    return this.request<{ users: User[] }>('/v1/admin/users');
+  }
   createUser(body: { name: string; email: string; role: string }) {
     return this.request<User>('/v1/admin/users', { method: 'POST', body: JSON.stringify(body) });
   }
   setUserEnabled(id: string, enabled: boolean) {
-    return this.request<void>(`/v1/admin/users/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ enabled }) });
+    return this.request<void>(`/v1/admin/users/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    });
   }
   createToken(id: string, name: string) {
-    return this.request<{ token: string; tokenInfo: { name: string } }>(`/v1/admin/users/${encodeURIComponent(id)}/tokens`, { method: 'POST', body: JSON.stringify({ name }) });
+    return this.request<{ token: string; tokenInfo: { name: string } }>(
+      `/v1/admin/users/${encodeURIComponent(id)}/tokens`,
+      { method: 'POST', body: JSON.stringify({ name }) },
+    );
   }
   async downloadResult(job: Job): Promise<void> {
     const headers = new Headers();
