@@ -7,25 +7,68 @@ checks, or the project-root boundary removed from that manifest.
 
 ## Supported references
 
-The first implementation recognizes braced literal arguments for:
+The scanner recognizes literal arguments for these registered patterns:
 
-- `input`, `include`, `subfile`, and `loadglsentries`;
-- `documentclass` and local `usepackage` files;
-- `includegraphics`, `graphicspath`, `includepdf`, and `includesvg`;
-- `bibliography`, `addbibresource`, and local `bibliographystyle` files;
-- `lstinputlisting`, `verbatiminput`, `VerbatimInput`, and `inputminted`;
-- `DTLloaddb` and `pgfplotstableread`.
+| Area                  | Commands and behavior                                                                                                                                                                                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TeX inputs            | `input`, `include`, `subfile`, `loadglsentries`; recursively scan local inputs. `input chapter.tex` also accepts a literal unbraced filename ending at whitespace.                                                                                      |
+| Class/package loaders | `documentclass`, `LoadClass`, `LoadClassWithOptions`, `usepackage`, `RequirePackage`, `RequirePackageWithOptions`; follow local `.cls` and `.sty` files.                                                                                                |
+| Forwarded options     | `PassOptionsToPackage`, `PassOptionsToClass`; retain options until loading. `WithOptions` loaders inherit the enclosing module's literal options.                                                                                                       |
+| Bibliography          | `bibliography`, `addbibresource`, `bibliographystyle`; biblatex `style`, `bibstyle`, `citestyle`, `datamodel`; `RequireBibliographyStyle`, `RequireCitationStyle`, `DeclareLanguageMapping`, `InheritBibliographyExtras`, `InheritBibliographyStrings`. |
+| Conditional inputs    | `InputIfFileExists`; select an existing allowed input and its dependencies, without an error for an absent optional input.                                                                                                                              |
+| Imported projects     | `import`, `subimport`, `inputfrom`, `subinputfrom`, `includefrom`, `subincludefrom`; nested inputs use the active import context.                                                                                                                       |
+| Graphics              | `includegraphics`, `graphicspath`, `DeclareGraphicsExtensions`, `includepdf`, `includesvg`; declared extension order is searched before directory order.                                                                                                |
+| Fonts                 | `setmainfont`, `setsansfont`, `setmonofont`, `newfontfamily`, `newfontface`, `fontspec`, `defaultfontfeatures`; explicit faces, `Path`, `Extension`, `*` substitution, local `.fontspec` settings.                                                      |
+| Data/code             | `lstinputlisting`, `verbatiminput`, `VerbatimInput`, `inputminted`, `DTLloaddb`, `pgfplotstableread`, and `table`/`file` forms of `addplot`/`addplot3`.                                                                                                 |
+| SVG assets            | Local XML `href`/`xlink:href` on `image`, `use`, `feImage`; existing exports and PDF+LaTeX wrappers. `svgsetup` and `svgpath` configure SVG selection.                                                                                                  |
 
-Local TeX, class, and style files are scanned recursively. Comments and common
-verbatim environments are masked before parsing. Every selected file includes a
-reason in `latexmk files` output.
+Options may span lines and contain braced values, nested commas, protected
+brackets, escaped delimiters, comments, CRLF and trailing commas. Comments and
+common verbatim environments are excluded. Selected files have reasons in
+`latexmk files` output.
 
-Bare class, package, and bibliography-style names that have no matching
-`.cls`, `.sty`, or `.bst` file in the allowed manifest are treated as TeX
-distribution dependencies. This avoids uploading an unrelated extensionless
-file named `article` or `graphicx`. Consequently, an ignored local style with a
-bare package name is not distinguishable from a system package during static
-selection; the remote compile will report it missing.
+Biblatex appends `.dbx` to an explicit `datamodel` name. The last value wins;
+an empty value permits implicit models again. Without an explicit model, select
+an existing `style.dbx`, or separate `citestyle.dbx` and `bibstyle.dbx` when no
+`style` was given. `.bbx` and `.cbx` options are applied in order; local styles,
+models and language mappings are traversed. See the
+[biblatex loading implementation](https://github.com/plk/biblatex/blob/dev/tex/latex/biblatex/biblatex.sty).
+
+Bare class, package and bibliography-style names absent from the allowed
+manifest are distribution dependencies, including `.bbx`, `.cbx` and `.lbx`.
+Absent implicit models are optional. Explicit models, local font filenames and
+ordinary required inputs produce diagnostics when unavailable. An ignored bare
+local style cannot be distinguished from a system style without reading excluded
+files; the compiler remains responsible for that distinction.
+
+`import` directories are project-root-relative; `subimport` extends the active
+import directory. Nested inputs search import directories before the project
+root. Paths are normalized in that context before enforcing the root boundary.
+Ordinary `input` does not become relative to its containing file. Import search
+paths are restored on return. Graphics paths, extension lists, font defaults and
+SVG settings obey braced groups, `begingroup`/`endgroup` and environments.
+
+Font options work before or after the name, and around the control-sequence
+argument of `newfontfamily`. Explicit upright, bold, italic, bold-italic,
+slanted, swash and small-caps faces support nested face features. Named system
+fonts are not missing project files. System font availability and arbitrary
+OpenType feature code are not inferred. See the
+[fontspec documentation](https://github.com/latex3/fontspec/blob/main/fontspec-doc-fontsel.tex).
+
+Inline plot tables and whole table macros are data, not filenames. Their literal
+`pgfplotstableread` loaders remain discoverable independently. Computed filenames
+still require explicit selection.
+
+SVG resource URIs resolve against the SVG's directory; fragments, embedded data
+and remote URLs never trigger downloads. Local SVG references have cycle and
+depth limits. XML base overrides require explicit selection; CSS and script
+loading are outside this subset. `inkscapepath`
+supports literal directories and `basedir`, `basesubdir`, `svgdir`, `svgsubdir`;
+`inkscapename`, `inkscapeformat` and `inkscapelatex` select export names. Existing
+exports are uploaded; absent exports may be generated, unless `inkscape=false`
+makes them required inputs. Discovery never enables shell escape or performs
+conversion. Checked-in `.pdf_tex` wrappers are scanned in their rendering
+context. See the [SVG implementation](https://github.com/mrpiggi/svg/blob/master/source/svg.dtx).
 
 ## Fail-closed cases
 
@@ -95,9 +138,9 @@ Equivalent project configuration is:
 }
 ```
 
-In `auto`, explicit files are merged with static and recorder dependencies. A
-dynamic reference covered this way is shown as a resolved diagnostic so the
-override remains visible. An explicit file that is missing, Git-ignored,
+In `auto`, explicit files are merged with static and recorder dependencies.
+Their presence does not prove that a computed reference is covered. For dynamic
+inputs, use `manifest` mode with a reviewed list. An explicit file that is missing, Git-ignored,
 denied, outside the root, or otherwise absent from the policy-filtered manifest
 causes selection to fail.
 
@@ -152,11 +195,31 @@ dotenv and CLI settings remain fixed for a watch session; restart to reload them
 
 ## Limits
 
-This is a static scanner, not TeX. It can include extra files referenced inside
-unused macro definitions or conditional branches. It can also miss file access
-performed by an unsupported command or package. `resolved: true` means all
-recognized references were resolved; it is not a proof that the dependency set
-is complete.
+This is a static scanner, not TeX. It does not expand macros, execute loops or
+Lua, evaluate arbitrary conditionals, or interpret custom wrappers. It can
+include extra references in unused macro definitions and unknown branches.
+Unknown formatting commands are silent; recognized dynamic references and Lua
+commands produce diagnostics. `resolved: true` means recognized references
+resolved; it is not proof of a complete dependency set.
+
+Literal `iftrue`/`iffalse` branches are evaluated, including nesting. Other
+registered primitive conditionals are traversed on both sides. Conditional
+changes to module options, search settings or generated contents remain
+unresolved and require explicit manifest selection. `InputIfFileExists` uses
+the allowed manifest to choose its branch; its true hook runs before the input.
+An absent or excluded optional file takes the false branch. Distribution-only
+existence and computed filenames cannot be determined.
+
+`filecontents`/`filecontents*` bodies are inert until their generated file is
+referenced. Generated files are not uploaded; referenced generated TeX is scanned
+for its real inputs. Existing allowed files win unless `overwrite` is given.
+Excluded files are never read, even if they share a generated name.
+
+Catcode changes, arbitrary global assignments, dynamic graphics rules, complex
+font features and unsupported environments require `includeFiles` with
+`uploadMode: "manifest"`. Text parsing is bounded at 8 MiB per file; traversal
+has a 20,000-visit budget and a 256-level recursion limit. Exceeding a limit
+produces a diagnostic.
 
 ## Recorder cache
 
@@ -176,19 +239,23 @@ where supported, and excluded from uploads by default. A cached path is selected
 only if it is also present in the current Git-ignore/denylist-filtered manifest.
 Changing policy therefore cannot make an old cache restore a denied file.
 
-History may cover a dynamic reference that the static scanner cannot expand.
-The CLI reports this as a warning because the path set can be stale. Missing
-literal references, malformed supported commands, and out-of-root paths still
-fail closed even when history exists. A first compile with dynamic dependencies
-can be bootstrapped only after reviewing the full manifest explicitly:
+History is additive and can be stale after edits. It never marks a dynamic
+reference as covered merely because a non-entry file was accepted; the same
+applies to unrelated explicit files. Missing literals, malformed commands,
+dynamic references and out-of-root paths remain unresolved in `auto`. Use a
+reviewed manifest for computed inputs, or review all candidates before `all`:
 
 ```sh
 latexmk files --upload-mode all main.tex
 latexmk --upload-mode all main.tex
-# A successful compile records project-local INPUT paths.
+# A successful compile adds recorder paths, but does not prove dynamic coverage.
 latexmk files main.tex
-latexmk main.tex
 ```
+
+Recorder history does not cover every subprocess input. In the Railway fixture,
+Biber read `refs.bib`, but that file and the local OpenType fonts were absent
+from `.fls` input history. Static bibliography and font selection remain
+necessary.
 
 The client never silently falls back to `all`. A corrupt cache blocks `auto`
 with an explicit error; reviewed `manifest` and `all` modes remain available

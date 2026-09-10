@@ -37,3 +37,26 @@ func TestResolveRequestedFilesRejectsExtensionAmbiguity(t *testing.T) {
 		t.Fatalf("expected ambiguity error, got %v", err)
 	}
 }
+
+func TestRequestedOptionDependenciesAndAmbiguity(t *testing.T) {
+	candidates := []projectarchive.File{
+		{Path: "model.dbx"},
+		{Path: "font.otf"},
+		{Path: "style.bbx"},
+		{Path: "style.cbx"},
+	}
+	files, err := ResolveRequestedFiles([]string{"model", "font"}, candidates)
+	if err != nil || len(files) != 2 {
+		t.Fatalf("option-driven requests: files=%v err=%v", files, err)
+	}
+	if _, err := ResolveRequestedFiles(
+		[]string{"style"},
+		candidates,
+	); err == nil ||
+		!strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("style ambiguity error = %v", err)
+	}
+	if _, err := ResolveRequestedFiles([]string{"private"}, candidates); err == nil {
+		t.Fatal("missing request unexpectedly accepted")
+	}
+}

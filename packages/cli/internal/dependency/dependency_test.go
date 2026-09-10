@@ -146,7 +146,7 @@ func TestDiscoverHandlesCyclicInputs(t *testing.T) {
 
 func TestSelectAllKeepsEveryPolicyAllowedCandidate(t *testing.T) {
 	candidates := []projectarchive.File{{Path: "main.tex", Size: 4}, {Path: "notes.txt", Size: 5}}
-	result, err := Select("main.tex", "all", candidates)
+	result, err := SelectWithOptions("main.tex", candidates, SelectionOptions{Mode: "all"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestSelectAllKeepsEveryPolicyAllowedCandidate(t *testing.T) {
 	}
 }
 
-func TestCachedInputsCoverDynamicReferencesWithoutBypassingPolicy(t *testing.T) {
+func TestCachedInputsPreserveDynamicDiagnosticsWithoutBypassingPolicy(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "main.tex", `\input{\chapterfile}`)
 	writeFile(t, root, "chapter.tex", "chapter")
@@ -164,18 +164,16 @@ func TestCachedInputsCoverDynamicReferencesWithoutBypassingPolicy(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := SelectWithCachedInputs(
+	result, err := SelectWithOptions(
 		"main.tex",
-		"auto",
 		candidates,
-		[]string{"main.tex", "chapter.tex", "private.tex"},
-		true,
+		SelectionOptions{Mode: "auto", CachedFiles: []string{"main.tex", "chapter.tex", "private.tex"}},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Resolved {
-		t.Fatalf("cached result unresolved: %#v", result.Diagnostics)
+	if result.Resolved {
+		t.Fatalf("unproven dynamic reference was resolved: %#v", result.Diagnostics)
 	}
 	got := make(map[string]bool)
 	for _, file := range result.Files {
@@ -184,7 +182,7 @@ func TestCachedInputsCoverDynamicReferencesWithoutBypassingPolicy(t *testing.T) 
 	if !got["main.tex"] || !got["chapter.tex"] || got["private.tex"] {
 		t.Fatalf("cached selection = %#v", result.Files)
 	}
-	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Resolution == "" {
+	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Resolution != "" {
 		t.Fatalf("cached diagnostic = %#v", result.Diagnostics)
 	}
 }
@@ -197,7 +195,11 @@ func TestCachedInputsDoNotCoverMissingLiteralReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := SelectWithCachedInputs("main.tex", "auto", candidates, []string{"main.tex", "old-chapter.tex"}, true)
+	result, err := SelectWithOptions(
+		"main.tex",
+		candidates,
+		SelectionOptions{Mode: "auto", CachedFiles: []string{"main.tex", "old-chapter.tex"}},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +208,7 @@ func TestCachedInputsDoNotCoverMissingLiteralReferences(t *testing.T) {
 	}
 }
 
-func TestExplicitManifestCoversDynamicReference(t *testing.T) {
+func TestExplicitFilesDoNotProveDynamicReferenceCoverage(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "main.tex", `\input{\chapterfile}`)
 	writeFile(t, root, "chapter.tex", "chapter")
@@ -223,7 +225,7 @@ func TestExplicitManifestCoversDynamicReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Resolved || len(result.Diagnostics) != 1 || result.Diagnostics[0].Resolution != "explicit manifest" {
+	if result.Resolved || len(result.Diagnostics) != 1 || result.Diagnostics[0].Resolution != "" {
 		t.Fatalf("explicit auto result = %#v", result)
 	}
 	if len(result.Files) != 2 || result.Files[0].Path != "chapter.tex" || result.Files[1].Path != "main.tex" {

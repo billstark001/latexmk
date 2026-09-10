@@ -1,0 +1,2 @@
+\ProvidesClass{localclass}
+\LoadClassWithOptions{baseclass}

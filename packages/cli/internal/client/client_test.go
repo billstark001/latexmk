@@ -645,7 +645,7 @@ func TestStartCompileRequiresQueuedCapabilities(t *testing.T) {
 	}
 }
 
-func TestProjectManifestUsesCachedInputsForDynamicReferences(t *testing.T) {
+func TestProjectManifestDoesNotTreatHistoryAsDynamicCoverage(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte(`\input{\chapterfile}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -666,15 +666,15 @@ func TestProjectManifestUsesCachedInputsForDynamicReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.ProjectRoot = root
-	files, warnings, err := c.projectManifest("main.tex", "xelatex")
+	if _, _, err := c.projectManifest("main.tex", "xelatex"); err == nil {
+		t.Fatal("history must not clear unproven dynamic references")
+	}
+	selection, err := c.Selection("main.tex", "xelatex", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 2 || files[0].Path != "chapter.tex" || files[1].Path != "main.tex" {
-		t.Fatalf("cached manifest = %#v", files)
-	}
-	if len(warnings) != 1 {
-		t.Fatalf("cached manifest warnings = %#v", warnings)
+	if selection.Resolved || len(selection.Files) != 2 || len(selection.Diagnostics) != 1 {
+		t.Fatalf("selection = %#v", selection)
 	}
 }
 
@@ -699,6 +699,10 @@ func TestProjectManifestUsesExplicitManifestWithoutHistory(t *testing.T) {
 	c.ProjectRoot = root
 	c.Exclude = []string{".latexmk-files"}
 	c.ManifestFile = ".latexmk-files"
+	if _, _, err := c.projectManifest("main.tex", "xelatex"); err == nil {
+		t.Fatal("explicit files must not prove dynamic coverage in auto mode")
+	}
+	c.UploadMode = "manifest"
 	files, warnings, err := c.projectManifest("main.tex", "xelatex")
 	if err != nil {
 		t.Fatal(err)
@@ -706,7 +710,7 @@ func TestProjectManifestUsesExplicitManifestWithoutHistory(t *testing.T) {
 	if len(files) != 2 || files[0].Path != "chapter.tex" || files[1].Path != "main.tex" {
 		t.Fatalf("explicit manifest files = %#v", files)
 	}
-	if len(warnings) != 1 {
+	if len(warnings) != 0 {
 		t.Fatalf("explicit manifest warnings = %#v", warnings)
 	}
 }

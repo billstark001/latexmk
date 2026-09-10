@@ -34,33 +34,10 @@ type Result struct {
 }
 
 type SelectionOptions struct {
-	Mode             string
-	ExplicitFiles    []string
-	CachedFiles      []string
-	UnmatchedGlob    string
-	HistoryAvailable bool
-}
-
-// Select applies an upload mode to a policy-filtered candidate manifest.
-func Select(entry, mode string, candidates []projectarchive.File) (Result, error) {
-	return SelectWithOptions(entry, candidates, SelectionOptions{Mode: mode})
-}
-
-// SelectWithCachedInputs adds project-local INPUT records from a previous
-// successful compile. Cached paths still have to exist in the current
-// policy-filtered manifest. History can cover dynamic references, but never
-// missing literal paths, malformed commands, or paths outside the project.
-func SelectWithCachedInputs(
-	entry, mode string,
-	candidates []projectarchive.File,
-	cached []string,
-	historyAvailable bool,
-) (Result, error) {
-	return SelectWithOptions(
-		entry,
-		candidates,
-		SelectionOptions{Mode: mode, CachedFiles: cached, HistoryAvailable: historyAvailable},
-	)
+	Mode          string
+	ExplicitFiles []string
+	CachedFiles   []string
+	UnmatchedGlob string
 }
 
 // SelectWithOptions combines static discovery, explicit files, and recorder
@@ -74,7 +51,7 @@ func SelectWithOptions(entry string, candidates []projectarchive.File, options S
 	if mode == "" {
 		mode = "auto"
 	}
-	if mode == "all" || mode == "ignore" {
+	if mode == "all" {
 		files := append([]projectarchive.File(nil), candidates...)
 		stats := projectarchive.Stats{}
 		for i := range files {
@@ -114,7 +91,6 @@ func SelectWithOptions(entry string, candidates []projectarchive.File, options S
 	for _, file := range result.Files {
 		selected[file.Path] = file
 	}
-	acceptedExplicit := false
 	for _, expression := range options.ExplicitFiles {
 		pattern, err := NormalizePattern(expression)
 		if err != nil {
@@ -126,9 +102,6 @@ func SelectWithOptions(entry string, candidates []projectarchive.File, options S
 				continue
 			}
 			count++
-			if file.Path != entry {
-				acceptedExplicit = true
-			}
 			if _, exists := selected[file.Path]; !exists {
 				file.Reason = "explicit manifest: " + expression
 				selected[file.Path] = file
@@ -152,32 +125,17 @@ func SelectWithOptions(entry string, candidates []projectarchive.File, options S
 			result.Diagnostics = append(result.Diagnostics, diagnostic)
 		}
 	}
-	acceptedHistory := false
 	if mode == "auto" {
 		for _, cachedPath := range options.CachedFiles {
 			file, ok := byPath[cachedPath]
 			if !ok {
 				continue
 			}
-			if cachedPath != entry {
-				acceptedHistory = true
-			}
 			if _, exists := selected[cachedPath]; exists {
 				continue
 			}
 			file.Reason = "previous successful compile (.fls INPUT)"
 			selected[cachedPath] = file
-		}
-	}
-	for i := range result.Diagnostics {
-		if result.Diagnostics[i].Kind != "dynamic" || result.Diagnostics[i].Resolution != "" {
-			continue
-		}
-		switch {
-		case acceptedExplicit:
-			result.Diagnostics[i].Resolution = "explicit manifest"
-		case options.HistoryAvailable && acceptedHistory:
-			result.Diagnostics[i].Resolution = "previous successful compile (.fls INPUT)"
 		}
 	}
 	result.Files = result.Files[:0]
@@ -217,342 +175,21 @@ func FormatDiagnostic(diagnostic Diagnostic) string {
 	return fmt.Sprintf("%s: %s", location, message)
 }
 
-type commandSpec struct {
-	argCount   int
-	reference  int
-	extensions []string
-	recursive  bool
-	optional   bool
-	splitComma bool
-	graphics   bool
-}
-
-var commandSpecs = map[string]commandSpec{
-	"input":          {argCount: 1, reference: 0, extensions: []string{"", ".tex"}, recursive: true},
-	"include":        {argCount: 1, reference: 0, extensions: []string{"", ".tex"}, recursive: true},
-	"subfile":        {argCount: 1, reference: 0, extensions: []string{"", ".tex"}, recursive: true},
-	"loadglsentries": {argCount: 1, reference: 0, extensions: []string{"", ".tex"}, recursive: true},
-	"includegraphics": {
-		argCount:   1,
-		reference:  0,
-		extensions: []string{".pdf", ".png", ".jpg", ".jpeg", ".eps", ".mps"},
-		graphics:   true,
-	},
-	"includepdf":     {argCount: 1, reference: 0, extensions: []string{".pdf"}},
-	"includesvg":     {argCount: 1, reference: 0, extensions: []string{".svg"}},
-	"bibliography":   {argCount: 1, reference: 0, extensions: []string{".bib"}, splitComma: true},
-	"addbibresource": {argCount: 1, reference: 0, extensions: []string{".bib"}},
-	"documentclass":  {argCount: 1, reference: 0, extensions: []string{".cls"}, recursive: true, optional: true},
-	"usepackage": {
-		argCount:   1,
-		reference:  0,
-		extensions: []string{".sty"},
-		recursive:  true,
-		optional:   true,
-		splitComma: true,
-	},
-	"bibliographystyle": {argCount: 1, reference: 0, extensions: []string{".bst"}, optional: true},
-	"lstinputlisting":   {argCount: 1, reference: 0, extensions: []string{""}},
-	"verbatiminput":     {argCount: 1, reference: 0, extensions: []string{""}},
-	"VerbatimInput":     {argCount: 1, reference: 0, extensions: []string{""}},
-	"inputminted":       {argCount: 2, reference: 1, extensions: []string{""}},
-	"DTLloaddb":         {argCount: 2, reference: 1, extensions: []string{""}},
-	"pgfplotstableread": {argCount: 1, reference: 0, extensions: []string{""}},
-}
-
-type invocation struct {
-	name      string
-	args      []string
-	line      int
-	malformed bool
-}
-
-type discoverer struct {
-	candidates  map[string]projectarchive.File
-	selected    map[string]projectarchive.File
-	visiting    map[string]bool
-	parsed      map[string]bool
-	diagnostics []Diagnostic
-	graphicDirs []string
-}
-
-// Discover returns the dependency closure rooted at entry. Candidates must
-// already have passed Git-ignore, denylist, symlink, size, and path checks.
-func Discover(entry string, candidates []projectarchive.File) (Result, error) {
-	entry = cleanProjectPath(entry)
-	if entry == "" {
-		return Result{}, errors.New("entry path is outside the project root")
-	}
-	d := discoverer{
-		candidates: make(map[string]projectarchive.File, len(candidates)),
-		selected:   make(map[string]projectarchive.File),
-		visiting:   make(map[string]bool),
-		parsed:     make(map[string]bool),
-	}
-	for _, file := range candidates {
-		d.candidates[file.Path] = file
-	}
-	if _, ok := d.candidates[entry]; !ok {
-		return Result{}, fmt.Errorf("entry %q is missing, ignored, or denied by the upload policy", entry)
-	}
-	if err := d.visit(entry, "entry file"); err != nil {
-		return Result{}, err
-	}
-
-	files := make([]projectarchive.File, 0, len(d.selected))
-	stats := projectarchive.Stats{}
-	for _, file := range d.selected {
-		files = append(files, file)
-		stats.Files++
-		stats.Bytes += file.Size
-	}
-	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	return Result{Files: files, Stats: stats, Diagnostics: d.diagnostics, Resolved: len(d.diagnostics) == 0}, nil
-}
-
-func (d *discoverer) visit(filePath, reason string) error {
-	file, ok := d.candidates[filePath]
-	if !ok {
-		return fmt.Errorf("dependency %q is not present in the allowed manifest", filePath)
-	}
-	if existing, selected := d.selected[filePath]; !selected {
-		file.Reason = reason
-		d.selected[filePath] = file
-	} else if existing.Reason == "" {
-		existing.Reason = reason
-		d.selected[filePath] = existing
-	}
-	if d.parsed[filePath] || d.visiting[filePath] {
-		return nil
-	}
-	d.visiting[filePath] = true
-	defer delete(d.visiting, filePath)
-
-	if file.Size > maxParsedFileSize {
-		d.addDiagnostic(
-			filePath,
-			0,
-			"",
-			"",
-			"too_large",
-			fmt.Sprintf("text dependency exceeds the %d-byte static parser limit", maxParsedFileSize),
-		)
-		return nil
-	}
-	content, err := projectarchive.ReadFile(file, maxParsedFileSize)
-	if err != nil {
-		return fmt.Errorf("read dependency %s: %w", filePath, err)
-	}
-	text := sanitize(string(content))
-	for _, call := range scanInvocations(text) {
-		if call.name == "graphicspath" {
-			d.consumeGraphicPath(filePath, call)
-			continue
-		}
-		spec, ok := commandSpecs[call.name]
-		if !ok {
-			continue
-		}
-		if call.malformed || len(call.args) < spec.argCount {
-			d.addDiagnostic(filePath, call.line, call.name, "", "unsupported", "expected a braced literal argument")
-			continue
-		}
-		references := []string{normalizeArgument(call.args[spec.reference])}
-		if spec.splitComma {
-			references = strings.Split(normalizeArgument(call.args[spec.reference]), ",")
-		}
-		for _, reference := range references {
-			d.consumeReference(filePath, call.line, call.name, strings.TrimSpace(reference), spec)
-		}
-	}
-	d.parsed[filePath] = true
-	return nil
-}
-
-func (d *discoverer) consumeReference(source string, line int, command, reference string, spec commandSpec) {
-	if !literalReference(reference) {
-		d.addDiagnostic(source, line, command, reference, "dynamic", "dependency uses a macro or non-literal path")
-		return
-	}
-	if cleanProjectPath(reference) == "" {
-		d.addDiagnostic(source, line, command, reference, "outside_root", "dependency path escapes the project root")
-		return
-	}
-	search := []string{reference}
-	if spec.graphics {
-		search = make([]string, 0, len(d.graphicDirs)+1)
-		search = append(search, reference)
-		for _, dir := range d.graphicDirs {
-			search = append(search, path.Join(dir, reference))
-		}
-	}
-	resolved := ""
-	for _, base := range search {
-		if candidate := d.resolve(base, spec.extensions); candidate != "" {
-			resolved = candidate
-			break
-		}
-	}
-	if resolved == "" {
-		if spec.optional && !strings.Contains(reference, "/") {
-			return
-		}
-		d.addDiagnostic(
-			source,
-			line,
-			command,
-			reference,
-			"unavailable",
-			"dependency is missing, ignored by Git, or denied by the upload policy",
-		)
-		return
-	}
-	reason := fmt.Sprintf("\\%s from %s:%d", command, source, line)
-	if spec.recursive {
-		if err := d.visit(resolved, reason); err != nil {
-			d.addDiagnostic(source, line, command, reference, "unavailable", err.Error())
-		}
-		return
-	}
-	file := d.candidates[resolved]
-	file.Reason = reason
-	if _, exists := d.selected[resolved]; !exists {
-		d.selected[resolved] = file
-	}
-}
-
-func (d *discoverer) resolve(reference string, extensions []string) string {
-	base := cleanProjectPath(reference)
-	if base == "" {
-		return ""
-	}
-	if path.Ext(base) != "" {
-		if _, ok := d.candidates[base]; ok {
-			return base
-		}
-		return ""
-	}
-	for _, extension := range extensions {
-		candidate := base + extension
-		if _, ok := d.candidates[candidate]; ok {
-			return candidate
-		}
-	}
-	return ""
-}
-
-func (d *discoverer) consumeGraphicPath(source string, call invocation) {
-	if call.malformed || len(call.args) != 1 {
-		d.addDiagnostic(source, call.line, call.name, "", "unsupported", "expected \\graphicspath{{dir/}{dir/}}")
-		return
-	}
-	dirs, ok := bracedList(normalizeArgument(call.args[0]))
-	if !ok {
-		d.addDiagnostic(
-			source,
-			call.line,
-			call.name,
-			call.args[0],
-			"dynamic",
-			"graphic paths must be literal braced directories",
-		)
-		return
-	}
-	for _, dir := range dirs {
-		clean := cleanProjectPath(dir)
-		if clean == "" {
-			d.addDiagnostic(source, call.line, call.name, dir, "outside_root", "graphic path escapes the project root")
-			continue
-		}
-		if clean == "." {
-			clean = ""
-		}
-		if !containsString(d.graphicDirs, clean) {
-			d.graphicDirs = append(d.graphicDirs, clean)
-		}
-	}
-}
-
-func (d *discoverer) addDiagnostic(file string, line int, command, reference, kind, message string) {
-	d.diagnostics = append(
-		d.diagnostics,
-		Diagnostic{File: file, Line: line, Command: command, Reference: reference, Kind: kind, Message: message},
-	)
-}
-
-func scanInvocations(text string) []invocation {
-	result := make([]invocation, 0)
-	line := 1
-scanLoop:
-	for i := 0; i < len(text); {
-		if text[i] == '\n' {
-			line++
-			i++
-			continue
-		}
-		if text[i] != '\\' {
-			i++
-			continue
-		}
-		start, startLine := i, line
-		i++
-		nameStart := i
-		for i < len(text) && ((text[i] >= 'A' && text[i] <= 'Z') || (text[i] >= 'a' && text[i] <= 'z') || text[i] == '@') {
-			i++
-		}
-		if nameStart == i {
-			continue
-		}
-		name := text[nameStart:i]
-		if name != "graphicspath" {
-			if _, ok := commandSpecs[name]; !ok {
-				continue
-			}
-		}
-		cursor := i
-		if cursor < len(text) && text[cursor] == '*' {
-			cursor++
-		}
-		cursor = skipSpace(text, cursor)
-		for cursor < len(text) && text[cursor] == '[' {
-			_, next, ok := balanced(text, cursor, '[', ']')
-			if !ok {
-				result = append(result, invocation{name: name, line: startLine, malformed: true})
-				line += strings.Count(text[start:cursor], "\n")
-				i = cursor + 1
-				continue scanLoop
-			}
-			cursor = skipSpace(text, next)
-		}
-		argCount := 1
-		if spec, ok := commandSpecs[name]; ok {
-			argCount = spec.argCount
-		}
-		call := invocation{name: name, line: startLine}
-		for len(call.args) < argCount {
-			if cursor >= len(text) || text[cursor] != '{' {
-				call.malformed = true
-				break
-			}
-			arg, next, ok := balanced(text, cursor, '{', '}')
-			if !ok {
-				call.malformed = true
-				cursor = len(text)
-				break
-			}
-			call.args = append(call.args, arg)
-			cursor = skipSpace(text, next)
-		}
-		result = append(result, call)
-		line += strings.Count(text[start:cursor], "\n")
-		i = cursor
-	}
-	return result
-}
-
 func balanced(text string, start int, open, close byte) (string, int, bool) {
 	depth := 0
 	for i := start; i < len(text); i++ {
+		if text[i] == '\\' {
+			i++ // Escaped delimiters are not grouping tokens.
+			continue
+		}
+		if open == '[' && text[i] == '{' {
+			_, next, ok := balanced(text, i, '{', '}')
+			if !ok {
+				return "", start, false
+			}
+			i = next - 1
+			continue
+		}
 		switch text[i] {
 		case open:
 			depth++
@@ -567,7 +204,7 @@ func balanced(text string, start int, open, close byte) (string, int, bool) {
 }
 
 func skipSpace(text string, at int) int {
-	for at < len(text) && (text[at] == ' ' || text[at] == '\t' || text[at] == '\r' || text[at] == '\n') {
+	for at < len(text) && (text[at] == 0 || text[at] == ' ' || text[at] == '\t' || text[at] == '\r' || text[at] == '\n') {
 		at++
 	}
 	return at
@@ -597,9 +234,6 @@ func sanitize(text string) string {
 		}
 	}
 	text = string(bytes)
-	for _, environment := range []string{"verbatim", "verbatim*", "Verbatim", "lstlisting", "minted"} {
-		text = maskEnvironment(text, environment)
-	}
 	text = maskInlineVerb(text, "\\lstinline")
 	text = maskInlineVerb(text, "\\verb")
 	return text
@@ -645,34 +279,6 @@ func maskInlineVerb(text, token string) string {
 			}
 		}
 		text = string(masked)
-		search = end
-	}
-}
-
-func maskEnvironment(text, environment string) string {
-	startToken := "\\begin{" + environment + "}"
-	endToken := "\\end{" + environment + "}"
-	for search := 0; ; {
-		startRel := strings.Index(text[search:], startToken)
-		if startRel < 0 {
-			return text
-		}
-		start := search + startRel
-		endRel := strings.Index(text[start+len(startToken):], endToken)
-		end := len(text)
-		if endRel >= 0 {
-			end = start + len(startToken) + endRel + len(endToken)
-		}
-		masked := []byte(text)
-		for i := start; i < end; i++ {
-			if masked[i] != '\n' {
-				masked[i] = ' '
-			}
-		}
-		text = string(masked)
-		if endRel < 0 {
-			return text
-		}
 		search = end
 	}
 }

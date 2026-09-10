@@ -1,0 +1,2 @@
+\DeclareDatamodelFields[type=field,datatype=literal]{customfield}
+\DeclareDatamodelEntryfields{customfield}

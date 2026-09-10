@@ -9,14 +9,10 @@ import (
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
 )
 
-var requestedFileExtensions = []string{
-	".tex", ".pdf", ".png", ".jpg", ".jpeg", ".eps", ".mps", ".svg",
-	".bib", ".sty", ".cls", ".bst", ".dat", ".csv",
-}
-
 // ResolveRequestedFiles resolves server diagnostics only within an already
 // policy-filtered candidate manifest. It never reads or restores other paths.
 func ResolveRequestedFiles(requested []string, candidates []projectarchive.File) ([]projectarchive.File, error) {
+	extensions := registeredExtensions()
 	byPath := make(map[string]projectarchive.File, len(candidates))
 	for _, file := range candidates {
 		byPath[file.Path] = file
@@ -36,7 +32,7 @@ func ResolveRequestedFiles(requested []string, candidates []projectarchive.File)
 			return nil, fmt.Errorf("requested file %q is absent, ignored, or denied by the local upload policy", clean)
 		}
 		matches := make([]projectarchive.File, 0, 1)
-		for _, extension := range requestedFileExtensions {
+		for _, extension := range extensions {
 			if file, ok := byPath[clean+extension]; ok {
 				matches = append(matches, file)
 			}

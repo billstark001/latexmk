@@ -688,7 +688,6 @@ func (c *Client) selectFiles(entry, engine string, additional []string, hash boo
 	for _, name := range additional {
 		explicit = append(explicit, dependency.ExactPattern(name))
 	}
-	historyAvailable := false
 	if c.UploadMode != "all" {
 		manifestFiles, manifestErr := dependency.LoadExplicitManifest(c.ProjectRoot, manifestPath)
 		if manifestErr != nil {
@@ -697,7 +696,7 @@ func (c *Client) selectFiles(entry, engine string, additional []string, hash boo
 		explicit = append(explicit, manifestFiles...)
 	}
 	if c.UploadMode == "auto" || c.UploadMode == "" {
-		cached, historyAvailable, err = dependency.LoadCachedInputs(c.ProjectRoot, entry, engine)
+		cached, _, err = dependency.LoadCachedInputs(c.ProjectRoot, entry, engine)
 		if err != nil {
 			return dependency.Result{}, fmt.Errorf("load dependency cache: %w", err)
 		}
@@ -706,11 +705,10 @@ func (c *Client) selectFiles(entry, engine string, additional []string, hash boo
 		entry,
 		candidates,
 		dependency.SelectionOptions{
-			Mode:             c.UploadMode,
-			UnmatchedGlob:    c.UnmatchedGlob,
-			ExplicitFiles:    explicit,
-			CachedFiles:      cached,
-			HistoryAvailable: historyAvailable,
+			Mode:          c.UploadMode,
+			UnmatchedGlob: c.UnmatchedGlob,
+			ExplicitFiles: explicit,
+			CachedFiles:   cached,
 		},
 	)
 	if err != nil {
