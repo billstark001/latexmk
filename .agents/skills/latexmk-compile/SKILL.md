@@ -1,75 +1,87 @@
 ---
 name: latexmk-compile
-description: Compile a LaTeX project through this repository's remote latexmk CLI and verify remote compiler readiness. Use for requests to build a `.tex` entry point in the current or specified directory, discover the configured project root, check the service health or available TeX engines/toolchain, or diagnose why this CLI cannot compile a project.
+description: Compile a LaTeX project through this repository's remote latexmk CLI, preview its upload selection, and diagnose compiler readiness or configuration problems. Use for building a .tex entry or configured target with this service, not for unrelated local TeX Live workflows.
 ---
 
-# Latexmk Compile
+# Remote LaTeX compilation
 
-Use the remote CLI, not a TeX Live installation with the same `latexmk` name.
+Select this repository's remote CLI explicitly: it shares its command name with
+TeX Live's unrelated `latexmk`. In this repository prefer
+`packages/cli/dist/latexmk` (build with `pnpm --filter @latexmk/cli build` if needed).
+Elsewhere use the registered `LATEXMK_CLI`, falling back to the installed command.
+Its `help` identifies it as the remote, PaaS-hosted LaTeX compiler.
 
-## Select the CLI and project directory
+Use the user's selected project directory and entry or configured target. Run
+from that directory: JSON discovery starts at the working directory, while the
+default upload root is the entry's directory. A wider root requires an explicit
+project root or `rootMode: "git"`; do not widen it to work around a missing file.
 
-1. Treat the current directory as the project directory unless a directory is
-   explicitly supplied. Resolve a supplied directory to an absolute path and
-   store it in `PROJECT_DIR`; confirm that the entry `.tex` file exists within
-   it. For the current directory, use `export PROJECT_DIR="$(pwd -P)"`.
-2. Prefer the repository build at `packages/cli/dist/latexmk` while working in
-   this repository. Otherwise use the installed command or `LATEXMK_CLI`.
-3. Set `LATEXMK_CLI` to the selected executable, then verify it before relying
-   on it:
+## Prepare and preview
 
-   ```sh
-   # Use an absolute repository build path here when working from this repository.
-   export LATEXMK_CLI="${LATEXMK_CLI:-latexmk}"
-   "$LATEXMK_CLI" help
-   ```
-
-   Its help must identify it as the "remote, PaaS-hosted LaTeX compiler". Build
-   the repository CLI with `pnpm --filter @latexmk/cli build` if that executable
-   is absent. Do not accidentally invoke the unrelated local TeX Live program.
-
-## Check remote compilation readiness
-
-Run checks from the target project directory so that the upward search for
-`.latexmk.json` uses the project's configuration:
+No project configuration file is required. Shared user configuration, process
+environment and automatic `.env.latexmk` / `.latexmk-token` discovery usually
+avoid project-specific wrappers. The CLI parses dotenv assignments without
+executing shell code. Do not source `.latexmk.env` or print credential contents.
+Explicit `--token-file` and JSON `tokenFile` are supported; local previews do not
+open token files. Prefer file/environment authentication over command-line tokens.
 
 ```sh
-(
-  cd -- "$PROJECT_DIR"
-  "$LATEXMK_CLI" doctor
-  "$LATEXMK_CLI" meta --json
-)
+export LATEXMK_CLI="${LATEXMK_CLI:-latexmk}"
+"$LATEXMK_CLI" help
+"$LATEXMK_CLI" files --json main.tex
+"$LATEXMK_CLI" doctor
 ```
 
-`doctor` checks the health endpoint and then retrieves metadata. `meta` reports
-the supported engines and available toolchain versions. Stop before compiling
-if either command fails, or if the requested engine is not in `engines`.
+`doctor` checks health and metadata and reports the selected credential source.
+Use `meta --json` if detailed engine/toolchain capabilities are needed. Resolve
+readiness failures before submitting a compile.
 
-Configure connectivity through `.latexmk.json` in the project or a parent
-directory. Prefer `LATEXMK_TOKEN` for credentials; do not write a token to the
-project or expose it in a command line. `LATEXMK_SERVER` and `LATEXMK_ENGINE`
-override the corresponding file settings.
+The default `auto` mode selects recognized dependencies and permitted recorder
+history. For dynamic inputs, supplement with `--include-file 'figures/**/*.pdf'`,
+JSON `includeFiles`, or a manifest. Every user-authored list supports glob;
+quote CLI globs so the shell does not expand them. `manifest` is a strict list
+plus the entry; it does not prove dependency completeness. Git/ignore and
+mandatory credential/path rules still apply. Ordinary `.gitkeep` is a placeholder.
+Use `files --explain PATH main.tex` to investigate exclusions. Do not silently
+switch to `all` or disable Git filtering to make a compile succeed.
 
-## Compile the target project
-
-Compile from the project directory and set its upload and artifact roots
-explicitly. This prevents a parent Git repository from being uploaded when the
-target project is only a subdirectory:
+## Compile and retain outputs
 
 ```sh
-(
-  cd -- "$PROJECT_DIR"
-  "$LATEXMK_CLI" --project-root . --out-dir . --engine xelatex main.tex
-)
+"$LATEXMK_CLI" --engine xelatex main.tex
+# Or use the project's configured target and export destination:
+"$LATEXMK_CLI" --target theory
 ```
 
-Replace `xelatex` and `main.tex` with the chosen supported engine and entry
-file. Omit `--engine` only when the configured default is intended. Returned
-PDFs, SyncTeX, logs, and allowed auxiliary files are written under `--out-dir`.
-Use `--json` for machine-readable results and `latexmk clean main.tex` to
-remove the supported generated files after a run.
+Preserve configured engine, output and auxiliary policies unless the user asks
+to change them. `outDir` / `--out-dir` controls returned outputs; target `pdf`
+exports a verified PDF inside the project root. `--target all` builds configured
+targets in name order and reports failure if any fails. Use `--json` for results,
+`watch` for continuous builds, and the documented jobs interface for detached work.
 
-Pass only CLI-supported options. This CLI accepts structured flags such as
-`--timeout`, `--jobname`, `--no-synctex`, and `--quiet`; it deliberately rejects
-arbitrary TeX or `latexmk` flags. Do not add `--shell-escape` unless the server
-explicitly permits it and the user has authorized that risk.
+PDF, SyncTeX and diagnostics are independent of auxiliary retention. Local
+`none|cache|output` and server `none|retain|reuse` policies are separate;
+`serverTTL` bounds auxiliary retention. No-config defaults are `none`, while
+legacy JSON may retain its previous `output` behavior. Server `reuse` restores
+compatible portable state into a fresh workspace and requires server capability;
+`--force` starts cold. Local caching never implicitly uploads cached files.
+
+`cache clean` removes local auxiliary cache contents while preserving project
+identity and dependency history. `clean ENTRY` removes supported generated
+extensions next to an entry; avoid it where similarly named files are maintained
+inputs. Remote cleanup uses its existing preview and digest-validated apply flow.
+Pass only supported CLI options; arbitrary TeX/latexmk options are rejected.
+
+## References
+
+Read only the guide needed for the current issue:
+
+- [Installation](../../../docs/INSTALLATION.md): register a local build or release
+  using the idempotent installer; update/unregister without rewriting unrelated rc content.
+- [Configuration](../../../docs/CONFIGURATION.md): authentication precedence,
+  declaring-file-relative paths, dotenv, targets and output defaults.
+- [Dependencies](../../../docs/DEPENDENCIES.md): glob syntax, policy controls,
+  scanner limitations and missing-file retry boundaries.
+- [Auxiliary files](../../../docs/AUXILIARY.md): retention, transfer expiry,
+  reuse compatibility and cleanup.
+- [Agent CLI](../../../docs/AGENT_CLI.md): job IDs, JSON results and detached operations.

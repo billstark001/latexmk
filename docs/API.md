@@ -23,6 +23,30 @@ It never includes secrets, database URLs, or user data.
 
 ## `POST /v1/compile`
 
+Both synchronous compile requests and queued upload-plan requests accept an
+optional `auxiliary` object:
+
+```json
+{ "auxiliary": { "local": "cache", "server": "reuse", "serverTTL": "24h" } }
+```
+
+`local` is `none`, `cache`, or `output`; `server` is `none`, `retain`, or
+`reuse`. `serverTTL` is a positive duration capped by service limits. Omitted
+policies default to `none` on current servers. The `auxiliaryRetention` metadata
+capability advertises independent retention and TTL support; clients must check it
+before relying on explicit `none`, `retain`, or a TTL. `reuse` also requires the
+queued compile-cache capability. Retention options do not change source snapshots
+or database schema.
+
+Artifacts include a `kind` (`output`, `synctex`, `diagnostic`, or `auxiliary`).
+Results may include `auxiliaryExpiresAt`. On expiry the server removes auxiliary
+members and updates the result archive's manifest while retaining final outputs
+and diagnostics. Jobs/list responses omit expired auxiliaries. Local-only
+auxiliaries have a short delivery lifetime; see [retention policy](AUXILIARY.md).
+
+User-authored glob manifests are expanded by the CLI. API `files` arrays always
+contain exact paths, sizes and SHA-256 hashes.
+
 Available only when `LATEXMK_ENABLE_LEGACY_COMPILE=true`.
 
 Requires authentication unless `LATEXMK_AUTH_MODE=none` was explicitly selected

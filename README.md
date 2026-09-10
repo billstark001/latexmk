@@ -1,525 +1,110 @@
 # latexmk
 
-A remote LaTeX compilation service for small research groups. The local Go CLI
-safely packages a project and sends it to a Go server on a PaaS. The server runs
-`latexmk` in a disposable workspace and returns the PDF, logs, SyncTeX, and
-allowed auxiliary files to the local project.
+A remote LaTeX compiler for small research groups. A Go CLI selects project
+dependencies and sends an immutable source snapshot to a Go server. Each job
+compiles in an isolated workspace and returns PDF, SyncTeX and diagnostics.
+Optional server auxiliary caches reduce repeated compilation passes.
 
-The project emphasizes predictable compilation and practical isolation: it does
-not expose a persistent remote workspace, ignores `latexmkrc` files, disables
-shell escape by default, and limits upload size, expansion, concurrency, queued
-jobs, logs, artifacts, and state storage.
+## Install the CLI
 
-Each queued job is bound to an immutable content-addressed source snapshot, so
-later uploads to the same project cannot change what an existing job compiles.
-
-## Monorepo
-
-| Package              | Implementation  | Purpose                                                                                                            |
-| -------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `@latexmk/cli`       | Go              | Local proxy, `latexmk` command, and engine-symlink compatibility                                                   |
-| `@latexmk/server`    | Go (Gin + GORM) | Compile API, incremental upload, job queue, metadata, authentication, limits, and PostgreSQL user/token management |
-| `@latexmk/dashboard` | Preact + Vite   | Console for jobs, capabilities, members, and API tokens                                                            |
-| `@latexmk/deploy`    | TypeScript      | Standalone OCI/Docker context, Compose file, and deployment configuration generator                                |
-
-The server uses **Gin** and **GORM/pgx** over the PostgreSQL protocol. Full
-PostgreSQL and PGlite socket use the same connection interface. Use full
-PostgreSQL for production; PGlite is limited to one development, demo, or test
-instance. The connection pool is intentionally limited to one connection for
-PGlite compatibility.
-
-## Quick start
-
-Requirements: Go 1.27+, Node.js 24+, pnpm 12, and (for local end-to-end tests)
-`latexmk` plus a TeX engine.
+Install the latest GitHub Release and register `latexmk` in your shell rc file:
 
 ```sh
-npm install --global pnpm@12
+curl -fsSL https://raw.githubusercontent.com/billstark001/latexmk/main/scripts/install-cli.sh | bash -s --
+```
+
+Open a new terminal and run `latexmk version`. Release installation needs Bash,
+curl and a SHA-256 utility, with binaries for macOS/Linux on Intel/AMD and ARM64;
+it does not require Go, Node.js or local TeX Live. Configure a remote server using
+the [configuration guide](docs/CONFIGURATION.md).
+
+To register a local build instead, run from this repository after building:
+
+```sh
+bash scripts/install-cli.sh --local "$PWD/packages/cli/dist/latexmk"
+```
+
+Re-running updates the same managed rc block. Use `--rc FILE` for another shell
+startup file, `--release TAG` to pin a release, or `--uninstall` to remove the
+registration. See [installation](docs/INSTALLATION.md) for examples and shell details.
+
+## Development quick start
+
+Requirements: Go 1.27+, Node.js 24+, pnpm 12. Local end-to-end testing also
+requires TeX Live and latexmk.
+
+```sh
 pnpm install --frozen-lockfile
 pnpm build
-pnpm test
 ```
 
-### Development checks
-
-The repository uses golangci-lint for Go analysis and formatting (`goimports`
-and `golines`, 120 columns), Oxlint for JavaScript/TypeScript analysis, and
-Oxfmt for formatting. Both TypeScript packages use strict type checking.
-The standard tools run directly; there are no custom source or architecture checks.
+Start an explicitly unauthenticated development server:
 
 ```sh
-pnpm format          # Apply formatting across the repository
-pnpm format:check    # Check formatting without writing files
-pnpm lint           # Go analysis and JS/TS lint, including type-aware rules
-pnpm typecheck      # TypeScript checking without emitting build output
-pnpm test
-pnpm --filter @latexmk/cli --filter @latexmk/server test:race
-pnpm build
+LATEXMK_AUTH_MODE=none LATEXMK_IMAGE_PROFILE=local-texlive \
+  ./packages/server/dist/latexmk-server
 ```
 
-Configuration lives in `.golangci.yml`, `.oxlintrc.json`, and `.oxfmtrc.json`.
-Go tools are pinned in the isolated `tools/go.mod` module and invoked through
-`go tool`; the first invocation downloads and builds them automatically.
-They do not change the CLI or server dependency graph. Go modules and CI use
-Go 1.27; CI runs the same commands shown above.
-
-`devEngines.packageManager` accepts any pnpm 12 release, with no minor-version
-pin in the manifest. The lockfile records the resolved package manager and JS
-dependencies for reproducible installs. To update all workspace JS dependencies
-with npm-check-updates and refresh the lockfile, run `pnpm deps:update` and then
-the checks above.
-
-Start an explicitly unauthenticated local development server:
-
-```sh
-LATEXMK_AUTH_MODE=none \
-LATEXMK_IMAGE_PROFILE=local-texlive \
-./packages/server/dist/latexmk-server
-```
-
-Configure the client and compile:
+In another terminal, from the repository root:
 
 ```sh
 cd examples/basic
-../../../packages/cli/dist/latexmk init --server http://127.0.0.1:8080
-../../../packages/cli/dist/latexmk main.tex
+../../packages/cli/dist/latexmk files main.tex
+../../packages/cli/dist/latexmk main.tex
 ```
 
-An engine-like symlink is also supported:
+Project configuration is optional. Git ignore rules and automatic dependency
+selection work by default. Put shared connection settings in the user config,
+or use a project `.env.latexmk`:
 
-```sh
-ln -s /absolute/path/to/latexmk/packages/cli/dist/latexmk ~/.local/bin/xelatex
-xelatex -interaction=nonstopmode main.tex
+```dotenv
+LATEXMK_SERVER=https://latex.example.edu
+LATEXMK_TOKEN_FILE=.latexmk-token
 ```
 
-The CLI selects its engine from its executable name. It validates common flags
-and never passes unknown command-line arguments through to the server shell.
+The CLI reads the environment file automatically; it never executes it as a
+shell script. Without an explicit credential source it looks for
+`.latexmk-token` at the resolved project root, then a user-level token file.
+See [configuration](docs/CONFIGURATION.md) for precedence and alternatives.
 
-## Use the CLI from Bash
-
-After building the CLI, place a symlink in a directory on Bash's `PATH`. The
-following example uses `~/.local/bin`, keeps the command updated as you rebuild
-the repository, and applies to subsequent Bash sessions:
-
-```sh
-cd /absolute/path/to/latexmk
-pnpm --filter @latexmk/cli build
-
-mkdir -p "$HOME/.local/bin"
-ln -sf "$PWD/packages/cli/dist/latexmk" "$HOME/.local/bin/latexmk"
-touch "$HOME/.bashrc"
-grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" || \
-  printf '\n%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
-source "$HOME/.bashrc"
-
-command -v latexmk
-latexmk version
-```
-
-Add the `PATH` line only once. If your Bash startup files use `~/.bash_profile`
-instead of `~/.bashrc`, add it there (or source `~/.bashrc` from that file).
-The CLI name intentionally shadows a locally installed TeX Live `latexmk`; use
-the absolute CLI path if you need both in the same shell.
-
-## Client configuration
-
-The CLI first reads the user config at `$XDG_CONFIG_HOME/latexmk/config.json`
-(or the platform user config directory), then searches upward for a project
-`.latexmk.json`:
+For a strict upload list, existing JSON can contain glob patterns directly:
 
 ```json
 {
-  "server": "https://latex.example.edu",
-  "rootMode": "entry",
-  "uploadMode": "auto",
-  "respectGitignore": true,
-  "engine": "xelatex",
-  "timeout": "3m",
-  "exclude": [
-    ".git",
-    "node_modules",
-    ".latexmk-cache",
-    "*.aux",
-    "*.fdb_latexmk",
-    "*.fls",
-    "*.log",
-    "*.synctex.gz",
-    "*.xdv"
-  ]
+  "uploadMode": "manifest",
+  "includeFiles": ["main.tex", "sections/**/*.tex", "figures/*.pdf", "*.bib"],
+  "auxiliary": { "local": "none", "server": "reuse" }
 }
 ```
 
-Without an explicit `projectRoot`, the project root is the directory containing
-the entry TeX file. This prevents a command run in a subdirectory from silently
-uploading its parent Git repository. Set `rootMode` to `git`, pass
-`--root-mode git`, or set `--project-root` to request a wider root explicitly.
-The CLI normally creates a random `.latexmk-cache/project-id`; `projectId`,
-`LATEXMK_PROJECT_ID`, or `--project-id` is an explicit override for managed
-deployments.
-
-`uploadMode: "auto"` selects the entry file and supported literal LaTeX
-dependencies after Git-ignore and deny rules have been applied. It reports
-unresolved recognized dependencies before contacting the server. Missing,
-ignored, and denied references share one `unavailable` diagnostic because the
-scanner does not inspect filtered file contents. `--upload-mode all` uploads
-every policy-allowed candidate and is an explicit compatibility fallback; it
-still does not override the denylist.
-Static scanning cannot prove that custom macros or unsupported packages do not
-load more files. Always inspect `latexmk files` for a sensitive project. See
-[`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md) for supported commands and
-limitations.
-
-Successful compiles cache workspace-local `.fls` INPUT paths in
-`.latexmk-cache/dependencies.json`, keyed by entry and engine. Cached paths must
-still pass the current Git-ignore and deny policies. When history covers a
-dynamic reference, the CLI warns because the path set may be stale; it never
-falls back to `all` automatically.
-
-If stale history misses a file and the server reports a recognized TeX
-missing-file diagnostic, `auto` mode can make a bounded retry. The client
-resolves the exact request only inside its current policy-filtered manifest and
-creates a new immutable snapshot. It never lets the server bypass Git-ignore,
-the denylist, root checks, or symlink checks. Retries stop after 3 rounds, 64
-new files, or 64 MiB. `manifest` mode remains strict and never adds files this
-way.
-
-Use `includeFiles`, repeatable `--include-file`, or a line-based
-`manifestFile`/`--manifest` to add exact project-relative dependencies. In
-`auto` mode they supplement static discovery. `uploadMode: "manifest"` selects
-only the entry file and those explicit files, without reading recorder history
-or inferring any other dependency. Explicit files still must pass Git-ignore,
-denylist, root-boundary, and symlink policy. See
-[`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md).
-
-The project config may contain a `token` for a private, single-user setup. A
-user config, environment variable, or token file is safer when the paper
-directory is committed or shared:
-
-```sh
-export LATEXMK_TOKEN='lm_...'
-# Or mount a Docker/Kubernetes secret and point to it:
-export LATEXMK_TOKEN_FILE=/run/secrets/latexmk_token
-```
-
-Token priority is: CLI `--token`/`--token-file`, `LATEXMK_TOKEN`,
-`LATEXMK_TOKEN_FILE`, user config, then project config. Project settings other
-than the token override user defaults. A token file must contain exactly one
-non-empty token; a trailing newline is accepted.
-
-The server accepts the shared token from either `LATEXMK_API_TOKEN` or
-`LATEXMK_API_TOKEN_FILE` (never both). The file must be a regular, non-symlink
-file containing one non-empty token.
-
-The client does not upload `.latexmk.json`, `.latexmkignore`, `.env` files, or
-common private-key files by default, even when a project replaces the ordinary
-exclude list. In a Git work tree it selects tracked files plus untracked files
-that are not ignored, using Git's own nested, repository-local, and global
-exclude rules. Use `--no-gitignore` only when ignored files are intentional
-compile inputs. Add further exclusions in `.latexmkignore`. Symlinks are not
-followed; the client fails when it encounters one so files outside the project
-root cannot be uploaded.
-
-Inspect the exact content-addressed manifest without contacting the server:
-
-```sh
-latexmk files main.tex
-latexmk files --json main.tex
-latexmk --dry-run main.tex
-latexmk files --upload-mode all main.tex
-```
-
-Continuously compile the same policy-filtered dependency set:
-
-```sh
-latexmk watch main.tex
-latexmk watch --watch-interval 500ms --watch-debounce 500ms main.tex
-```
-
-After each compile the watcher refreshes static, recorder, explicit-manifest,
-and validated `needsFiles` dependencies. Edits made while a remote compile is
-running schedule another immutable compile. Compile failures do not terminate
-the watcher; fix a watched input to retry. `--json` emits one JSON result per
-compile. Restart the watcher after changing `.latexmk.json`, user configuration,
-environment variables, or command-line options.
-
-```sh
-latexmk compile --engine xelatex main.tex
-latexmk watch main.tex
-latexmk main.tex
-latexmk meta
-latexmk doctor
-latexmk clean main.tex
-latexmk cache ignore
-latexmk remote clean --scope results
-# Then apply the exact ten-minute preview:
-latexmk remote clean --plan-id PLAN_ID --yes
-latexmk --json main.tex
-```
-
-Agent and script integrations can inspect and cancel queued jobs without
-parsing human-readable output:
-
-```sh
-latexmk jobs list --limit 50 --json
-latexmk jobs show JOB_ID --json
-latexmk jobs cancel JOB_ID --json
-latexmk compile --detach --json main.tex
-latexmk logs JOB_ID --tail 200 --max-bytes 65536 --json
-latexmk diagnostics JOB_ID --json
-latexmk artifacts list JOB_ID --json
-latexmk artifacts get JOB_ID ARTIFACT_ID --out-dir ./build --json
-```
-
-These new commands use a versioned JSON envelope with stable error codes and a
-`retryable` flag. Existing `compile`, `files`, and `meta` JSON shapes remain
-unchanged. See [the Agent-facing CLI contract](docs/AGENT_CLI.md).
-
-`diagnostics` is a bounded, derived index over the complete stdout, stderr, and
-compiler logs. It extracts common TeX errors and warnings with project-relative
-file and source line information when available. Every item includes one or
-more raw `logLocations` with the log source, path, and line range. It does not
-replace `logs`; inspect the raw log whenever the index is incomplete, lacks the
-needed context, or does not recognize an error.
-
-## Deployment
-
-Build a slim XeLaTeX/CJK context for an existing PostgreSQL service:
-
-```sh
-pnpm --filter @latexmk/deploy build
-node packages/deploy/dist/index.js bundle \
-  --profile slim \
-  --preset railway \
-  --auth postgres --database postgres --external-database \
-  --out dist/paas-slim
-```
-
-The supplied low-cost resource presets are:
-
-| Preset               | State storage        | Queue / retention policy                                      |
-| -------------------- | -------------------- | ------------------------------------------------------------- |
-| `railway-serverless` | ephemeral tmpfs      | 1 compiler, 2 queued jobs, results 24 h, snapshots/blobs 48 h |
-| `lightsail-tokyo`    | 3 GiB named volume   | 1 compiler, 12 queued jobs, seven-day cache retention         |
-| `railway`            | 512 MiB named volume | 1 compiler, 5 queued jobs, 72-hour cache retention            |
-
-Use `--profile full` for the full TeX Live image. The bundler writes
-`.env.example`, `compose.yaml`, and `latexmk-deploy.json`; replace all secret
-placeholders. `--external-database` connects to an already provisioned private
-PostgreSQL service rather than adding another database container.
-
-Build the runtime once before building an application image:
-
-```sh
-node packages/deploy/dist/index.js runtime-bundle \
-  --profile slim --out dist/runtime-slim --build
-```
-
-Then build and export the application image:
-
-```sh
-node packages/deploy/dist/index.js bundle \
-  --profile slim \
-  --auth token \
-  --out dist/paas-slim \
-  --tag registry.example.edu/latexmk:0.3.0 \
-  --build \
-  --save dist/latexmk-0.3.0.tar
-```
-
-For production, publish the runtime and pass its immutable reference
-as `--runtime-image registry/name@sha256:...` when bundling the application.
-Server-only builds no longer install TeX. See the [deployment guide](packages/deploy/README.md)
-for the two CI paths, fixed TeX snapshots, and external build caches.
-
-## Server modes
-
-### `none`
-
-Only for an intentionally isolated local development instance. It is not the
-bundler default and cannot be used with a deployment preset.
-
-```sh
-LATEXMK_AUTH_MODE=none
-```
-
-### `token`
-
-One shared Bearer token without a database. This is the secure default.
-
-```sh
-LATEXMK_AUTH_MODE=token
-LATEXMK_API_TOKEN='a random value at least 24 characters long'
-```
-
-### `postgres`
-
-PostgreSQL stores users and API tokens; a bootstrap token provides initial
-administration.
-
-```sh
-LATEXMK_AUTH_MODE=postgres
-LATEXMK_DATABASE_MODE=postgres
-DATABASE_URL='postgres://latexmk:password@postgres:5432/latexmk?sslmode=require'
-LATEXMK_BOOTSTRAP_TOKEN='a random value at least 24 characters long'
-```
-
-Administration endpoints are `GET/POST /v1/admin/users`,
-`PATCH /v1/admin/users/{id}`, and `POST /v1/admin/users/{id}/tokens`. A
-plaintext API token is returned only once, in its creation response.
-
-### PGlite development database
-
-PGlite socket uses the PostgreSQL protocol, so the Go server needs no alternate
-store implementation. It provides neither TLS nor production concurrency.
-
-```sh
-npm install -g @electric-sql/pglite-socket
-pglite-server --db=.latexmk-pglite --host=127.0.0.1 --port=5432
-
-LATEXMK_AUTH_MODE=postgres \
-LATEXMK_DATABASE_MODE=pglite \
-DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable' \
-LATEXMK_BOOTSTRAP_TOKEN='a random value at least 24 characters long' \
-./packages/server/dist/latexmk-server
-```
-
-The bundler supports `--auth postgres --database pglite` for local/demo Compose
-only. The default database mode uses full PostgreSQL.
-
-## Incremental uploads, jobs, and retention
-
-The CLI creates the same validated project manifest as the legacy archive path,
-addresses every file by SHA-256, asks the server for missing hashes, uploads
-only changed content, and commits a project snapshot to a bounded queue. Each
-job runs in a separate workspace. Result archives are available through the job
-API. The synchronous `POST /v1/compile` endpoint is disabled by default and can
-be temporarily enabled with `LATEXMK_ENABLE_LEGACY_COMPILE=true` for v1 clients.
-
-Each project receives a random identity stored in
-`.latexmk-cache/project-id`, avoiding collisions when unrelated projects share
-the same container mount path. Run `latexmk cache ignore` in Git projects.
-`--legacy-project-id` exists only to clean data created by older path-derived
-identities. Remote deletion always uses a preview, a short-lived local plan that
-contains no credentials, and a server-validated digest.
-
-`LATEXMK_STATE_DIR` defaults to `/tmp/latexmk-state`; container bundles normally
-use `/var/lib/latexmk`. `LATEXMK_MAX_STATE_BYTES` is a hard combined source-cache
-and result-archive limit. A periodic sweeper expires results, snapshots, and
-unreferenced blobs according to TTL settings while preserving data referenced by
-a live upload, current project snapshot, or queued/running job snapshot. The
-state directory never stores plaintext API tokens.
-
-## Dashboard
-
-```sh
-pnpm --filter @latexmk/dashboard dev
-```
-
-The development server proxies `/v1` to the local server. The console can use a
-different API URL and Bearer token, displays jobs and capabilities, downloads
-results, and manages users/tokens in administrator mode. Compilation remains
-submitted through the safe local CLI.
-
-## Metadata
-
-`GET /v1/meta` returns the protocol, server version, commit, build date, image
-profile, engines, resource and cache-retention limits, shell-escape/workspace/
-rc-file policies, toolchain versions, and Go/OS/architecture information. Each
-compile result also contains `serverVersion` and `imageProfile`.
-
-## Security boundaries and limitations
-
-- `latexmk -norc` ignores system, user, and project rc files.
-- Shell escape is disabled by default and compilers receive a restricted
-  environment rather than the PaaS process environment.
-- Upload archives reject absolute paths, `..`, backslashes, duplicates,
-  symlinks, hard links, and special files.
-- Each request gets a disposable directory. Compile process groups are fully
-  terminated after a timeout.
-- The container is non-root; generated Compose settings use a read-only root,
-  tmpfs, dropped capabilities, memory limits, and PID limits.
-- Logs, artifacts, uploads, sessions, queues, and state storage have hard
-  limits. Result artifacts must be workspace-local and allowed by `.fls` or a
-  valid job-name rule.
-
-Enabling shell escape is equivalent to allowing the uploader to run commands in
-the container. Do not enable it unless every compiler is trusted and the PaaS
-has no sensitive credentials, restricted networking, and strong isolation.
-
-Logs are delivered after a job completes; SSE/WebSocket streaming is not yet
-implemented. PGlite is a single-instance development database. Use full
-PostgreSQL for production multi-instance deployments, long retention, or higher
-concurrency.
-
-See `docs/` for full API, operations, and security documentation.
-
-## Reusing server compilation state
-
-Opt in per compile, or set a user/project default:
-
-```sh
-latexmk --server-cache reuse main.tex
-latexmk --server-cache reuse --force main.tex
-```
-
-```json
-{
-  "auxiliary": { "server": "reuse" }
-}
-```
-
-`LATEXMK_SERVER_CACHE=none|reuse` overrides configuration; `--server-cache`
-overrides both. The default (`none`) does not read or publish reusable compiler
-state. It does not delete an existing cache or change result-archive retention
-and local artifact downloads. Local auxiliary retention controls and the
-proposed server `retain` mode are separate features, not implemented by this
-switch. Explicit reuse requires the `compileCache` server capability; older
-servers are rejected instead of silently ignoring the request.
-
-Each job still materializes its immutable sources into a fresh workspace and
-runs latexmk. Reuse warms `.aux`, `.toc`, `.lof`, `.lot`, `.out`, `.bbl`, `.nav`
-and `.snm` files from a previous successful compile, reducing repeated passes.
-It does not return an old PDF or restore `.fls`, `.fdb_latexmk`, `.run.xml` or
-other records tied to an old workspace. Files containing that workspace's
-absolute path cannot be cached. Uploaded source files, including supplied
-`.bbl` files, are never replaced by cached outputs.
-
-Caches are isolated by owner, project ID, entry, engine, job name, compilation
-options, server build, image profile and reported toolchain versions. TeX source
-edits may reuse state; added/removed input paths or changed non-TeX inputs
-(including `.bib`, `.sty` and `.cls`) start cold. `--force` also starts cold and
-refreshes the cache on success. Failed, timed-out or cancelled runs do not
-publish state; older submitted jobs cannot overwrite a newer successful
-cache. Corruption, expiry and cache quota failures fall back to ordinary
-compilation. A failed warm compile retries once from clean sources within the
-same timeout budget, unless it timed out or was cancelled; `coldRetry` reports
-this fallback. A cache hit still runs the compiler and lets latexmk converge
-references; speedups depend on the document.
-
-Server settings:
-
-- `LATEXMK_COMPILE_CACHE_RETENTION`: maximum age since publication, default `24h`.
-- `LATEXMK_MAX_COMPILE_CACHE_BYTES`: uncompressed auxiliary bytes per cache,
-  default 16 MiB; `0` disables reuse.
-- `LATEXMK_COMPILE_CACHE_EPOCH`: change this after updating installed TeX
-  packages/fonts in place without rebuilding the service.
-
-Cache archives count towards `LATEXMK_MAX_STATE_BYTES` and are swept with the
-other state. They survive a process restart only when `LATEXMK_STATE_DIR`
-survives; an ephemeral Railway filesystem provides no cross-deployment
-persistence guarantee.
-
-JSON compile results and job records include `compileCache` with `hit`, `miss`
-or `bypass`, the reason and restored file count. Publication happens after the
-result archive is durable; the job record (and CLI result) additionally reports
-`storedFiles` and publication warnings. Inspect or remove only reusable state
-with the existing preview/apply flow:
-
-```sh
-latexmk remote clean --scope cache
-latexmk remote clean --plan-id PLAN_ID --yes
-```
-
-`--scope project` includes reusable state too. Cache cleanup leaves downloaded
-local files, source snapshots and job result archives alone when its scope is
-`cache`.
+No separate manifest or ignore file is required. Use `latexmk files` to preview
+the exact selected paths and hashes before compiling.
+
+## Documentation
+
+| Topic                                                      | Guide                                       |
+| ---------------------------------------------------------- | ------------------------------------------- |
+| Installing the CLI and shell registration                  | [Installation](docs/INSTALLATION.md)        |
+| Configuration, credentials, dotenv and build targets       | [Configuration](docs/CONFIGURATION.md)      |
+| Git ignore rules, manifests, glob and dependency discovery | [File selection](docs/DEPENDENCIES.md)      |
+| Local/server auxiliary retention and compilation reuse     | [Auxiliary files](docs/AUXILIARY.md)        |
+| Deployment, authentication modes and database options      | [Deployment](docs/DEPLOYMENT.md)            |
+| Runtime images and deployment bundles                      | [Deploy package](packages/deploy/README.md) |
+| Jobs, monitoring and storage                               | [Operations](docs/OPERATIONS.md)            |
+| JSON CLI integration                                       | [Agent CLI](docs/AGENT_CLI.md)              |
+| HTTP API                                                   | [API](docs/API.md)                          |
+| Isolation and limitations                                  | [Security](docs/SECURITY.md)                |
+| Toolchain, formatting and validation commands              | [Development](docs/DEVELOPMENT.md)          |
+
+## Packages
+
+| Package              | Implementation | Purpose                                                   |
+| -------------------- | -------------- | --------------------------------------------------------- |
+| `@latexmk/cli`       | Go             | File selection, upload, watch and result downloads        |
+| `@latexmk/server`    | Go, Gin, GORM  | Compilation, queue, snapshots, authentication and storage |
+| `@latexmk/dashboard` | Preact, Vite   | Jobs, capabilities, users and API tokens                  |
+| `@latexmk/deploy`    | TypeScript     | Runtime/application images and deployment bundles         |
+
+Source snapshots, result archives and auxiliary reuse are independently managed.
+Shell escape is disabled by default; project latexmkrc files are not executed.
+Persistent state depends on the deployment's configured storage volume.

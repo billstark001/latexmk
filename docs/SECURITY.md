@@ -30,13 +30,17 @@ at the application and deployment layers.
   normalized relative requests. The client can accept them only from its
   current policy-filtered manifest, with bounded rounds, file count, and bytes;
   every retry creates a new immutable snapshot and job.
-- The dependency watcher polls selected files and explicit/Git policy controls,
-  not the whole project tree. Every event reruns the full client upload policy
-  and submits a new immutable snapshot; a new unrelated file does not trigger
-  compilation or become uploadable merely because watch mode is active.
-- Explicit manifests contain exact project-relative files only. They cannot
+- The dependency watcher refreshes the policy-filtered candidate and selected
+  sets to detect newly matching glob files, alongside edits to selected inputs
+  and policy controls. Every compilation submits a new immutable snapshot;
+  unrelated files do not become selected merely because watch mode is active.
+- Explicit manifests accept project-relative paths and glob patterns. They cannot
   override Git-ignore, denylist, root-boundary, or symlink checks; manifest
   files are client policy and are denied from upload by default.
+- Selected source files are revalidated for regular-file/symlink policy when
+  parsed, hashed and uploaded. Reads use `os.Root` to confine path traversal.
+  User configuration, configured credential paths, and default credential files
+  are excluded from previews as well as uploads, before authentication is needed.
 - Upload blobs, logs, artifacts, concurrent compiles, queued jobs, state bytes,
   and upload sessions have hard limits.
 - A state sweeper expires results, project snapshots, and orphaned blobs. It

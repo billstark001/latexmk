@@ -61,7 +61,7 @@ ignored file is an intentional compile input.
 
 ## Explicit manifest
 
-An exact file list can supplement `auto` discovery without uploading every
+Paths and glob patterns can supplement `auto` discovery without uploading every
 allowed project file:
 
 ```sh
@@ -69,11 +69,21 @@ latexmk files --manifest .latexmk-files main.tex
 latexmk --include-file generated/table.tex main.tex
 ```
 
-The manifest format is UTF-8 text with one project-relative file per line.
-Blank lines and lines beginning with `#` are ignored. Entries are exact paths;
-globs and directory expansion are intentionally unsupported. The manifest path
+The manifest format is UTF-8 text with one project-relative path or glob per line.
+Blank lines and lines beginning with `#` are ignored. All user-authored manifest
+sources, including JSON `includeFiles` and CLI `--include-file`, support the same
+glob syntax: `*`, `?`, character classes, recursive `**`, and brace alternatives.
+`**` matches zero or more directory levels; `dir/` includes files recursively.
+Patterns use `/` separators; backslash escapes a literal glob character.
+Quote CLI patterns to prevent the shell expanding them. Results are sorted and
+deduplicated. Patterns are expanded only over policy-allowed candidates, not by
+walking arbitrary paths. Invalid patterns, absolute paths and `..` components
+are rejected. Exact missing paths are always errors; `unmatchedGlob` (or
+`--unmatched-glob`) controls unmatched globs with `error`, `warn`, or `ignore`.
+The manifest path
 must itself stay inside the project root and cannot contain symlink components.
-`.latexmk-files` is denied from upload by default because it is client policy,
+`.latexmk-manifest`, `.latexmk-files`, and the explicitly configured manifest
+are denied from upload because they are client policy,
 not a TeX input.
 
 Equivalent project configuration is:
@@ -98,11 +108,47 @@ latexmk files --upload-mode manifest --manifest .latexmk-files main.tex
 latexmk --upload-mode manifest --manifest .latexmk-files main.tex
 ```
 
-`manifest` uploads only the entry and exact explicit files. It does not run the
+`manifest` uploads only the entry and expanded explicit files. It does not run the
 static scanner or read `.fls` history. `resolved: true` in this mode means the
 declared list is valid, not that it is a complete TeX dependency closure. A
 missing declaration therefore becomes a normal remote compile failure rather
 than an automatic wider upload.
+
+If no inline includes or manifest filename are supplied in `manifest` mode,
+the CLI tries `.latexmk-manifest`, then `.latexmk-files`. Generated network
+manifests always contain exact expanded paths, hashes and sizes; the server
+does not expand user glob expressions.
+
+## Ignore sources and previews
+
+Git repositories use Git itself for tracked and nonignored untracked selection.
+Tracked files remain candidates even when they match `.gitignore`. Directories
+without `.git` still honor root and nested `.gitignore` files. Explicit custom
+ignore files use Git-style ordered rules, `!` negation, anchored paths, directory
+rules and `**`. An excluded parent directory must be re-included before any of
+its children can be selected. Enabled Git filtering and custom exclusions are
+independent; a custom negation cannot restore a Git-excluded file or a credential.
+
+The optional `ignoreFiles` list chooses custom sources; `[]` disables them.
+The implicit default is an existing `.latexmkignore`, not a required new file.
+Custom ignore-file patterns are relative to the project root. See
+[configuration](CONFIGURATION.md) for combining ignore and manifest policies.
+
+```sh
+latexmk files --explain figures/plot.pdf main.tex
+latexmk files --explain .env.latexmk --json main.tex
+latexmk files --include-file 'figures/**/*.pdf' main.tex
+```
+
+`--explain` reports the candidate upload policy without reading excluded file
+contents. The normal preview reports actual selected files and their reasons.
+Preview, compilation and watch share selection code. Only selected files are
+hashed and charged against the upload byte limit; candidate enumeration keeps
+its separate file-count bound.
+
+Watch refreshes the dependency set while waiting, detecting new glob matches,
+deleted files, renamed files, and changed policy files. Project/user JSON,
+dotenv and CLI settings remain fixed for a watch session; restart to reload them.
 
 ## Limits
 
