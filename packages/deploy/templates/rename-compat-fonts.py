@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create OFL-licensed TeX Gyre compatibility copies for XeTeX projects."""
+"""Create TeX Gyre compatibility copies under the GUST Font License."""
 
 from pathlib import Path
 import sys

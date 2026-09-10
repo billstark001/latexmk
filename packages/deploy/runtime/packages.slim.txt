@@ -8,3 +8,6 @@ collection-fontsrecommended
 collection-langchinese
 collection-langjapanese
 collection-langkorean
+tex-gyre
+tex-gyre-math
+unicode-math

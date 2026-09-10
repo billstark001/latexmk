@@ -15,6 +15,7 @@ find "$texbin" -maxdepth 1 \( -type f -o -type l \) -perm -u+x -exec ln -sf {} /
 install --directory /usr/local/share/fonts/latexmk
 find /usr/local/texlive -path '*/fonts/opentype/public/tex-gyre/*' -type f -name '*.otf' -exec ln -sf {} /usr/local/share/fonts/latexmk/ \;
 find /usr/local/texlive -path '*/fonts/opentype/public/xits/*' -type f -name '*.otf' -exec ln -sf {} /usr/local/share/fonts/latexmk/ \;
+find /usr/local/texlive -path '*/fonts/opentype/public/tex-gyre-math/*' -type f -name '*.otf' -exec ln -sf {} /usr/local/share/fonts/latexmk/ \;
 printf '%s\n' "$TEXLIVE_REPOSITORY" > /usr/local/lib/latexmk/texlive-repository.txt
 find /usr/local/texlive -path '*/tlpkg/texlive.tlpdb' -exec cp {} /usr/local/lib/latexmk/texlive.tlpdb \;
 dpkg-query -W > /usr/local/lib/latexmk/debian-packages.txt

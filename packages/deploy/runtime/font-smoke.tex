@@ -1,0 +1,36 @@
+% Shared XeLaTeX / LuaLaTeX fixture; compilation fails on missing glyphs.
+\documentclass{article}
+\usepackage{fontspec}
+\usepackage{unicode-math}
+\tracinglostchars=3
+\setmainfont{TeX Gyre Termes}
+\setsansfont{TeX Gyre Heros}
+\setmonofont{DejaVu Sans Mono}
+\setmathfont{TeX Gyre Termes Math}
+\newfontfamily\cjkfont{Noto Serif CJK SC}
+\begin{document}
+Academic body: naïve café, fi fl. \textbf{Bold} \textit{Italic}
+\textbf{\textit{Bold italic}}. \textsf{Sans serif headings}.
+\texttt{for (i = 0; i < 10; i++) printf("Hello");}
+\[
+  \int_0^\infty e^{-x^2}\,dx=\frac{\sqrt{\pi}}{2},\qquad
+  \sum_{n=1}^{N} n,\quad \mathbb{R},\quad \alpha+\beta=\gamma
+\]
+{\cjkfont 中文学术字体测试}
+\ExplSyntaxOn
+\clist_map_inline:nn
+  {TeX~Gyre~Termes,TeX~Gyre~Heros,TeX~Gyre~Cursor,
+   Times~New~Roman,Arial,Courier~New,
+   DejaVu~Sans~Mono,Liberation~Mono,Liberation~Serif,Liberation~Sans,
+   Carlito}
+  {\par\fontspec{#1} #1:~Regular~0123456789~
+   \textbf{Bold}~\textit{Italic}~\textbf{\textit{Bold~italic}}}
+\ExplSyntaxOff
+% Full's Type 1 Caladea face can shadow TrueType in name-based lookup.
+\par{\fontspec{Caladea-Regular.ttf}[
+  Path=/usr/share/fonts/truetype/crosextra/,
+  BoldFont=Caladea-Bold.ttf,ItalicFont=Caladea-Italic.ttf,
+  BoldItalicFont=Caladea-BoldItalic.ttf]
+Caladea: Regular \textbf{Bold} \textit{Italic} \textbf{\textit{Bold italic}}}
+\par\fontspec{Inconsolata} Inconsolata: code 0O 1Il != -> [] \{\}
+\end{document}

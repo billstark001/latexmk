@@ -145,3 +145,5 @@ submitted through the safe local CLI.
 profile, engines, resource and cache-retention limits, shell-escape/workspace/
 rc-file policies, toolchain versions, and Go/OS/architecture information. Each
 compile result also contains `serverVersion` and `imageProfile`.
+
+See [runtime fonts](FONTS.md) for font coverage, per-image inventories and custom fonts.

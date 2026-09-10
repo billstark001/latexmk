@@ -8,13 +8,15 @@ ARG PROFILE=__PROFILE__
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     case "$PROFILE" in \
-      slim) packages='fonts-noto-cjk libwww-perl liblwp-protocol-https-perl' ;; \
+      slim) packages='libwww-perl liblwp-protocol-https-perl' ;; \
       full) packages='' ;; \
       *) exit 1 ;; \
     esac \
     && rm -f /etc/apt/apt.conf.d/docker-clean \
     && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates fontconfig $packages
+    && apt-get install -y --no-install-recommends ca-certificates fontconfig \
+       fonts-dejavu-core fonts-liberation fonts-inconsolata fonts-noto-cjk \
+       fonts-crosextra-carlito fonts-crosextra-caladea $packages
 # Release Apt cache locks before the long network-bound TeX installation.
 COPY packages.txt install-texlive.sh /usr/local/lib/latexmk/
 RUN sh /usr/local/lib/latexmk/install-texlive.sh
@@ -32,8 +34,9 @@ RUN mkdir /font-build /font-output \
 
 FROM tex AS runtime
 COPY --from=fonts /font-output/ /usr/local/share/fonts/latexmk/
-COPY smoke.sh /usr/local/lib/latexmk/smoke.sh
+COPY smoke.sh font-smoke.tex font-inventory.sh /usr/local/lib/latexmk/
 RUN fc-cache -f \
+    && sh /usr/local/lib/latexmk/font-inventory.sh /usr/local/lib/latexmk \
     && groupadd --gid 10001 latexmk \
     && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin latexmk \
     && install --directory --owner=latexmk --group=latexmk --mode=0700 /var/lib/latexmk

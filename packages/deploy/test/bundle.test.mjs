@@ -101,6 +101,15 @@ test('runtime context is independent of server sources and preserves profile pac
       assert.match(dockerfile, /@sha256:[a-f0-9]{64}/);
       assert.match(dockerfile, /FROM tex AS fonts/);
       assert.match(dockerfile, /FROM tex AS runtime/);
+      const ignore = await readFile(path.join(out, '.dockerignore'), 'utf8');
+      for (const asset of ['font-smoke.tex', 'font-inventory.sh']) {
+        assert.equal(
+          await readFile(path.join(out, asset), 'utf8'),
+          await readFile(path.join(root, 'runtime', asset), 'utf8'),
+        );
+        assert.ok(ignore.split('\n').includes(`!${asset}`));
+        assert.ok(dockerfile.includes(asset));
+      }
       const lock = JSON.parse(await readFile(path.join(out, 'runtime-lock.json'), 'utf8'));
       assert.equal(lock.profile, profile);
       assert.match(lock.repository, /tlnet-archive\/\d{4}\/\d{2}\/\d{2}\/tlnet$/);

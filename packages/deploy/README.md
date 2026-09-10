@@ -104,6 +104,18 @@ resource presets, persistent state, and timeout settings.
   It requires the selected profile's pinned reference and publishes the application without any
   TeX installation. Dispatch it after updating runtime variables.
 
+### Testing a feature branch in Actions
+
+Run both runtime builds and their smoke tests without publishing images:
+
+```sh
+gh workflow run runtime-image.yml --ref YOUR_BRANCH -f profile=both -f publish=false
+```
+
+The workflow uploads per-profile font inventories and SHA-256 verification
+results. Normal pushes to main and manual runs with `publish=true` publish images.
+The ordinary `ci` workflow also runs on feature-branch pushes.
+
 ### Adopting a published runtime
 
 Repository variables only need updating when adopting a new runtime. Ordinary
@@ -166,6 +178,9 @@ Biber executable unpacks a Perl interpreter under `/tmp` and must execute it.
 The root filesystem remains read-only, with capabilities dropped.
 The build smoke test exercises every enabled engine, Chinese text, the Times
 New Roman compatibility family, and a Biber bibliography as the non-root user.
+Font loading tests also exercise body, code, CJK glyphs and OpenType math in
+XeLaTeX (both profiles) and LuaLaTeX (full). See [runtime fonts](../../docs/FONTS.md)
+for the baseline, verifiable inventories, substitutions and user font installation.
 
 ## Measuring build performance
 

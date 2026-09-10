@@ -82,7 +82,7 @@ async function main(argv: string[]) {
     return 0;
   }
   if (command === 'version' || command === '--version') {
-    console.log('latexmk-deploy 0.3.1');
+    console.log('latexmk-deploy 0.3.2');
     return 0;
   }
   if (command !== 'bundle' && command !== 'runtime-bundle') {
@@ -359,7 +359,7 @@ async function runtimeBundle(options: BundleOptions) {
       .replaceAll('__IMAGE_PROFILE__', options.profile === 'slim' ? 'xelatex-cjk-slim' : 'texlive-full')
       .replaceAll('__ENGINES__', options.profile === 'slim' ? 'xelatex' : 'xelatex,lualatex,pdflatex'),
   );
-  for (const name of ['install-texlive.sh', 'smoke.sh']) {
+  for (const name of ['install-texlive.sh', 'smoke.sh', 'font-smoke.tex', 'font-inventory.sh']) {
     await cp(path.join(packageRoot, 'runtime', name), path.join(options.out, name));
   }
   await cp(
@@ -372,7 +372,7 @@ async function runtimeBundle(options: BundleOptions) {
   );
   await writeFile(
     path.join(options.out, '.dockerignore'),
-    '**\n!packages.txt\n!install-texlive.sh\n!smoke.sh\n!rename-compat-fonts.py\n',
+    '**\n!packages.txt\n!install-texlive.sh\n!smoke.sh\n!font-smoke.tex\n!font-inventory.sh\n!rename-compat-fonts.py\n',
   );
   await writeFile(
     path.join(options.out, 'runtime-lock.json'),

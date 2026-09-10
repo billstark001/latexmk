@@ -43,6 +43,16 @@ numbers.
   its first commit's date. These historical version entries do not assert that
   an untagged version was published.
 
+## @latexmk/deploy [0.3.2] - 2026-09-11
+
+### Added
+
+- Expand both runtime profiles with portable code and academic fonts, including
+  DejaVu Sans Mono, Liberation, Inconsolata, Carlito, Caladea and Noto CJK.
+  Publish per-image font inventories and hashes, and check text and mathematics
+  font loading in XeLaTeX and LuaLaTeX. Document commercial-font alternatives and
+  installation of authorized user fonts (issue #3).
+
 ## @latexmk/deploy [0.3.1] - 2026-09-11
 
 ### Fixed

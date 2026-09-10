@@ -9,6 +9,18 @@ for engine in $(printf '%s' "$LATEXMK_ENGINES" | tr ',' ' '); do
   "$engine" --version
   printf '\\documentclass{article}\n\\begin{document}Runtime smoke test\\end{document}\n' > engine.tex
   "$engine" -interaction=nonstopmode -halt-on-error engine.tex > engine.log.out
+  case "$engine" in
+    xelatex|lualatex)
+      cp /usr/local/lib/latexmk/font-smoke.tex fonts.tex
+      "$engine" -interaction=nonstopmode -halt-on-error fonts.tex > fonts.log.out 2>&1 || {
+        cat fonts.log.out; exit 1;
+      }
+      test -s fonts.pdf
+      if grep -E 'Missing character:|Some font shapes were not available|Font shape .* undefined' fonts.log; then
+        cat fonts.log; exit 1
+      fi
+      ;;
+  esac
 done
 cat > main.tex <<'TEX'
 \documentclass{article}
