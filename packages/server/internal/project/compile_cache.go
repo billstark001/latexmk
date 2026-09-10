@@ -37,6 +37,7 @@ type auxiliaryFile struct {
 }
 
 type compileCacheRecord struct {
+	ExpiresAt *time.Time        `json:"expiresAt,omitempty"`
 	Version   int               `json:"version"`
 	Submitted time.Time         `json:"submitted"`
 	JobID     string            `json:"jobId"`
@@ -185,6 +186,10 @@ func (m *Manager) RestoreCompileCache(snapshot Snapshot, key, workspace string) 
 		}
 		return info
 	}
+	if record.ExpiresAt != nil && time.Now().After(*record.ExpiresAt) {
+		info.Reason = "auxiliary cache expired"
+		return info
+	}
 	if !compatibleCacheInputs(record.Inputs, snapshot.Files) {
 		info.Reason = "input set or non-TeX input changed"
 		return info
@@ -240,7 +245,13 @@ func (m *Manager) SaveCompileCache(
 	if err != nil {
 		return 0, err
 	}
-	record := compileCacheRecord{Version: 1, Submitted: submitted, JobID: jobID, Inputs: snapshot.Files}
+	record := compileCacheRecord{
+		ExpiresAt: output.Result.AuxiliaryExpiresAt,
+		Version:   1,
+		Submitted: submitted,
+		JobID:     jobID,
+		Inputs:    snapshot.Files,
+	}
 	sources := make(map[string]bool)
 	for _, file := range snapshot.Files {
 		sources[filepath.ToSlash(filepath.Clean(file.Path))] = true

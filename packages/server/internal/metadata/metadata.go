@@ -55,6 +55,7 @@ func Collect(cfg config.Config, build BuildInfo) api.Metadata {
 		Database:        database,
 		Capabilities: api.Capabilities{
 			CompileCache:            cfg.CompileCacheRetention > 0 && cfg.MaxCompileCacheBytes > 0,
+			AuxiliaryRetention:      true,
 			CompileCacheRetentionMS: cfg.CompileCacheRetention.Milliseconds(),
 			Engines:                 append([]string(nil), cfg.Engines...),
 			MaxUploadBytes:          cfg.MaxUploadBytes,

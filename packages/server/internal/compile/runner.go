@@ -62,8 +62,20 @@ func (r *Runner) Validate(workspace string, req api.CompileRequest) error {
 }
 
 func (r *Runner) ValidateRequest(req api.CompileRequest) error {
-	if req.Auxiliary.Server != "" && req.Auxiliary.Server != "none" && req.Auxiliary.Server != "reuse" {
-		return errors.New("auxiliary.server must be none or reuse")
+	if req.Auxiliary.Local != "" && req.Auxiliary.Local != "none" && req.Auxiliary.Local != "cache" &&
+		req.Auxiliary.Local != "output" {
+		return errors.New("auxiliary.local must be none, cache, or output")
+	}
+	if req.Auxiliary.ServerTTL != "" {
+		ttl, err := time.ParseDuration(req.Auxiliary.ServerTTL)
+		if err != nil || ttl <= 0 {
+			return errors.New("auxiliary.serverTTL must be a positive duration")
+		}
+	}
+
+	if req.Auxiliary.Server != "" && req.Auxiliary.Server != "none" && req.Auxiliary.Server != "reuse" &&
+		req.Auxiliary.Server != "retain" {
+		return errors.New("auxiliary.server must be none, retain, or reuse")
 	}
 	if req.Auxiliary.Server == "reuse" &&
 		(req.ProtocolVersion != api.ProtocolVersion || r.Config.CompileCacheRetention <= 0 || r.Config.MaxCompileCacheBytes <= 0) {

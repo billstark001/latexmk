@@ -227,6 +227,7 @@ func (s *Server) compileLegacy(c *gin.Context) {
 	output.Result.ServerVersion = s.meta.Version
 	output.Result.ImageProfile = s.meta.ImageProfile
 	responsePath := filepath.Join(jobWorkspace.Path, "result.tar.gz")
+	output = compile.RetainArtifacts(output, request, s.cfg.ResultRetention)
 	if err := resultarchive.Write(responsePath, output); err != nil {
 		writeError(c, http.StatusInternalServerError, "could not package compile result")
 		return

@@ -578,16 +578,23 @@ func (m *Manager) Prune(ctx context.Context) (int64, error) {
 	var reclaimed int64
 	var err error
 	if m.cfg.ResultRetention > 0 {
-		reclaimed, err = removeExpiredRegularFiles(
+		var removed int64
+		removed, err = removeExpiredRegularFiles(
 			filepath.Join(m.stateDir, "results"),
 			now.Add(-m.cfg.ResultRetention),
 			nil,
 		)
+		reclaimed += removed
 		if err != nil {
 			return 0, err
 		}
 	}
 	if m.cfg.CompileCacheRetention > 0 {
+		requested, requestErr := m.pruneRequestedCacheExpiry(now)
+		if requestErr != nil {
+			return 0, requestErr
+		}
+		reclaimed += requested
 		removed, removeErr := removeExpiredRegularFiles(
 			filepath.Join(m.stateDir, "compile-cache"),
 			now.Add(-m.cfg.CompileCacheRetention),
@@ -614,6 +621,24 @@ func (m *Manager) Prune(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("measure state directory after sweep: %w", err)
 	}
 	m.stateBytes = stateBytes
+	retentionErr := filepath.WalkDir(
+		filepath.Join(m.stateDir, "results"),
+		func(name string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() || !strings.HasSuffix(name, ".tar.gz") {
+				return nil
+			}
+			removed, err := m.pruneResultAuxiliary(name, now)
+			reclaimed += removed
+			m.stateBytes -= removed
+			return err
+		},
+	)
+	if retentionErr != nil {
+		return reclaimed, retentionErr
+	}
 	return reclaimed, nil
 }
 

@@ -247,7 +247,7 @@ func (m *Manager) Get(ctx context.Context, ownerID, id string) (api.Job, error) 
 	if rec.OwnerID != ownerID {
 		return api.Job{}, errors.New("job not found")
 	}
-	return rec.Job, nil
+	return withoutExpiredAuxiliary(rec.Job), nil
 }
 
 func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]api.Job, error) {
@@ -259,7 +259,7 @@ func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]api.Jo
 		out := make([]api.Job, 0, len(m.jobs))
 		for _, rec := range m.jobs {
 			if rec.OwnerID == ownerID {
-				out = append(out, rec.Job)
+				out = append(out, withoutExpiredAuxiliary(rec.Job))
 			}
 		}
 		m.mu.Unlock()
@@ -280,7 +280,7 @@ func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]api.Jo
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, rec.Job)
+		out = append(out, withoutExpiredAuxiliary(rec.Job))
 	}
 	return out, nil
 }
@@ -316,6 +316,9 @@ func (m *Manager) ResultPath(ctx context.Context, ownerID, id string) (string, a
 	}
 	if _, err := os.Stat(path); err != nil {
 		return "", job, errors.New("job result archive is unavailable")
+	}
+	if err := m.projects.PruneResultAuxiliary(ownerID, id); err != nil {
+		return "", job, err
 	}
 	return path, job, nil
 }
@@ -617,12 +620,21 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	output.Result.CompileCache = cacheInfo
 	output.Result.ServerVersion = m.meta.Version
 	output.Result.ImageProfile = m.meta.ImageProfile
-	_, err = m.projects.WriteResult(rec.OwnerID, rec.Job.ID, output)
+	retained := compile.RetainArtifacts(output, rec.Request, m.cfg.ResultRetention)
+	_, err = m.projects.WriteResult(rec.OwnerID, rec.Job.ID, retained)
 	if err != nil {
 		m.finish(ctx, rec, &output.Result, "could not package compile result: "+err.Error(), false)
 		return
 	}
 	if cacheInfo != nil && output.Result.Success && ctx.Err() == nil {
+		if rec.Request.Auxiliary.ServerTTL != "" {
+			ttl, _ := time.ParseDuration(rec.Request.Auxiliary.ServerTTL)
+			if ttl > m.cfg.CompileCacheRetention {
+				ttl = m.cfg.CompileCacheRetention
+			}
+			expires := time.Now().UTC().Add(ttl)
+			output.Result.AuxiliaryExpiresAt = &expires
+		}
 		count, cacheErr := m.projects.SaveCompileCache(
 			rec.Snapshot,
 			cacheKey,
@@ -637,7 +649,8 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 			m.logger.Warn("could not publish compile cache", "job_id", id, "error", cacheErr)
 		}
 	}
-	m.finish(ctx, rec, &output.Result, output.Result.Error, true)
+	retained.Result.CompileCache = cacheInfo
+	m.finish(ctx, rec, &retained.Result, retained.Result.Error, true)
 }
 
 func (m *Manager) finish(
@@ -948,4 +961,19 @@ func randomID(prefix string) (string, error) {
 		return "", err
 	}
 	return prefix + "_" + hex.EncodeToString(b), nil
+}
+
+func withoutExpiredAuxiliary(job api.Job) api.Job {
+	if job.Result == nil || job.Result.AuxiliaryExpiresAt == nil || time.Now().Before(*job.Result.AuxiliaryExpiresAt) {
+		return job
+	}
+	result := *job.Result
+	result.Artifacts = nil
+	for _, artifact := range job.Result.Artifacts {
+		if artifact.Kind != "auxiliary" {
+			result.Artifacts = append(result.Artifacts, artifact)
+		}
+	}
+	job.Result = &result
+	return job
 }
