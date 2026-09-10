@@ -15,6 +15,7 @@ dist/
 
 /deploy/
 /deploy-*/
+/deploy-*.md
 tmp/
 tmp-*/
 run/
