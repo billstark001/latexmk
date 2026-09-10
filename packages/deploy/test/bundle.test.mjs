@@ -66,6 +66,9 @@ test('serverless preset emits bounded ephemeral-cache settings', async () => {
     assert.equal(manifest.externalDatabase, true);
     const railway = JSON.parse(await readFile(path.join(out, 'railway.json'), 'utf8'));
     assert.equal(railway.build.builder, 'DOCKERFILE');
+    const dockerfile = await readFile(path.join(out, 'Dockerfile'), 'utf8');
+    assert.doesNotMatch(dockerfile, /--mount=type=cache/);
+    assert.match(dockerfile, /RUN go mod download/);
     assert.equal(railway.deploy.healthcheckPath, '/healthz');
   } finally {
     await rm(temp, { recursive: true, force: true });

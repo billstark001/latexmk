@@ -256,6 +256,10 @@ async function bundle(options: BundleOptions) {
   await writeFile(
     path.join(options.out, 'Dockerfile'),
     template
+      .replaceAll(
+        '__GO_CACHE_MOUNT__',
+        options.preset.startsWith('railway') ? '' : '--mount=type=cache,target=/root/.cache/go-build,sharing=locked',
+      )
       .replaceAll('__GO_IMAGE__', lock.goImage)
       .replaceAll('__RUNTIME_IMAGE__', options.runtimeImage)
       .replaceAll('__IMAGE_PROFILE__', options.profile === 'slim' ? 'xelatex-cjk-slim' : 'texlive-full'),

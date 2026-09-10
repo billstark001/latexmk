@@ -14,7 +14,7 @@ ARG TARGETARCH
 ARG VERSION=0.3.0
 ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
-RUN --mount=type=cache,target=/root/.cache/go-build,sharing=locked \
+RUN __GO_CACHE_MOUNT__ \
     GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=readonly -trimpath \
     -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}" \
     -o /out/latexmk-server ./cmd/server

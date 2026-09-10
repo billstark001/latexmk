@@ -138,8 +138,9 @@ supported by the CLI. External cache export requires a compatible Buildx
 builder (for example, the `docker-container` driver used by CI). Cache mounts accelerate repeated builds on the same
 builder; their contents are not automatically exported with ordinary layer
 caches. Go modules therefore live in their own exportable dependency layer,
-while the Go compiler uses a cache mount. This preserves dependency reuse even
-on a fresh CI builder. Railway cache persistence is not required to avoid TeX
+while the Go compiler uses a cache mount outside Railway presets. Railway
+presets omit that optional mount because Railway requires a service-specific
+cache ID. The module layer preserves dependency reuse even on a fresh CI builder. Railway cache persistence is not required to avoid TeX
 installation: the published runtime is the durable reuse boundary.
 
 ## Runtime updates and reproducibility
@@ -184,30 +185,3 @@ is cancelled as well. Script unit tests run directly with Node 24 type stripping
 Action job summaries provide CI build details. Measure registry upload/download
 separately; a large runtime still costs transfer time on an empty host even
 though package installation has been eliminated from the application path.
-
-## Manual Railway verification
-
-After publishing an amd64 runtime, replace `RUNTIME_DIGEST` below with its
-64-character digest and use the actual registry owner/repository:
-
-```sh
-node packages/deploy/src/index.ts bundle \
-  --preset railway-serverless --profile slim --auth token \
-  --runtime-image 'ghcr.io/OWNER/REPO-runtime@sha256:RUNTIME_DIGEST' \
-  --out deploy-railway-app
-railway up ./deploy-railway-app --path-as-root \
-  --service latexmk-serverless --environment production --detach
-```
-
-Keep the service's existing token variables. With `LATEXMK_SERVER` and
-`LATEXMK_TOKEN` set for the client, run `latexmk doctor` and `latexmk meta --json`,
-confirm `imageProfile` and `capabilities.compileCache`, then compile a project
-with explicit `--project-root`, `--out-dir`, and `--server-cache reuse` twice.
-The first run should miss the cache and the second should hit it. A forced run
-should start clean; a subsequent normal run should remain successful. Use a
-separate output directory and verify the PDF as well as the result status.
-
-Local arm64 slim/full builds and two paper samples passed before this change
-was committed. The amd64 runtime build was cancelled at the user's request;
-registry publication and the new Railway deployment still require this manual
-verification. No successful online test is implied by the local results.
