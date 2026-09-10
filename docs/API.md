@@ -3,8 +3,9 @@
 ## Versioning
 
 The current protocol version is `2`. Version 2 adds content-addressed,
-incremental uploads and asynchronous jobs. `POST /v1/compile` continues to
-accept v1 requests for older CLI clients.
+incremental uploads and asynchronous jobs. The legacy `POST /v1/compile`
+endpoint is disabled by default; set `LATEXMK_ENABLE_LEGACY_COMPILE=true` only
+while migrating older clients.
 
 ## `GET /healthz`
 
@@ -21,6 +22,8 @@ Public server, image, toolchain, cache-retention, and resource-limit metadata.
 It never includes secrets, database URLs, or user data.
 
 ## `POST /v1/compile`
+
+Available only when `LATEXMK_ENABLE_LEGACY_COMPILE=true`.
 
 Requires authentication unless `LATEXMK_AUTH_MODE=none` was explicitly selected
 for an isolated development deployment.
@@ -144,6 +147,21 @@ historical finished jobs created before immutable snapshots were introduced.
 After a job has ended, returns the same
 `application/vnd.latexmk.result+tar.gz` archive as synchronous compilation. It
 returns an error once the archive has passed the configured result retention.
+
+### `GET /v1/projects/{projectId}/cleanup`
+
+Previews authenticated project cleanup. The required `scope` query parameter is
+`results`, `snapshot`, or `project`. The response includes counts, bytes, active
+jobs, and a server-issued `planDigest`; no data is changed.
+
+### `DELETE /v1/projects/{projectId}/cleanup`
+
+Applies a preview with the same `scope` and a required `expectedDigest` query
+parameter. The server recomputes and compares the exact job, result, and
+snapshot targets under the queue admission lock. A changed target set returns
+`409 Conflict`. Snapshot and whole-project cleanup also return conflict while a
+job for that project is queued or running. Authorization is scoped by both the
+authenticated owner and project ID.
 
 ## Database administration API
 

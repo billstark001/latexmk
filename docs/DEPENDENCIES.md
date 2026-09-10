@@ -190,7 +190,8 @@ The watch set contains:
 - files selected by static discovery, recorder history, and explicit inputs;
 - the configured explicit manifest, which is watched but never uploaded;
 - `.gitignore` files on relevant paths and the repository-local
-  `.git/info/exclude`, which are watched as policy inputs and never uploaded.
+  `.git/info/exclude`, plus the effective global `core.excludesFile`; these are
+  watched as policy inputs and never uploaded.
 
 Unrelated project files and directories are not polled. Creating a random new
 file therefore does not trigger a compile or expand the upload set. When a
@@ -206,6 +207,5 @@ current. TeX, selection, and network failures are reported but the process
 continues so a later edit can recover it.
 
 Project/user configuration and environment variables are resolved once at
-startup. Restart the watcher after changing them. Git's global excludes are
-applied whenever selection runs, but changes to the global excludes file alone
-are not a watched event.
+startup. Restart the watcher after changing them. Git's effective global
+excludes file is watched, including its default path before the file exists.

@@ -10,7 +10,8 @@ token or Authorization header.
 ## Compatibility
 
 New Agent-facing commands use a versioned JSON envelope. Existing JSON output
-from `compile`, `files`, and `meta` remains unchanged for now. Those commands
+from `compile`, `files`, `meta`, `cache ignore`, and `remote clean` remains
+unchanged for now. Those commands
 will move to the versioned contract only through an explicit compatibility
 mechanism. Their current top-level JSON shape will not change silently.
 
@@ -136,3 +137,17 @@ absolute local path and MIME type. Binary data is never embedded in JSON.
 Job list output is bounded to 1 through 200 jobs. Log, diagnostic, and artifact
 commands use their own bounded contracts; they do not embed PDF data or
 unbounded logs in this envelope.
+
+## Remote cleanup
+
+```sh
+latexmk remote clean --scope results --json
+latexmk remote clean --plan-id PLAN_ID --yes --json
+```
+
+The first command is always a preview and returns `planId`, `expiresAt`, and a
+report containing the server-issued `planDigest`. The local ten-minute plan
+contains the server, project ID, scope, and digest, but no token. The second
+command requires that exact plan, current credentials, and the current local
+project identity; it consumes the plan only after a successful matching server
+response. These two JSON responses are currently unversioned as noted above.

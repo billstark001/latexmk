@@ -113,6 +113,9 @@ Without an explicit `projectRoot`, the project root is the directory containing
 the entry TeX file. This prevents a command run in a subdirectory from silently
 uploading its parent Git repository. Set `rootMode` to `git`, pass
 `--root-mode git`, or set `--project-root` to request a wider root explicitly.
+The CLI normally creates a random `.latexmk-cache/project-id`; `projectId`,
+`LATEXMK_PROJECT_ID`, or `--project-id` is an explicit override for managed
+deployments.
 
 `uploadMode: "auto"` selects the entry file and supported literal LaTeX
 dependencies after Git-ignore and deny rules have been applied. It reports
@@ -163,6 +166,10 @@ Token priority is: CLI `--token`/`--token-file`, `LATEXMK_TOKEN`,
 than the token override user defaults. A token file must contain exactly one
 non-empty token; a trailing newline is accepted.
 
+The server accepts the shared token from either `LATEXMK_API_TOKEN` or
+`LATEXMK_API_TOKEN_FILE` (never both). The file must be a regular, non-symlink
+file containing one non-empty token.
+
 The client does not upload `.latexmk.json`, `.latexmkignore`, `.env` files, or
 common private-key files by default, even when a project replaces the ordinary
 exclude list. In a Git work tree it selects tracked files plus untracked files
@@ -202,6 +209,10 @@ latexmk main.tex
 latexmk meta
 latexmk doctor
 latexmk clean main.tex
+latexmk cache ignore
+latexmk remote clean --scope results
+# Then apply the exact ten-minute preview:
+latexmk remote clean --plan-id PLAN_ID --yes
 latexmk --json main.tex
 ```
 
@@ -332,7 +343,15 @@ The CLI creates the same validated project manifest as the legacy archive path,
 addresses every file by SHA-256, asks the server for missing hashes, uploads
 only changed content, and commits a project snapshot to a bounded queue. Each
 job runs in a separate workspace. Result archives are available through the job
-API. The synchronous `POST /v1/compile` endpoint remains for v1 clients.
+API. The synchronous `POST /v1/compile` endpoint is disabled by default and can
+be temporarily enabled with `LATEXMK_ENABLE_LEGACY_COMPILE=true` for v1 clients.
+
+Each project receives a random identity stored in
+`.latexmk-cache/project-id`, avoiding collisions when unrelated projects share
+the same container mount path. Run `latexmk cache ignore` in Git projects.
+`--legacy-project-id` exists only to clean data created by older path-derived
+identities. Remote deletion always uses a preview, a short-lived local plan that
+contains no credentials, and a server-validated digest.
 
 `LATEXMK_STATE_DIR` defaults to `/tmp/latexmk-state`; container bundles normally
 use `/var/lib/latexmk`. `LATEXMK_MAX_STATE_BYTES` is a hard combined source-cache

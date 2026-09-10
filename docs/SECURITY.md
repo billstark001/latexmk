@@ -42,6 +42,12 @@ at the application and deployment layers.
 - A state sweeper expires results, project snapshots, and orphaned blobs. It
   never removes data referenced by a live upload, current project snapshot, or
   queued/running job snapshot.
+- Remote cleanup is owner/project scoped and preview-first. Destructive calls
+  require a server-issued digest that binds the exact targets and is rechecked
+  under the queue admission lock; active jobs block snapshot/project deletion.
+- Local project identities are random, private files rather than mount-path
+  hashes. `latexmk cache ignore` appends an explicit Git rule without replacing
+  `.gitignore`, and rejects symlinked policy/cache files.
 - Queued jobs persist an immutable, content-derived snapshot ID and complete
   manifest. A later upload to the same project cannot change their input.
 - Worker start, cancellation, and completion use conditional state transitions,
@@ -53,6 +59,8 @@ at the application and deployment layers.
   PID limits, and memory limits.
 - Static and database bearer tokens use constant-time comparison; database
   tokens are stored only as SHA-256 hashes.
+- Shared server tokens may be loaded from a bounded regular file so deployments
+  do not need to expose them in the environment.
 - Administrative endpoints require the administrator role. User and token
   labels are length-limited and reject control characters.
 - CORS accepts only explicit HTTP(S) origins. Wildcards are rejected at startup.

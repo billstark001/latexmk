@@ -63,6 +63,7 @@ CPU, memory, and temporary-disk requirements.
 |---|---|
 | `PORT` | `8080` |
 | `LATEXMK_AUTH_MODE` | `token` |
+| `LATEXMK_API_TOKEN_FILE` | empty; mutually exclusive with `LATEXMK_API_TOKEN` |
 | `LATEXMK_IMAGE_PROFILE` | `development` |
 | `LATEXMK_ENGINES` | `xelatex,lualatex,pdflatex` |
 | `LATEXMK_COMPILE_TIMEOUT` | `2m` |
@@ -80,6 +81,7 @@ CPU, memory, and temporary-disk requirements.
 | `LATEXMK_BLOB_RETENTION` | `168h` |
 | `LATEXMK_STATE_SWEEP_INTERVAL` | `1h` |
 | `LATEXMK_ALLOW_SHELL_ESCAPE` | `false` |
+| `LATEXMK_ENABLE_LEGACY_COMPILE` | `false` |
 | `LATEXMK_TEMP_DIR` | system temporary directory |
 | `LATEXMK_STATE_DIR` | `/tmp/latexmk-state` |
 | `LATEXMK_DATABASE_MODE` | `postgres` (`pglite` is supported) |
@@ -88,6 +90,10 @@ CPU, memory, and temporary-disk requirements.
 Invalid booleans, durations, byte sizes, resource limits, or CORS origins fail
 server startup instead of silently falling back. A CORS origin must be an exact
 `http://` or `https://` origin; `*` and path-bearing URLs are rejected.
+
+`LATEXMK_RESULT_RETENTION` also bounds terminal job metadata. Shutdown first
+stops HTTP admission, then cancels and waits for compile workers up to
+`LATEXMK_SHUTDOWN_TIMEOUT`.
 
 ## Image pinning
 
