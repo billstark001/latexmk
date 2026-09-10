@@ -307,7 +307,14 @@ Use `--profile full` for the full TeX Live image. The bundler writes
 placeholders. `--external-database` connects to an already provisioned private
 PostgreSQL service rather than adding another database container.
 
-To build and export an OCI/Docker image:
+Build the runtime once before building an application image:
+
+```sh
+node packages/deploy/dist/index.js runtime-bundle \
+  --profile slim --out dist/runtime-slim --build
+```
+
+Then build and export the application image:
 
 ```sh
 node packages/deploy/dist/index.js bundle \
@@ -319,8 +326,10 @@ node packages/deploy/dist/index.js bundle \
   --save dist/latexmk-0.3.0.tar
 ```
 
-The templates are in `packages/deploy/templates/`. Pin `TEXLIVE_IMAGE` by digest
-in production for a reproducible typesetting environment.
+For production, publish the runtime and pass its immutable reference
+as `--runtime-image registry/name@sha256:...` when bundling the application.
+Server-only builds no longer install TeX. See the [deployment guide](packages/deploy/README.md)
+for the two CI paths, fixed TeX snapshots, and external build caches.
 
 ## Server modes
 

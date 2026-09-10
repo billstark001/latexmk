@@ -97,17 +97,21 @@ stops HTTP admission, then cancels and waits for compile workers up to
 
 ## Image pinning
 
-The examples use a floating TeX Live tag for first builds. Pin a production
-base image by digest:
+Build the TeX runtime separately using `latexmk-deploy runtime-bundle`. The
+runtime lock pins upstream images and a matching date-specific TeX repository.
+Publish the runtime, then pin the application to its digest:
 
 ```sh
-docker build \
-  --build-arg TEXLIVE_IMAGE='texlive/texlive@sha256:...' \
-  --build-arg VERSION='0.3.0' \
-  --build-arg COMMIT="$(git rev-parse HEAD)" \
-  --build-arg BUILD_DATE="$(date -u +%FT%TZ)" \
-  -t registry.example.edu/latexmk:0.3.0 .
+node packages/deploy/dist/index.js bundle \
+  --profile slim \
+  --runtime-image 'registry.example.edu/latexmk-runtime@sha256:REPLACE_WITH_DIGEST' \
+  --out dist/app
 ```
+
+Replace the placeholder with the published digest. The application Dockerfile
+only compiles/copies the server binary. A cold PaaS builder pulls the runtime;
+it does not install thousands of TeX packages. See the [deployment guide](../packages/deploy/README.md)
+for runtime publishing, CI variables, cache import/export, and measurement.
 
 Use `latexmk meta` to verify the remote toolchain actually running the image.
 
