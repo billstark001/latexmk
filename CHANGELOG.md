@@ -38,23 +38,16 @@ numbers.
   package-specific release, using its exact package name.
 - Keep Unreleased first, followed by entries in reverse chronological order.
   A package-specific entry does not imply that every package has that version.
-- Historical entries below are reconstructed from this repository's `main`
-  ancestry, not the separate `inviscat` remote's release history. Dates use
-  Asia/Tokyo (`+09:00`), matching the original commits.
 - For a tagged release, use its publication date; for an untagged historical
   version, use the version-bump commit's committer date. The initial version uses
   its first commit's date. These historical version entries do not assert that
   an untagged version was published.
-- In particular, the July 17–18 author dates on changes incorporated on July 23
-  do not make `0.2.0` a July 17–18 release. Commit order and committer timestamps
-  determine their placement. Changes after the `v0.3.0` tag are not backfilled
-  into that released version.
 
-## [Unreleased]
+## @latexmk/deploy [0.3.1] - 2026-09-11
 
 ### Fixed
 
-- `@latexmk/deploy`: Omit the optional Go build-cache mount in Railway presets,
+- Omit the optional Go build-cache mount in Railway presets,
   which require a service-specific cache ID, while preserving the reusable Go
   module layer. Committed on 2026-09-10 at 14:52:19 +09:00 (`55b04d8`), after
   the `v0.3.0` release.
@@ -87,7 +80,8 @@ numbers.
 ### Changed
 
 - Bump only `@latexmk/cli`, its default executable version, and its default HTTP
-  user-agent version to `0.3.1`. Other workspace packages remain at `0.3.0`.
+  user-agent version to `0.3.1`. Server, dashboard, and root workspace metadata
+  remain at `0.3.0`.
 - Resolve [issue #1](https://github.com/billstark001/latexmk/issues/1).
 
 ## [0.3.0] - 2026-09-10
