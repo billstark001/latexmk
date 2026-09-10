@@ -74,3 +74,20 @@ func TestValidOriginRejectsWildcardsAndPaths(t *testing.T) {
 		t.Fatal("expected exact HTTPS origin to be valid")
 	}
 }
+
+func TestCompileCacheLimitCanDisableFeature(t *testing.T) {
+	t.Setenv("LATEXMK_AUTH_MODE", "none")
+	t.Setenv("LATEXMK_API_TOKEN", "")
+	t.Setenv("LATEXMK_API_TOKEN_FILE", "")
+	t.Setenv("LATEXMK_MAX_COMPILE_CACHE_BYTES", "0")
+	cfg, err := Load()
+	if err != nil || cfg.MaxCompileCacheBytes != 0 {
+		t.Fatalf("disabled cache: %d %v", cfg.MaxCompileCacheBytes, err)
+	}
+	t.Setenv("LATEXMK_MAX_COMPILE_CACHE_BYTES", "2MiB")
+	t.Setenv("LATEXMK_COMPILE_CACHE_RETENTION", "2h")
+	cfg, err = Load()
+	if err != nil || cfg.MaxCompileCacheBytes != 2<<20 || cfg.CompileCacheRetention.Hours() != 2 {
+		t.Fatalf("cache limits: %+v %v", cfg, err)
+	}
+}

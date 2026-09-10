@@ -174,6 +174,10 @@ func (s *Server) compileLegacy(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "request and project parts are required")
 		return
 	}
+	if request.Auxiliary.Server == "reuse" {
+		writeError(c, http.StatusBadRequest, "server compile cache requires the queued compilation API")
+		return
+	}
 	if err := s.runner.Validate(workspace, request); err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
@@ -347,7 +351,7 @@ func (s *Server) projectCleanup(c *gin.Context, dryRun bool) {
 	}
 	if err != nil {
 		status := http.StatusConflict
-		if !project.ValidProjectID(c.Param("id")) || (scope != "results" && scope != "snapshot" && scope != "project") {
+		if !project.ValidProjectID(c.Param("id")) || (scope != "results" && scope != "snapshot" && scope != "project" && scope != "cache") {
 			status = http.StatusBadRequest
 		}
 		writeError(c, status, err.Error())

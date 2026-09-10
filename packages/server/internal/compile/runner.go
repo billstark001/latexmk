@@ -63,6 +63,12 @@ func (r *Runner) Validate(workspace string, req api.CompileRequest) error {
 }
 
 func (r *Runner) ValidateRequest(req api.CompileRequest) error {
+	if req.Auxiliary.Server != "" && req.Auxiliary.Server != "none" && req.Auxiliary.Server != "reuse" {
+		return errors.New("auxiliary.server must be none or reuse")
+	}
+	if req.Auxiliary.Server == "reuse" && (req.ProtocolVersion != api.ProtocolVersion || r.Config.CompileCacheRetention <= 0 || r.Config.MaxCompileCacheBytes <= 0) {
+		return errors.New("server compile cache is not enabled for this request")
+	}
 	if req.ProtocolVersion != 1 && req.ProtocolVersion != api.ProtocolVersion {
 		return fmt.Errorf("unsupported protocol version %d", req.ProtocolVersion)
 	}

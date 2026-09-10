@@ -11,6 +11,9 @@ import (
 )
 
 type Config struct {
+	CompileCacheRetention time.Duration
+	MaxCompileCacheBytes  int64
+	CompileCacheEpoch     string
 	Addr                  string
 	AuthMode              string
 	APIToken              string
@@ -110,12 +113,26 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	cacheRetention, err := envDuration("LATEXMK_COMPILE_CACHE_RETENTION", 24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	var cacheBytes int64
+	if strings.TrimSpace(os.Getenv("LATEXMK_MAX_COMPILE_CACHE_BYTES")) != "0" {
+		cacheBytes, err = envBytes("LATEXMK_MAX_COMPILE_CACHE_BYTES", 16<<20)
+		if err != nil {
+			return Config{}, err
+		}
+	}
 	apiToken, err := loadAPIToken()
 	if err != nil {
 		return Config{}, err
 	}
 
 	cfg := Config{
+		CompileCacheRetention: cacheRetention,
+		MaxCompileCacheBytes:  cacheBytes,
+		CompileCacheEpoch:     os.Getenv("LATEXMK_COMPILE_CACHE_EPOCH"),
 		Addr:                  ":" + env("PORT", "8080"),
 		AuthMode:              env("LATEXMK_AUTH_MODE", "token"),
 		APIToken:              apiToken,
@@ -213,6 +230,9 @@ func (c Config) Validate() error {
 		default:
 			return fmt.Errorf("unsupported configured engine %q", e)
 		}
+	}
+	if c.CompileCacheRetention < 0 || c.MaxCompileCacheBytes < 0 {
+		return fmt.Errorf("compile cache limits cannot be negative")
 	}
 	if c.CompileTimeout <= 0 || c.ShutdownTimeout <= 0 || c.MaxUploadBytes <= 0 || c.MaxExpandedBytes <= 0 || c.MaxArtifactBytes <= 0 || c.MaxFiles <= 0 || c.MaxConcurrentCompiles <= 0 || c.MaxQueuedJobs <= 0 || c.MaxLogBytes <= 0 || c.MaxStateBytes <= 0 || c.MaxUploadSessions <= 0 || c.ResultRetention <= 0 || c.SnapshotRetention <= 0 || c.BlobRetention <= 0 || c.StateSweepInterval <= 0 {
 		return fmt.Errorf("resource limits must be positive")

@@ -79,6 +79,7 @@ func New(cfg config.Config, db *store.Postgres) (*Manager, error) {
 	for _, dir := range []string{
 		filepath.Join(stateDir, "blobs"),
 		filepath.Join(stateDir, "results"),
+		filepath.Join(stateDir, "compile-cache"),
 	} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("create state directory: %w", err)
@@ -565,6 +566,13 @@ func (m *Manager) Prune(ctx context.Context) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
+	}
+	if m.cfg.CompileCacheRetention > 0 {
+		removed, removeErr := removeExpiredRegularFiles(filepath.Join(m.stateDir, "compile-cache"), now.Add(-m.cfg.CompileCacheRetention), nil)
+		if removeErr != nil {
+			return 0, removeErr
+		}
+		reclaimed += removed
 	}
 	if m.cfg.BlobRetention > 0 {
 		removed, removeErr := removeExpiredRegularFiles(filepath.Join(m.stateDir, "blobs"), now.Add(-m.cfg.BlobRetention), references)

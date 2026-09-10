@@ -290,8 +290,8 @@ func (m *Manager) cleanupProject(ctx context.Context, ownerID, projectID, scope 
 	if !project.ValidProjectID(projectID) {
 		return report, errors.New("project ID is invalid")
 	}
-	if scope != "results" && scope != "snapshot" && scope != "project" {
-		return report, errors.New("cleanup scope must be results, snapshot, or project")
+	if scope != "results" && scope != "snapshot" && scope != "project" && scope != "cache" {
+		return report, errors.New("cleanup scope must be results, snapshot, cache, or project")
 	}
 	m.admissionMu.Lock()
 	defer m.admissionMu.Unlock()
@@ -323,6 +323,15 @@ func (m *Manager) cleanupProject(ctx context.Context, ownerID, projectID, scope 
 	if scope == "project" {
 		report.Jobs = len(terminalIDs)
 	}
+	if scope == "cache" || scope == "project" {
+		if len(report.ActiveJobs) > 0 && !dryRun {
+			return report, errors.New("project has active jobs; wait for them to finish or cancel queued jobs")
+		}
+		report.CompileCaches, report.CompileCacheBytes, report.CompileCacheDigest, err = m.projects.CompileCacheStats(ownerID, projectID)
+		if err != nil {
+			return report, err
+		}
+	}
 	snapshotID := ""
 	if scope == "snapshot" || scope == "project" {
 		report.SnapshotPresent, report.SnapshotFiles, report.SnapshotBytes, err = m.projects.SnapshotStats(ctx, ownerID, projectID)
@@ -352,6 +361,13 @@ func (m *Manager) cleanupProject(ctx context.Context, ownerID, projectID, scope 
 	}
 	if expectedDigest != digest {
 		return report, errors.New("cleanup targets changed since preview; create a new plan")
+	}
+	if scope == "cache" || scope == "project" {
+		reclaimed, err := m.projects.DeleteCompileCaches(ownerID, projectID)
+		if err != nil {
+			return report, err
+		}
+		report.ReclaimedBytes += reclaimed
 	}
 	if scope == "results" || scope == "project" {
 		for _, id := range terminalIDs {
@@ -496,13 +512,53 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 		m.finish(ctx, rec, nil, "could not materialize project: "+err.Error(), false)
 		return
 	}
-	output := m.runner.Run(ctx, workspace, rec.Request, rec.Job.ID)
+	cacheKey := project.CompileCacheKey(rec.Request, m.meta, m.cfg.CompileCacheEpoch)
+	var cacheInfo *api.CompileCache
+	if rec.Request.Auxiliary.Server == "reuse" {
+		info := api.CompileCache{Status: "bypass", Reason: "forced clean compile"}
+		if !rec.Request.Force {
+			info = m.projects.RestoreCompileCache(rec.Snapshot, cacheKey, workspace)
+		}
+		cacheInfo = &info
+	}
+	compileCtx, cancelCompile := context.WithTimeout(ctx, m.cfg.CompileTimeout)
+	defer cancelCompile()
+	compileStarted := time.Now()
+	output := m.runner.Run(compileCtx, workspace, rec.Request, rec.Job.ID)
+	if cacheInfo != nil && cacheInfo.Status == "hit" && !output.Result.Success && !output.Result.TimedOut && compileCtx.Err() == nil {
+		// Auxiliary files can refer to macros removed by an ordinary TeX edit.
+		// Retry once from the immutable source snapshot, within the same deadline.
+		cacheInfo.ColdRetry = true
+		cacheInfo.Reason = "warm compile failed; retried with clean sources"
+		resetErr := os.RemoveAll(workspace)
+		if resetErr == nil {
+			resetErr = os.MkdirAll(workspace, 0o700)
+		}
+		if resetErr == nil {
+			resetErr = m.projects.Materialize(rec.Snapshot, workspace)
+		}
+		if resetErr != nil {
+			m.finish(ctx, rec, nil, "could not reset warm compile workspace", false)
+			return
+		}
+		output = m.runner.Run(compileCtx, workspace, rec.Request, rec.Job.ID)
+	}
+	output.Result.DurationMS = time.Since(compileStarted).Milliseconds()
+	output.Result.CompileCache = cacheInfo
 	output.Result.ServerVersion = m.meta.Version
 	output.Result.ImageProfile = m.meta.ImageProfile
 	_, err = m.projects.WriteResult(rec.OwnerID, rec.Job.ID, output)
 	if err != nil {
 		m.finish(ctx, rec, &output.Result, "could not package compile result: "+err.Error(), false)
 		return
+	}
+	if cacheInfo != nil && output.Result.Success && ctx.Err() == nil {
+		count, cacheErr := m.projects.SaveCompileCache(rec.Snapshot, cacheKey, workspace, rec.Job.ID, rec.Job.CreatedAt, output)
+		cacheInfo.StoredFiles = count
+		if cacheErr != nil {
+			cacheInfo.Warning = cacheErr.Error()
+			m.logger.Warn("could not publish compile cache", "job_id", id, "error", cacheErr)
+		}
 	}
 	m.finish(ctx, rec, &output.Result, output.Result.Error, true)
 }
