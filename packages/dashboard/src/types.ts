@@ -17,6 +17,7 @@ export interface CapabilitySet {
   resultRetentionMs: number;
   snapshotRetentionMs: number;
   blobRetentionMs: number;
+  remoteCleanup: boolean;
 }
 
 export interface Metadata {

@@ -73,6 +73,7 @@ func Collect(cfg config.Config, build BuildInfo) api.Metadata {
 			ResultRetentionMS:   cfg.ResultRetention.Milliseconds(),
 			SnapshotRetentionMS: cfg.SnapshotRetention.Milliseconds(),
 			BlobRetentionMS:     cfg.BlobRetention.Milliseconds(),
+			RemoteCleanup:       true,
 		},
 		Toolchain: toolchain,
 		Runtime: map[string]string{

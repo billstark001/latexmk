@@ -335,9 +335,40 @@ func (m *Manager) Snapshot(ctx context.Context, ownerID, projectID string) (Snap
 	m.mu.Unlock()
 	m.snapshotMu.Unlock()
 	if !ok {
-		return Snapshot{}, errors.New("project snapshot not found")
+		return Snapshot{}, store.ErrProjectSnapshotNotFound
 	}
 	return stored.Snapshot, nil
+}
+
+func (m *Manager) SnapshotStats(ctx context.Context, ownerID, projectID string) (bool, int, int64, error) {
+	snapshot, err := m.Snapshot(ctx, ownerID, projectID)
+	if errors.Is(err, store.ErrProjectSnapshotNotFound) {
+		return false, 0, 0, nil
+	}
+	if err != nil {
+		return false, 0, 0, err
+	}
+	var bytes int64
+	for _, file := range snapshot.Files {
+		bytes += file.Size
+	}
+	return true, len(snapshot.Files), bytes, nil
+}
+
+func (m *Manager) DeleteSnapshot(ctx context.Context, ownerID, projectID string) (bool, error) {
+	m.snapshotMu.Lock()
+	defer m.snapshotMu.Unlock()
+	if m.db != nil {
+		return m.db.DeleteSnapshot(ctx, ownerID, projectID)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := snapshotKey(ownerID, projectID)
+	if _, ok := m.snapshots[key]; !ok {
+		return false, nil
+	}
+	delete(m.snapshots, key)
+	return true, nil
 }
 
 // NewSnapshot validates and canonicalizes a project manifest, then assigns a
@@ -550,6 +581,73 @@ func (m *Manager) Prune(ctx context.Context) (int64, error) {
 	return reclaimed, nil
 }
 
+// CollectUnreferencedBlobs removes source bytes no longer referenced by any
+// current snapshot, upload session, or active job. Shared blobs remain.
+func (m *Manager) CollectUnreferencedBlobs(ctx context.Context) (int64, error) {
+	references := make(map[string]struct{})
+	m.mu.Lock()
+	for _, session := range m.sessions {
+		addExpectedReferences(references, ownerKey(session.ownerID), session.expected)
+	}
+	for _, pin := range m.pins {
+		addSnapshotReferences(references, pin.Snapshot)
+	}
+	m.mu.Unlock()
+
+	m.snapshotMu.Lock()
+	defer m.snapshotMu.Unlock()
+	if m.db != nil {
+		if err := m.db.VisitSnapshots(ctx, 100, func(record store.ProjectSnapshot) error {
+			var snapshot Snapshot
+			if err := json.Unmarshal(record.Manifest, &snapshot); err != nil {
+				return err
+			}
+			addSnapshotReferences(references, snapshot)
+			return nil
+		}); err != nil {
+			return 0, fmt.Errorf("visit project snapshots: %w", err)
+		}
+		if err := m.db.VisitActiveJobSnapshots(ctx, 100, func(manifest []byte) error {
+			var snapshot Snapshot
+			if err := json.Unmarshal(manifest, &snapshot); err != nil {
+				return err
+			}
+			if err := ValidateSnapshot(snapshot); err != nil {
+				return err
+			}
+			addSnapshotReferences(references, snapshot)
+			return nil
+		}); err != nil {
+			return 0, fmt.Errorf("visit active job snapshots: %w", err)
+		}
+	} else {
+		m.mu.Lock()
+		for _, stored := range m.snapshots {
+			addSnapshotReferences(references, stored.Snapshot)
+		}
+		m.mu.Unlock()
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, session := range m.sessions {
+		addExpectedReferences(references, ownerKey(session.ownerID), session.expected)
+	}
+	for _, pin := range m.pins {
+		addSnapshotReferences(references, pin.Snapshot)
+	}
+	reclaimed, err := removeUnreferencedRegularFiles(filepath.Join(m.stateDir, "blobs"), references)
+	if err != nil {
+		return 0, err
+	}
+	stateBytes, err := directorySize(m.stateDir)
+	if err != nil {
+		return 0, fmt.Errorf("measure state directory after cleanup: %w", err)
+	}
+	m.stateBytes = stateBytes
+	return reclaimed, nil
+}
+
 func (m *Manager) Materialize(snapshot Snapshot, destination string) error {
 	for _, file := range snapshot.Files {
 		if !validProjectPath(file.Path) || !m.hasBlob(snapshot.OwnerID, file.SHA256, file.Size) {
@@ -596,6 +694,58 @@ func (m *Manager) ResultPath(ownerID, jobID string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, jobID+".tar.gz"), nil
+}
+
+func (m *Manager) ResultInfo(ownerID, jobID string) (bool, int64, error) {
+	path, err := m.existingResultPath(ownerID, jobID)
+	if err != nil {
+		return false, 0, err
+	}
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return false, 0, nil
+	}
+	if err != nil {
+		return false, 0, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, 0, errors.New("job result is not a regular file")
+	}
+	return true, info.Size(), nil
+}
+
+func (m *Manager) DeleteResult(ownerID, jobID string) (int64, error) {
+	path, err := m.existingResultPath(ownerID, jobID)
+	if err != nil {
+		return 0, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if !info.Mode().IsRegular() {
+		return 0, errors.New("job result is not a regular file")
+	}
+	if err := os.Remove(path); err != nil {
+		return 0, err
+	}
+	m.stateBytes -= info.Size()
+	if m.stateBytes < 0 {
+		m.stateBytes = 0
+	}
+	return info.Size(), nil
+}
+
+func (m *Manager) existingResultPath(ownerID, jobID string) (string, error) {
+	if ownerID == "" || !validProjectID(jobID) {
+		return "", errors.New("valid owner and job identifier are required")
+	}
+	return filepath.Join(m.stateDir, "results", ownerKey(ownerID), jobID+".tar.gz"), nil
 }
 
 // WriteResult reserves state-volume capacity before adding a result archive.
@@ -691,6 +841,8 @@ func validProjectID(value string) bool {
 	return value != "." && value != ".."
 }
 
+func ValidProjectID(value string) bool { return validProjectID(value) }
+
 func validSHA256(value string) bool {
 	if len(value) != 64 {
 		return false
@@ -760,6 +912,42 @@ func removeExpiredRegularFiles(root string, cutoff time.Time, references map[str
 					return nil
 				}
 			}
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		reclaimed += info.Size()
+		return nil
+	})
+	return reclaimed, err
+}
+
+func removeUnreferencedRegularFiles(root string, references map[string]struct{}) (int64, error) {
+	var reclaimed int64
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("state directory contains unsupported file %q", path)
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		if len(parts) != 3 || !validSHA256(parts[2]) || parts[1] != parts[2][:2] {
+			return fmt.Errorf("state blob directory contains invalid path %q", path)
+		}
+		if _, referenced := references[parts[0]+"\x00"+parts[2]]; referenced {
+			return nil
 		}
 		if err := os.Remove(path); err != nil {
 			return err
