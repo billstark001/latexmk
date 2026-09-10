@@ -1,0 +1,1 @@
+# The pinned full base already contains the complete TeX distribution.

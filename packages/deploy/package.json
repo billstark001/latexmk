@@ -8,12 +8,13 @@
   "files": [
     "dist",
     "templates",
+    "runtime",
     "README.md"
   ],
   "type": "module",
   "scripts": {
     "build": "tsc && node -e \"require('fs').chmodSync('dist/index.js',0o755)\"",
-    "test": "pnpm build && node --test test/*.test.mjs",
+    "test": "node --test test/*.test.mjs",
     "lint": "oxlint --config ../../.oxlintrc.json --type-aware src test",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "typecheck": "tsc --noEmit"

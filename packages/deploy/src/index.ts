@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { cp, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
@@ -85,23 +85,32 @@ async function main(argv: string[]) {
     console.log('latexmk-deploy 0.3.0');
     return 0;
   }
-  if (command !== 'bundle') {
+  if (command !== 'bundle' && command !== 'runtime-bundle') {
     throw new Error(`unknown command: ${command}`);
   }
-  const options = parseBundleOptions(rest);
-  await bundle(options);
+  const options = parseBundleOptions(rest, command);
+  if (command === 'runtime-bundle') await runtimeBundle(options);
+  else await bundle(options);
   return 0;
 }
 
-function parseBundleOptions(args: string[]) {
+function parseBundleOptions(args: string[], command: 'bundle' | 'runtime-bundle') {
   const selectedPreset = readPreset(args);
   const preset = selectedPreset ? DEPLOYMENT_PRESETS[selectedPreset] : {};
   const options = {
+    command,
     profile: 'slim',
+    runtimeImage: '',
+    texliveImage: '',
+    texliveRepository: '',
+    platform: '',
+    cacheFrom: [] as string[],
+    cacheTo: [] as string[],
+    push: false,
     auth: 'token',
     database: 'postgres',
-    out: path.resolve(process.cwd(), 'dist', 'latexmk-paas'),
-    tag: 'latexmk-server:local',
+    out: path.resolve(process.cwd(), 'dist', command === 'bundle' ? 'latexmk-paas' : 'latexmk-runtime'),
+    tag: '',
     build: false,
     save: '',
     force: false,
@@ -135,8 +144,12 @@ function parseBundleOptions(args: string[]) {
     const arg = args[i];
     const take = (name: string) => {
       const equal = arg.indexOf('=');
-      if (equal >= 0) return arg.slice(equal + 1);
-      if (i + 1 >= args.length) throw new Error(`${name} requires a value`);
+      if (equal >= 0) {
+        const value = arg.slice(equal + 1);
+        if (!value) throw new Error(`${name} requires a value`);
+        return value;
+      }
+      if (i + 1 >= args.length || args[i + 1].startsWith('--')) throw new Error(`${name} requires a value`);
       i += 1;
       return args[i];
     };
@@ -146,6 +159,16 @@ function parseBundleOptions(args: string[]) {
     else if (arg === '--preset' || arg.startsWith('--preset=')) take('--preset');
     else if (arg === '--out' || arg.startsWith('--out=')) options.out = path.resolve(take('--out'));
     else if (arg === '--tag' || arg.startsWith('--tag=')) options.tag = take('--tag');
+    else if (arg === '--runtime-image' || arg.startsWith('--runtime-image='))
+      options.runtimeImage = take('--runtime-image');
+    else if (arg === '--texlive-image' || arg.startsWith('--texlive-image='))
+      options.texliveImage = take('--texlive-image');
+    else if (arg === '--texlive-repository' || arg.startsWith('--texlive-repository='))
+      options.texliveRepository = take('--texlive-repository');
+    else if (arg === '--platform' || arg.startsWith('--platform=')) options.platform = take('--platform');
+    else if (arg === '--cache-from' || arg.startsWith('--cache-from=')) options.cacheFrom.push(take('--cache-from'));
+    else if (arg === '--cache-to' || arg.startsWith('--cache-to=')) options.cacheTo.push(take('--cache-to'));
+    else if (arg === '--push') options.push = true;
     else if (arg === '--save' || arg.startsWith('--save=')) options.save = path.resolve(take('--save'));
     else if (arg === '--engines' || arg.startsWith('--engines=')) options.engines = take('--engines');
     else if (arg === '--compile-timeout' || arg.startsWith('--compile-timeout='))
@@ -169,6 +192,32 @@ function parseBundleOptions(args: string[]) {
     throw new Error('--external-database requires --auth postgres --database postgres');
   if (options.preset && options.auth === 'none') throw new Error('--auth none cannot be used with a deployment preset');
   if (!options.engines) options.engines = options.profile === 'slim' ? 'xelatex' : 'xelatex,lualatex,pdflatex';
+  if (command === 'runtime-bundle' && options.runtimeImage) throw new Error('--runtime-image belongs to bundle');
+  if (!options.runtimeImage) options.runtimeImage = `latexmk-runtime:${options.profile}-local`;
+  if (!options.tag)
+    options.tag = command === 'runtime-bundle' ? `latexmk-runtime:${options.profile}-local` : 'latexmk-server:local';
+  for (const [name, value] of [
+    ['--runtime-image', options.runtimeImage],
+    ['--tag', options.tag],
+  ]) {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._/:-]*(?:@sha256:[a-f0-9]{64})?$/.test(value))
+      throw new Error(`invalid ${name} reference`);
+  }
+  if (
+    options.platform &&
+    !options.platform.split(',').every((value) => /^[a-z0-9]+\/[a-z0-9]+(?:\/[a-z0-9]+)?$/.test(value))
+  )
+    throw new Error('--platform must contain Docker platform names such as linux/amd64');
+  if (options.texliveImage && !/^[a-zA-Z0-9][a-zA-Z0-9._/:-]*@sha256:[a-f0-9]{64}$/.test(options.texliveImage))
+    throw new Error('--texlive-image must be pinned by sha256 digest');
+  if (options.texliveRepository && !/^https:\/\/[^\s"'`$\\]+$/.test(options.texliveRepository))
+    throw new Error('--texlive-repository must be an HTTPS URL');
+  if (command === 'bundle' && (options.texliveImage || options.texliveRepository))
+    throw new Error('TeX options belong to runtime-bundle');
+  if (options.push && !options.build) throw new Error('--push requires --build');
+  if (options.push && options.save) throw new Error('--save cannot be combined with --push');
+  if (options.platform.includes(',') && options.build && !options.push)
+    throw new Error('multi-platform builds require --push');
   if (options.save && !options.build) throw new Error('--save requires --build');
   return options;
 }
@@ -192,34 +241,70 @@ function readPreset(args: string[]): keyof typeof DEPLOYMENT_PRESETS | '' {
 type BundleOptions = ReturnType<typeof parseBundleOptions>;
 
 async function bundle(options: BundleOptions) {
+  assertSeparateOutput(options.out, options.serverSource);
   await ensureSource(options.serverSource);
   await prepareOutput(options.out, options.force);
-  const template = path.join(
-    packageRoot,
-    'templates',
-    options.profile === 'slim' ? 'Dockerfile.slim' : 'Dockerfile.full',
-  );
+  const lock = await readRuntimeLock();
   await cp(options.serverSource, path.join(options.out, 'server'), {
     recursive: true,
     filter(source) {
       const base = path.basename(source);
-      return base !== 'dist' && base !== '.git' && base !== '.DS_Store';
+      return !['dist', '.git', '.DS_Store', 'node_modules', 'coverage'].includes(base);
     },
   });
-  await cp(template, path.join(options.out, 'Dockerfile'));
-  await cp(
-    path.join(packageRoot, 'templates', 'rename-compat-fonts.py'),
-    path.join(options.out, 'rename-compat-fonts.py'),
+  const template = await readFile(path.join(packageRoot, 'templates', 'Dockerfile.app'), 'utf8');
+  await writeFile(
+    path.join(options.out, 'Dockerfile'),
+    template
+      .replaceAll('__GO_IMAGE__', lock.goImage)
+      .replaceAll('__RUNTIME_IMAGE__', options.runtimeImage)
+      .replaceAll('__IMAGE_PROFILE__', options.profile === 'slim' ? 'xelatex-cjk-slim' : 'texlive-full'),
   );
-  await writeFile(path.join(options.out, '.dockerignore'), 'server/dist\nserver/.git\n*.tar\n*.zip\n', 'utf8');
+  await writeFile(
+    path.join(options.out, '.dockerignore'),
+    [
+      '**',
+      '!server/',
+      '!server/**',
+      'server/dist/',
+      'server/.git/',
+      'server/node_modules/',
+      'server/coverage/',
+      '**/*_test.go',
+      '**/testdata/',
+      '**/*.md',
+      '**/.DS_Store',
+      '**/*.tar',
+      '**/*.zip',
+    ].join('\n') + '\n',
+  );
   await writeFile(path.join(options.out, '.env.example'), renderEnv(options), 'utf8');
   await writeFile(path.join(options.out, 'compose.yaml'), renderCompose(options), 'utf8');
+  if (options.preset.startsWith('railway')) {
+    await writeFile(
+      path.join(options.out, 'railway.json'),
+      JSON.stringify(
+        {
+          build: { builder: 'DOCKERFILE', dockerfilePath: 'Dockerfile' },
+          deploy: {
+            healthcheckPath: '/healthz',
+            healthcheckTimeout: 300,
+            restartPolicyType: 'ON_FAILURE',
+            restartPolicyMaxRetries: 10,
+          },
+        },
+        null,
+        2,
+      ) + '\n',
+    );
+  }
   await writeFile(path.join(options.out, 'README.md'), renderReadme(options), 'utf8');
   await writeFile(
     path.join(options.out, 'latexmk-deploy.json'),
     `${JSON.stringify(
       {
-        schemaVersion: 1,
+        schemaVersion: 2,
+        runtimeImage: options.runtimeImage,
         generatedAt: new Date().toISOString(),
         profile: options.profile,
         authMode: options.auth,
@@ -239,9 +324,92 @@ async function bundle(options: BundleOptions) {
     'utf8',
   );
   console.log(`deployment bundle: ${options.out}`);
+  await buildImage(options);
+}
+
+interface RuntimeLock {
+  schemaVersion: number;
+  texliveYear: number;
+  repository: string;
+  goImage: string;
+  images: Record<string, string>;
+}
+
+async function readRuntimeLock(): Promise<RuntimeLock> {
+  return JSON.parse(await readFile(path.join(packageRoot, 'runtime', 'lock.json'), 'utf8')) as RuntimeLock;
+}
+
+async function runtimeBundle(options: BundleOptions) {
+  const lock = await readRuntimeLock();
+  await prepareOutput(options.out, options.force);
+  const image = options.texliveImage || lock.images[options.profile];
+  const repository = options.texliveRepository || lock.repository;
+  const template = await readFile(path.join(packageRoot, 'runtime', 'Dockerfile'), 'utf8');
+  await writeFile(
+    path.join(options.out, 'Dockerfile'),
+    template
+      .replaceAll('__TEXLIVE_IMAGE__', image)
+      .replaceAll('__TEXLIVE_REPOSITORY__', repository)
+      .replaceAll('__TEXLIVE_YEAR__', String(lock.texliveYear))
+      .replaceAll('__PROFILE__', options.profile)
+      .replaceAll('__IMAGE_PROFILE__', options.profile === 'slim' ? 'xelatex-cjk-slim' : 'texlive-full')
+      .replaceAll('__ENGINES__', options.profile === 'slim' ? 'xelatex' : 'xelatex,lualatex,pdflatex'),
+  );
+  for (const name of ['install-texlive.sh', 'smoke.sh']) {
+    await cp(path.join(packageRoot, 'runtime', name), path.join(options.out, name));
+  }
+  await cp(
+    path.join(packageRoot, 'runtime', `packages.${options.profile}.txt`),
+    path.join(options.out, 'packages.txt'),
+  );
+  await cp(
+    path.join(packageRoot, 'templates', 'rename-compat-fonts.py'),
+    path.join(options.out, 'rename-compat-fonts.py'),
+  );
+  await writeFile(
+    path.join(options.out, '.dockerignore'),
+    '**\n!packages.txt\n!install-texlive.sh\n!smoke.sh\n!rename-compat-fonts.py\n',
+  );
+  await writeFile(
+    path.join(options.out, 'runtime-lock.json'),
+    JSON.stringify({ ...lock, profile: options.profile, image, repository }, null, 2) + '\n',
+  );
+  await writeFile(
+    path.join(options.out, 'README.md'),
+    `# TeX runtime build context
+
+Build once: \`docker buildx build --load --tag ${options.tag} .\`
+
+Publish the runtime to your registry, then pass its digest to the application
+bundler with \`--runtime-image registry/name@sha256:...\`.
+This context contains no server source. See packages/deploy/README.md in the source repository.
+`,
+  );
+  console.log(`runtime bundle: ${options.out}`);
+  await buildImage(options);
+}
+
+async function buildImage(options: BundleOptions) {
   if (options.build) {
-    await run('docker', ['build', '--tag', options.tag, options.out]);
-    console.log(`image built: ${options.tag}`);
+    const args = [
+      'buildx',
+      'build',
+      '--progress=plain',
+      '--tag',
+      options.tag,
+      '--metadata-file',
+      path.join(options.out, 'build-metadata.json'),
+      options.push ? '--push' : '--load',
+    ];
+    if (options.platform) args.push('--platform', options.platform);
+    for (const value of options.cacheFrom) args.push('--cache-from', value);
+    for (const value of options.cacheTo) args.push('--cache-to', value);
+    args.push(options.out);
+    const started = performance.now();
+    await run('docker', args);
+    console.log(
+      `image ${options.push ? 'published' : 'built'}: ${options.tag} (${((performance.now() - started) / 1000).toFixed(1)}s)`,
+    );
   }
   if (options.save) {
     await mkdir(path.dirname(options.save), { recursive: true });
@@ -257,7 +425,20 @@ async function ensureSource(source: string) {
   if (!goMod?.isFile()) throw new Error(`server source does not contain go.mod: ${source}`);
 }
 
+function assertSeparateOutput(out: string, source: string) {
+  const inside = (base: string, target: string) => {
+    const relative = path.relative(base, target);
+    return (
+      relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+    );
+  };
+  if (inside(out, source) || inside(source, out)) throw new Error('output must not overlap source directories');
+}
+
 async function prepareOutput(out: string, force: boolean) {
+  for (const directory of ['src', 'runtime', 'templates']) {
+    assertSeparateOutput(out, path.join(packageRoot, directory));
+  }
   const existing = await stat(out).catch(() => null);
   if (existing) {
     const entries = existing.isDirectory() ? await readdir(out) : ['not-a-directory'];
@@ -366,14 +547,14 @@ ${volumes.join('\n')}
   server:
     build: .
     image: ${options.tag}
-    env_file: .env
+${options.platform && !options.platform.includes(',') ? `    platform: ${options.platform}\n` : ''}    env_file: .env
     ports:
       - "8080:8080"
     read_only: true
     mem_limit: ${options.memoryLimit}
     pids_limit: ${options.pidsLimit}
     tmpfs:
-      - /tmp:size=${options.tmpfsSize},mode=1777
+      - /tmp:exec,size=${options.tmpfsSize},mode=1777
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -389,6 +570,12 @@ Authentication: **${options.auth}**
 Database mode: **${options.database}**  
 Enabled engines: **${options.engines}**  
 Deployment preset: **${options.preset || 'custom'}**
+
+Runtime image: \`${options.runtimeImage}\`
+
+Build the runtime separately with \`latexmk-deploy runtime-bundle --profile ${options.profile} --build\`
+for local use, or supply a published digest with \`--runtime-image\` when generating this bundle.
+The application Dockerfile never installs TeX packages.
 
 ## Local verification
 
@@ -412,7 +599,7 @@ ${options.stateVolume ? 'Compose mounts the state directory as a named volume.' 
 
 ${options.externalDatabase ? 'The bundle expects an external PostgreSQL service. Set DATABASE_URL to its private TLS endpoint before deployment.' : ''}
 
-For production, pin the TeX Live base image by digest and configure the PaaS
+For production, pin the runtime image by digest and configure the PaaS
 request timeout above the value of \`LATEXMK_COMPILE_TIMEOUT\`.
 `;
 }
@@ -420,8 +607,24 @@ request timeout above the value of \`LATEXMK_COMPILE_TIMEOUT\`.
 function run(command: string, args: string[]) {
   return new Promise<void>((resolve, reject) => {
     const child = spawn(command, args, { stdio: 'inherit' });
-    child.on('error', reject);
-    child.on('exit', (code, signal) => {
+    const interrupt = () => {
+      child.kill('SIGINT');
+    };
+    const terminate = () => {
+      child.kill('SIGTERM');
+    };
+    const cleanup = () => {
+      process.off('SIGINT', interrupt);
+      process.off('SIGTERM', terminate);
+    };
+    process.on('SIGINT', interrupt);
+    process.on('SIGTERM', terminate);
+    child.once('error', (error) => {
+      cleanup();
+      reject(error);
+    });
+    child.once('close', (code, signal) => {
+      cleanup();
       if (code === 0) resolve();
       else reject(new Error(`${command} failed with ${signal ? `signal ${signal}` : `exit code ${code}`}`));
     });
@@ -433,6 +636,7 @@ function printHelp() {
 
 Usage:
   latexmk-deploy bundle [options]
+  latexmk-deploy runtime-bundle [options]
 
 Options:
   --profile slim|full          TeX image profile (default: slim)
@@ -442,11 +646,18 @@ Options:
   --preset NAME                railway-serverless, lightsail-tokyo, or railway
   --out DIR                    Standalone build context
   --tag IMAGE                  Image tag used by build/Compose
+  --runtime-image IMAGE        Application base (default: latexmk-runtime:PROFILE-local)
+  --texlive-image IMAGE        Runtime only: digest-pinned TeX base override
+  --texlive-repository URL     Runtime only: matching HTTPS TeX snapshot override
+  --platform LIST              Docker target platform(s); multiple requires --push
+  --cache-from SPEC            Buildx external cache import (repeatable)
+  --cache-to SPEC              Buildx external cache export (repeatable)
+  --push                      Publish image instead of loading locally; requires --build
   --engines LIST               Comma-separated server engine allowlist
   --compile-timeout DURATION   Server compile timeout
   --max-concurrent N           Maximum simultaneous compiles
   --allow-shell-escape         Explicitly permit shell escape
-  --build                      Run docker build after bundling
+  --build                      Run docker buildx build after bundling
   --save FILE                  Export the built image with docker save
   --server-source DIR          Override server source directory
   --force                      Replace a non-empty output directory

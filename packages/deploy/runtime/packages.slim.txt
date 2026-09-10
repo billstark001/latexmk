@@ -1,0 +1,10 @@
+latexmk
+biber
+biblatex
+collection-xetex
+collection-latexrecommended
+collection-latexextra
+collection-fontsrecommended
+collection-langchinese
+collection-langjapanese
+collection-langkorean

@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "texliveYear": 2026,
+  "repository": "https://texlive.info/tlnet-archive/2026/09/09/tlnet",
+  "goImage": "golang:1.27-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b",
+  "images": {
+    "slim": "texlive/texlive:latest-basic@sha256:2a13037e259897f309c5d8551b3416d765bf9ad07b7c7af086ade2a68c9610cd",
+    "full": "texlive/texlive:latest@sha256:66446fb092ef02d6dc31bba079d9bdc83e8a6af00562c6062bb97ae8e91814ea"
+  }
+}
