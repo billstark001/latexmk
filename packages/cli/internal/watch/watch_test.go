@@ -82,3 +82,23 @@ func TestTrackerDetectsCreationAndDeletion(t *testing.T) {
 		t.Fatalf("changed = %#v, want %#v", changed, want)
 	}
 }
+
+func TestRefreshDetectsNewMatchingFile(t *testing.T) {
+	root := t.TempDir()
+	tracker, err := New(nil, 10*time.Millisecond, 10*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker.Refresh = func() ([]Target, error) {
+		return []Target{{Name: "new.tex", Path: filepath.Join(root, "new.tex")}}, nil
+	}
+	if err := os.WriteFile(filepath.Join(root, "new.tex"), []byte("new"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	changed, err := tracker.Wait(ctx)
+	if err != nil || len(changed) != 1 || changed[0] != "new.tex" {
+		t.Fatalf("new member: %v %v", changed, err)
+	}
+}

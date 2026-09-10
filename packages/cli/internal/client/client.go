@@ -29,6 +29,9 @@ import (
 )
 
 type Client struct {
+	IgnoreFiles      []string
+	DenyFiles        []string
+	UnmatchedGlob    string
 	BaseURL          string
 	Token            string
 	HTTP             *http.Client
@@ -252,6 +255,9 @@ func (c *Client) Compile(
 		return CompileOutput{}, &CapabilityError{Capability: "server compile cache"}
 	}
 	request.RecordInputs = meta.Capabilities.DependencyInputs
+	if err := validateAuxiliaryCapability(request, meta); err != nil {
+		return CompileOutput{}, err
+	}
 	request.DetectMissingFiles = meta.Capabilities.NeedsFiles && (c.UploadMode == "" || c.UploadMode == "auto")
 	output, err := c.compileOnce(ctx, request, outputRoot, files, meta)
 	warnings := append([]string(nil), selectionWarnings...)
@@ -368,6 +374,9 @@ func (c *Client) StartCompile(ctx context.Context, request protocol.CompileReque
 		return StartCompileOutput{}, &CapabilityError{Capability: "server compile cache"}
 	}
 	request.RecordInputs = meta.Capabilities.DependencyInputs
+	if err := validateAuxiliaryCapability(request, meta); err != nil {
+		return StartCompileOutput{}, err
+	}
 	request.DetectMissingFiles = meta.Capabilities.NeedsFiles && (c.UploadMode == "" || c.UploadMode == "auto")
 	job, err := c.startQueued(ctx, request, files)
 	if err != nil {
@@ -439,7 +448,7 @@ func (c *Client) compileLegacy(
 	if resp.StatusCode/100 != 2 {
 		return out, readHTTPError(resp)
 	}
-	if err := unpackResponse(resp.Body, outputRoot, &out); err != nil {
+	if err := unpackResponseWithPolicy(resp.Body, outputRoot, &out, request, c.ProjectRoot); err != nil {
 		return out, err
 	}
 	return out, nil
@@ -480,7 +489,7 @@ func (c *Client) compileQueued(
 		return out, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if err := unpackResponse(resp.Body, outputRoot, &out); err != nil {
+	if err := unpackResponseWithPolicy(resp.Body, outputRoot, &out, request, c.ProjectRoot); err != nil {
 		return out, err
 	}
 	// Cache publication happens after the immutable result archive is durable.
@@ -512,14 +521,14 @@ func (c *Client) startQueued(
 		Request:   request,
 		Files:     make([]protocol.ProjectFile, 0, len(files)),
 	}
-	byDigest := make(map[string]string, len(files))
+	byDigest := make(map[string]projectarchive.File, len(files))
 	for _, file := range files {
 		planRequest.Files = append(
 			planRequest.Files,
 			protocol.ProjectFile{Path: file.Path, SHA256: file.SHA256, Size: file.Size},
 		)
 		if _, exists := byDigest[file.SHA256]; !exists {
-			byDigest[file.SHA256] = file.Source
+			byDigest[file.SHA256] = file
 		}
 	}
 	var plan protocol.UploadPlan
@@ -598,16 +607,30 @@ func (c *Client) policyManifest() ([]projectarchive.File, string, error) {
 	}
 	exclude := append([]string(nil), c.Exclude...)
 	manifestPath := ""
-	if c.ManifestFile != "" {
+	manifestFile := c.ManifestFile
+	if manifestFile == "" && c.UploadMode == "manifest" && len(c.IncludeFiles) == 0 {
+		for _, name := range []string{".latexmk-manifest", ".latexmk-files"} {
+			if _, err := os.Lstat(filepath.Join(c.ProjectRoot, name)); err == nil {
+				manifestFile = name
+				break
+			}
+		}
+	}
+	if manifestFile != "" {
 		var err error
-		manifestPath, err = dependency.NormalizeExplicitManifestPath(c.ManifestFile)
+		manifestPath, err = dependency.NormalizeExplicitManifestPath(manifestFile)
 		if err != nil {
 			return nil, "", fmt.Errorf("manifest path: %w", err)
 		}
 		exclude = append(exclude, manifestPath)
 	}
+	denyFiles := append([]string{}, c.DenyFiles...)
+	if manifestPath != "" {
+		denyFiles = append(denyFiles, filepath.Join(c.ProjectRoot, manifestPath))
+	}
 	candidates, _, err := projectarchive.Manifest(projectarchive.Options{
-		Root:             c.ProjectRoot,
+		Root:        c.ProjectRoot,
+		IgnoreFiles: c.IgnoreFiles, DenyFiles: denyFiles, DeferHash: true,
 		Exclude:          exclude,
 		RespectGitIgnore: c.RespectGitIgnore,
 		MaxFiles:         20_000,
@@ -623,25 +646,60 @@ func (c *Client) projectManifestWithAdditional(
 	entry, engine string,
 	additional []string,
 ) ([]projectarchive.File, []string, error) {
-	candidates, manifestPath, err := c.policyManifest()
+	result, err := c.Selection(entry, engine, additional)
 	if err != nil {
 		return nil, nil, err
 	}
+	if !result.Resolved {
+		message := "dependency discovery has unresolved references"
+		if len(result.Diagnostics) > 0 {
+			message += ": " + dependency.FormatDiagnostic(result.Diagnostics[0])
+		}
+		return nil, nil, fmt.Errorf("%s; inspect with 'latexmk files'", message)
+	}
+	var warnings []string
+	for _, diagnostic := range result.Diagnostics {
+		if diagnostic.Resolution != "" {
+			warnings = append(warnings, dependency.FormatDiagnostic(diagnostic))
+		}
+	}
+	return result.Files, warnings, nil
+}
+
+// Selection is shared by preview, compilation and watch. It never reads credentials.
+func (c *Client) Selection(entry, engine string, additional []string) (dependency.Result, error) {
+	return c.selectFiles(entry, engine, additional, true)
+}
+
+// SelectionPaths refreshes watch membership without rehashing every unchanged
+// graphic or other binary input at each polling interval.
+func (c *Client) SelectionPaths(entry, engine string) (dependency.Result, error) {
+	return c.selectFiles(entry, engine, nil, false)
+}
+
+func (c *Client) selectFiles(entry, engine string, additional []string, hash bool) (dependency.Result, error) {
+	candidates, manifestPath, err := c.policyManifest()
+	if err != nil {
+		return dependency.Result{}, err
+	}
 	var cached []string
 	explicit := append([]string(nil), c.IncludeFiles...)
-	explicit = append(explicit, additional...)
+	// Server-requested additions are exact validated paths, never user patterns.
+	for _, name := range additional {
+		explicit = append(explicit, dependency.ExactPattern(name))
+	}
 	historyAvailable := false
 	if c.UploadMode != "all" {
 		manifestFiles, manifestErr := dependency.LoadExplicitManifest(c.ProjectRoot, manifestPath)
 		if manifestErr != nil {
-			return nil, nil, fmt.Errorf("load explicit manifest: %w", manifestErr)
+			return dependency.Result{}, fmt.Errorf("load explicit manifest: %w", manifestErr)
 		}
 		explicit = append(explicit, manifestFiles...)
 	}
 	if c.UploadMode == "auto" || c.UploadMode == "" {
 		cached, historyAvailable, err = dependency.LoadCachedInputs(c.ProjectRoot, entry, engine)
 		if err != nil {
-			return nil, nil, fmt.Errorf("load dependency cache: %w", err)
+			return dependency.Result{}, fmt.Errorf("load dependency cache: %w", err)
 		}
 	}
 	result, err := dependency.SelectWithOptions(
@@ -649,31 +707,25 @@ func (c *Client) projectManifestWithAdditional(
 		candidates,
 		dependency.SelectionOptions{
 			Mode:             c.UploadMode,
+			UnmatchedGlob:    c.UnmatchedGlob,
 			ExplicitFiles:    explicit,
 			CachedFiles:      cached,
 			HistoryAvailable: historyAvailable,
 		},
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("select project dependencies: %w", err)
+		return dependency.Result{}, fmt.Errorf("select project dependencies: %w", err)
 	}
-	if !result.Resolved {
-		message := "dependency discovery has unresolved references"
-		if len(result.Diagnostics) > 0 {
-			message += ": " + dependency.FormatDiagnostic(result.Diagnostics[0])
-		}
-		return nil, nil, fmt.Errorf(
-			"%s; inspect with 'latexmk files' or use --upload-mode all after reviewing the manifest",
-			message,
-		)
-	}
-	warnings := make([]string, 0)
-	for _, diagnostic := range result.Diagnostics {
-		if diagnostic.Resolution != "" {
-			warnings = append(warnings, "dependency reference covered: "+dependency.FormatDiagnostic(diagnostic))
+	if hash {
+		if err := projectarchive.HashSelected(result.Files, 2<<30); err != nil {
+			return dependency.Result{}, err
 		}
 	}
-	return result.Files, warnings, nil
+	result.Stats = projectarchive.Stats{Files: len(result.Files)}
+	for _, file := range result.Files {
+		result.Stats.Bytes += file.Size
+	}
+	return result, nil
 }
 
 func (c *Client) jsonRequest(ctx context.Context, method, path string, body any, output any) error {
@@ -701,8 +753,8 @@ func (c *Client) jsonRequest(ctx context.Context, method, path string, body any,
 	return nil
 }
 
-func (c *Client) uploadBlob(ctx context.Context, uploadID, digest, source string) error {
-	f, err := os.Open(source)
+func (c *Client) uploadBlob(ctx context.Context, uploadID, digest string, source projectarchive.File) error {
+	f, err := projectarchive.OpenFile(source)
 	if err != nil {
 		return err
 	}
@@ -755,6 +807,22 @@ func (c *Client) decorate(req *http.Request) {
 }
 
 func unpackResponse(r io.Reader, outputRoot string, out *CompileOutput) error {
+	return unpackResponseWithPolicy(
+		r,
+		outputRoot,
+		out,
+		protocol.CompileRequest{Auxiliary: protocol.AuxiliaryOptions{Local: "output"}},
+		outputRoot,
+	)
+}
+
+func unpackResponseWithPolicy(
+	r io.Reader,
+	outputRoot string,
+	out *CompileOutput,
+	request protocol.CompileRequest,
+	root string,
+) error {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return fmt.Errorf("open result gzip: %w", err)
@@ -863,7 +931,7 @@ func unpackResponse(r io.Reader, outputRoot string, out *CompileOutput) error {
 				if artifact.Size != h.Size {
 					return fmt.Errorf("artifact %q size mismatch", rel)
 				}
-				if err := writeArtifact(outputRoot, rel, tr, h.Size, artifact.SHA256); err != nil {
+				if err := storeReturnedArtifact(root, outputRoot, request, artifact, tr); err != nil {
 					return err
 				}
 				seen[rel] = true

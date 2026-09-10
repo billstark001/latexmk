@@ -5,10 +5,11 @@ package dependency
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path"
 	"sort"
 	"strings"
+
+	"github.com/bmatcuk/doublestar/v4"
 
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
 )
@@ -36,6 +37,7 @@ type SelectionOptions struct {
 	Mode             string
 	ExplicitFiles    []string
 	CachedFiles      []string
+	UnmatchedGlob    string
 	HistoryAvailable bool
 }
 
@@ -72,7 +74,7 @@ func SelectWithOptions(entry string, candidates []projectarchive.File, options S
 	if mode == "" {
 		mode = "auto"
 	}
-	if mode == "all" {
+	if mode == "all" || mode == "ignore" {
 		files := append([]projectarchive.File(nil), candidates...)
 		stats := projectarchive.Stats{}
 		for i := range files {
@@ -113,41 +115,42 @@ func SelectWithOptions(entry string, candidates []projectarchive.File, options S
 		selected[file.Path] = file
 	}
 	acceptedExplicit := false
-	for _, explicitPath := range options.ExplicitFiles {
-		clean := cleanProjectPath(explicitPath)
-		if clean == "" {
-			result.Diagnostics = append(
-				result.Diagnostics,
-				Diagnostic{
-					File:      entry,
-					Reference: explicitPath,
-					Kind:      "explicit",
-					Message:   "explicit file path escapes the project root",
-				},
-			)
-			continue
+	for _, expression := range options.ExplicitFiles {
+		pattern, err := NormalizePattern(expression)
+		if err != nil {
+			return Result{}, err
 		}
-		file, ok := byPath[clean]
-		if !ok {
-			result.Diagnostics = append(
-				result.Diagnostics,
-				Diagnostic{
-					File:      entry,
-					Reference: clean,
-					Kind:      "explicit",
-					Message:   "explicit file is missing, ignored by Git, or denied by the upload policy",
-				},
-			)
-			continue
+		count := 0
+		for _, file := range candidates {
+			if !doublestar.MatchUnvalidated(pattern, file.Path) {
+				continue
+			}
+			count++
+			if file.Path != entry {
+				acceptedExplicit = true
+			}
+			if _, exists := selected[file.Path]; !exists {
+				file.Reason = "explicit manifest: " + expression
+				selected[file.Path] = file
+			}
 		}
-		if clean != entry {
-			acceptedExplicit = true
+		if count == 0 {
+			diagnostic := Diagnostic{
+				File:      entry,
+				Reference: expression,
+				Kind:      "explicit",
+				Message:   "pattern has no allowed matches (missing, ignored, or denied)",
+			}
+			if HasGlob(pattern) {
+				switch options.UnmatchedGlob {
+				case "ignore":
+					continue
+				case "warn":
+					diagnostic.Resolution = "unmatchedGlob=warn"
+				}
+			}
+			result.Diagnostics = append(result.Diagnostics, diagnostic)
 		}
-		if _, exists := selected[clean]; exists {
-			continue
-		}
-		file.Reason = "explicit manifest"
-		selected[clean] = file
 	}
 	acceptedHistory := false
 	if mode == "auto" {
@@ -336,7 +339,7 @@ func (d *discoverer) visit(filePath, reason string) error {
 		)
 		return nil
 	}
-	content, err := os.ReadFile(file.Source)
+	content, err := projectarchive.ReadFile(file, maxParsedFileSize)
 	if err != nil {
 		return fmt.Errorf("read dependency %s: %w", filePath, err)
 	}
@@ -354,9 +357,9 @@ func (d *discoverer) visit(filePath, reason string) error {
 			d.addDiagnostic(filePath, call.line, call.name, "", "unsupported", "expected a braced literal argument")
 			continue
 		}
-		references := []string{strings.TrimSpace(call.args[spec.reference])}
+		references := []string{normalizeArgument(call.args[spec.reference])}
 		if spec.splitComma {
-			references = strings.Split(call.args[spec.reference], ",")
+			references = strings.Split(normalizeArgument(call.args[spec.reference]), ",")
 		}
 		for _, reference := range references {
 			d.consumeReference(filePath, call.line, call.name, strings.TrimSpace(reference), spec)
@@ -443,7 +446,7 @@ func (d *discoverer) consumeGraphicPath(source string, call invocation) {
 		d.addDiagnostic(source, call.line, call.name, "", "unsupported", "expected \\graphicspath{{dir/}{dir/}}")
 		return
 	}
-	dirs, ok := bracedList(call.args[0])
+	dirs, ok := bracedList(normalizeArgument(call.args[0]))
 	if !ok {
 		d.addDiagnostic(
 			source,
@@ -584,8 +587,13 @@ func sanitize(text string) string {
 			continue
 		}
 		for i < len(bytes) && bytes[i] != '\n' {
-			bytes[i] = ' '
+			bytes[i] = '\x00'
 			i++
+		}
+		if i < len(bytes) {
+			for j := i + 1; j < len(bytes) && (bytes[j] == ' ' || bytes[j] == '\t'); j++ {
+				bytes[j] = '\x00'
+			}
 		}
 	}
 	text = string(bytes)
@@ -709,4 +717,22 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// normalizeArgument removes TeX comment continuations without erasing literal spaces.
+func normalizeArgument(value string) string {
+	var out strings.Builder
+	comment := false
+	for _, c := range value {
+		if c == 0 {
+			comment = true
+			continue
+		}
+		if c == '\n' && comment {
+			continue
+		}
+		comment = false
+		out.WriteRune(c)
+	}
+	return strings.TrimSpace(out.String())
 }

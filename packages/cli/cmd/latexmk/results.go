@@ -47,7 +47,7 @@ func runArtifacts(args []string) int {
 	if action != "list" && action != "get" {
 		return failAgentArguments(command, jsonOutput, fmt.Errorf("unknown artifacts action %q", action))
 	}
-	opts, err := loadResultCommandOptions()
+	opts, args, err := loadResultCommandOptions(args)
 	if err != nil {
 		return failAgentArguments(command, jsonOutput, err)
 	}
@@ -95,7 +95,7 @@ func runArtifacts(args []string) int {
 func runLogs(args []string) int {
 	jsonOutput := hasJSONFlag(args)
 	command := "logs.get"
-	opts, err := loadResultCommandOptions()
+	opts, args, err := loadResultCommandOptions(args)
 	if err != nil {
 		return failAgentArguments(command, jsonOutput, err)
 	}
@@ -138,7 +138,7 @@ func runLogs(args []string) int {
 func runDiagnostics(args []string) int {
 	jsonOutput := hasJSONFlag(args)
 	command := "diagnostics.get"
-	opts, err := loadResultCommandOptions()
+	opts, args, err := loadResultCommandOptions(args)
 	if err != nil {
 		return failAgentArguments(command, jsonOutput, err)
 	}
@@ -191,20 +191,23 @@ func runDiagnostics(args []string) int {
 	return 0
 }
 
-func loadResultCommandOptions() (resultCommandOptions, error) {
+func loadResultCommandOptions(args []string) (resultCommandOptions, []string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return resultCommandOptions{}, err
+		return resultCommandOptions{}, nil, err
 	}
-	cfg, err := config.Load(cwd)
+	cfg, args, err := config.LoadArgs(cwd, args)
 	if err != nil {
-		return resultCommandOptions{}, err
+		return resultCommandOptions{}, nil, err
+	}
+	if err := cfg.Authenticate(cfg.ProjectRoot); err != nil {
+		return resultCommandOptions{}, nil, err
 	}
 	return resultCommandOptions{
 		server: cfg.Server, token: cfg.Token, timeout: cfg.Timeout,
 		insecure: cfg.InsecureSkipVerify,
 		outDir:   cwd, source: "all", tailLines: 200, maxBytes: 64 << 10,
-	}, nil
+	}, args, nil
 }
 
 func parseResultCommandArgs(command string, args []string, opts *resultCommandOptions) error {
@@ -225,14 +228,6 @@ func parseResultCommandArgs(command string, args []string, opts *resultCommandOp
 		switch {
 		case a == "--server" || strings.HasPrefix(a, "--server="):
 			opts.server, err = value("--server")
-		case a == "--token" || strings.HasPrefix(a, "--token="):
-			opts.token, err = value("--token")
-		case a == "--token-file" || strings.HasPrefix(a, "--token-file="):
-			var path string
-			path, err = value("--token-file")
-			if err == nil {
-				opts.token, err = config.ReadTokenFile(path)
-			}
 		case a == "--timeout" || strings.HasPrefix(a, "--timeout="):
 			var raw string
 			raw, err = value("--timeout")

@@ -13,6 +13,7 @@ import (
 
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
+	"github.com/billstark001/latexmk/packages/cli/internal/config"
 )
 
 func captureCommandOutput(t *testing.T, fn func() int) (int, string, string) {
@@ -140,11 +141,18 @@ func TestParseCompileArgsReadsTokenFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts := compileOptions{timeout: time.Minute}
-	if err := parseCompileArgs([]string{"--token-file", path, "main.tex"}, &opts); err != nil {
+	cfg, args, err := config.LoadArgs(t.TempDir(), []string{"--token-file", path, "main.tex"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.token != "file-token" {
-		t.Fatalf("token = %q, want file-token", opts.token)
+	if err := cfg.Authenticate(""); err != nil {
+		t.Fatal(err)
+	}
+	if err := parseCompileArgs(args, &opts); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Token != "file-token" {
+		t.Fatalf("token = %q, want file-token", cfg.Token)
 	}
 }
 
@@ -268,11 +276,11 @@ func TestResultStateErrorUsesRetryableAgentCode(t *testing.T) {
 	}
 }
 
-func TestSelectedFilesChangedIgnoresNewRecorderDependencies(t *testing.T) {
+func TestSelectedFilesChangedDetectsNewDependencies(t *testing.T) {
 	before := []projectarchive.File{{Path: "main.tex", SHA256: "main-v1"}}
 	after := []projectarchive.File{{Path: "main.tex", SHA256: "main-v1"}, {Path: "dynamic.tex", SHA256: "dynamic-v1"}}
-	if selectedFilesChanged(before, after) {
-		t.Fatal("a newly discovered dependency should not imply an edit during compilation")
+	if !selectedFilesChanged(before, after) {
+		t.Fatal("a newly discovered dependency must refresh the compile snapshot")
 	}
 	after[0].SHA256 = "main-v2"
 	if !selectedFilesChanged(before, after) {

@@ -22,6 +22,7 @@ type fileState struct {
 }
 
 type Tracker struct {
+	Refresh  func() ([]Target, error)
 	targets  []Target
 	states   map[string]fileState
 	interval time.Duration
@@ -72,6 +73,26 @@ func (t *Tracker) Wait(ctx context.Context) ([]string, error) {
 			return nil, ctx.Err()
 		case now := <-ticker.C:
 			changed := false
+			if t.Refresh != nil {
+				if targets, err := t.Refresh(); err == nil {
+					next := make(map[string]bool, len(targets))
+					for _, target := range targets {
+						next[target.Path] = true
+						if _, exists := t.states[target.Path]; !exists {
+							pending[target.Name] = struct{}{}
+							changed = true
+						}
+					}
+					for _, target := range t.targets {
+						if !next[target.Path] {
+							pending[target.Name] = struct{}{}
+							delete(t.states, target.Path)
+							changed = true
+						}
+					}
+					t.targets = targets
+				}
+			}
 			for _, target := range t.targets {
 				current := statFile(target.Path)
 				if current == t.states[target.Path] {

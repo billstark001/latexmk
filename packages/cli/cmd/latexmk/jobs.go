@@ -49,7 +49,7 @@ func runJobs(args []string) int {
 	if err != nil {
 		return failAgent(command, jsonOutput, err)
 	}
-	cfg, err := config.Load(cwd)
+	cfg, args, err := config.LoadArgs(cwd, args)
 	if err != nil {
 		return failAgent(command, jsonOutput, err)
 	}
@@ -60,6 +60,10 @@ func runJobs(args []string) int {
 	if err := parseJobsArgs(action, args[1:], &opts); err != nil {
 		return failAgentArguments(command, jsonOutput, err)
 	}
+	if err := cfg.Authenticate(cfg.ProjectRoot); err != nil {
+		return failAgentArguments(command, jsonOutput, err)
+	}
+	opts.token = cfg.Token
 	c, err := client.New(opts.server, opts.token, opts.timeout, opts.insecure)
 	if err != nil {
 		return failAgentArguments(command, jsonOutput, err)
@@ -118,14 +122,6 @@ func parseJobsArgs(action string, args []string, opts *jobsOptions) error {
 		switch {
 		case a == "--server" || strings.HasPrefix(a, "--server="):
 			opts.server, err = value("--server")
-		case a == "--token" || strings.HasPrefix(a, "--token="):
-			opts.token, err = value("--token")
-		case a == "--token-file" || strings.HasPrefix(a, "--token-file="):
-			var path string
-			path, err = value("--token-file")
-			if err == nil {
-				opts.token, err = config.ReadTokenFile(path)
-			}
 		case a == "--timeout" || strings.HasPrefix(a, "--timeout="):
 			var raw string
 			raw, err = value("--timeout")

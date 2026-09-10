@@ -9,7 +9,9 @@ import (
 const Version = 2
 
 type AuxiliaryOptions struct {
-	Server string `json:"server,omitempty"`
+	Local     string `json:"local,omitempty"`
+	ServerTTL string `json:"serverTTL,omitempty"`
+	Server    string `json:"server,omitempty"`
 }
 
 // CompileCache describes server-side warm-start state, not a cached PDF.
@@ -43,26 +45,28 @@ type Artifact struct {
 	Path   string `json:"path"`
 	Size   int64  `json:"size"`
 	SHA256 string `json:"sha256"`
+	Kind   string `json:"kind,omitempty"`
 }
 
 type CompileResult struct {
-	CompileCache    *CompileCache `json:"compileCache,omitempty"`
-	ProtocolVersion int           `json:"protocolVersion"`
-	RequestID       string        `json:"requestId"`
-	Success         bool          `json:"success"`
-	ExitCode        int           `json:"exitCode"`
-	TimedOut        bool          `json:"timedOut"`
-	DurationMS      int64         `json:"durationMs"`
-	Entry           string        `json:"entry"`
-	Engine          string        `json:"engine"`
-	ServerVersion   string        `json:"serverVersion"`
-	ImageProfile    string        `json:"imageProfile"`
-	Artifacts       []Artifact    `json:"artifacts"`
-	InputFiles      []string      `json:"inputFiles,omitempty"`
-	NeedsFiles      []string      `json:"needsFiles,omitempty"`
-	StdoutTruncated bool          `json:"stdoutTruncated"`
-	StderrTruncated bool          `json:"stderrTruncated"`
-	Error           string        `json:"error,omitempty"`
+	AuxiliaryExpiresAt *time.Time    `json:"auxiliaryExpiresAt,omitempty"`
+	CompileCache       *CompileCache `json:"compileCache,omitempty"`
+	ProtocolVersion    int           `json:"protocolVersion"`
+	RequestID          string        `json:"requestId"`
+	Success            bool          `json:"success"`
+	ExitCode           int           `json:"exitCode"`
+	TimedOut           bool          `json:"timedOut"`
+	DurationMS         int64         `json:"durationMs"`
+	Entry              string        `json:"entry"`
+	Engine             string        `json:"engine"`
+	ServerVersion      string        `json:"serverVersion"`
+	ImageProfile       string        `json:"imageProfile"`
+	Artifacts          []Artifact    `json:"artifacts"`
+	InputFiles         []string      `json:"inputFiles,omitempty"`
+	NeedsFiles         []string      `json:"needsFiles,omitempty"`
+	StdoutTruncated    bool          `json:"stdoutTruncated"`
+	StderrTruncated    bool          `json:"stderrTruncated"`
+	Error              string        `json:"error,omitempty"`
 }
 
 type ProjectFile struct {
@@ -130,6 +134,7 @@ type Metadata struct {
 
 type Capabilities struct {
 	CompileCache            bool     `json:"compileCache"`
+	AuxiliaryRetention      bool     `json:"auxiliaryRetention"`
 	CompileCacheRetentionMS int64    `json:"compileCacheRetentionMs"`
 	Engines                 []string `json:"engines"`
 	MaxUploadBytes          int64    `json:"maxUploadBytes"`
@@ -154,12 +159,11 @@ type Capabilities struct {
 	RemoteCleanup           bool     `json:"remoteCleanup"`
 }
 
-// MarshalJSON omits disabled auxiliary policy for older servers, which reject
-// unknown request fields. Explicit reuse is guarded by capability negotiation.
+// MarshalJSON omits an unspecified auxiliary policy and preserves explicit choices.
 func (r CompileRequest) MarshalJSON() ([]byte, error) {
 	type plain CompileRequest
 	var auxiliary *AuxiliaryOptions
-	if r.Auxiliary.Server != "" && r.Auxiliary.Server != "none" {
+	if r.Auxiliary.Server != "" || r.Auxiliary.Local != "" || r.Auxiliary.ServerTTL != "" {
 		auxiliary = &r.Auxiliary
 	}
 	return json.Marshal(struct {

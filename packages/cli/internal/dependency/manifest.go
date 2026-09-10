@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 const (
@@ -16,7 +18,29 @@ const (
 	maxManifestFiles = 20_000
 )
 
-// LoadExplicitManifest reads an exact project-relative file list. Blank lines
+// ExactPattern quotes a validated filename when mixing it with user glob input.
+func ExactPattern(name string) string {
+	return strings.NewReplacer(
+		"\\",
+		"\\\\",
+		"*",
+		"\\*",
+		"?",
+		"\\?",
+		"[",
+		"\\[",
+		"]",
+		"\\]",
+		"{",
+		"\\{",
+		"}",
+		"\\}",
+	).Replace(
+		name,
+	)
+}
+
+// LoadExplicitManifest reads project-relative paths and glob patterns. Blank lines
 // and lines whose first non-space character is # are ignored.
 func LoadExplicitManifest(root, manifestPath string) ([]string, error) {
 	if strings.TrimSpace(manifestPath) == "" {
@@ -70,9 +94,9 @@ func LoadExplicitManifest(root, manifestPath string) ([]string, error) {
 		if value == "" || strings.HasPrefix(value, "#") {
 			continue
 		}
-		path := cleanProjectPath(value)
-		if path == "" {
-			return nil, fmt.Errorf("manifest %s:%d contains an out-of-root path", clean, line)
+		path, patternErr := NormalizePattern(value)
+		if patternErr != nil {
+			return nil, fmt.Errorf("manifest %s:%d contains an invalid pattern: %w", clean, line, patternErr)
 		}
 		unique[path] = struct{}{}
 		if len(unique) > maxManifestFiles {
@@ -101,4 +125,44 @@ func NormalizeExplicitManifestPath(manifestPath string) (string, error) {
 		return "", errors.New("manifest path cannot contain glob characters")
 	}
 	return clean, nil
+}
+
+// NormalizePattern validates a slash-separated, root-relative pattern before matching.
+func NormalizePattern(value string) (string, error) {
+	value = strings.TrimSpace(strings.TrimPrefix(value, "./"))
+	if value == "" || strings.HasPrefix(value, "/") || strings.Contains(value, ":") {
+		return "", fmt.Errorf("invalid project-relative pattern %q", value)
+	}
+	for _, part := range strings.Split(value, "/") {
+		if part == ".." {
+			return "", fmt.Errorf("pattern escapes project root: %q", value)
+		}
+	}
+	if !doublestar.ValidatePattern(value) {
+		return "", fmt.Errorf("invalid glob %q", value)
+	}
+	if strings.HasSuffix(value, "/") {
+		value += "**"
+	}
+	return value, nil
+}
+
+// HasGlob distinguishes patterns from escaped literal filenames, which must
+// still fail when missing even if unmatchedGlob is warn or ignore.
+func HasGlob(pattern string) bool {
+	escaped := false
+	for _, character := range pattern {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if character == '\\' {
+			escaped = true
+			continue
+		}
+		if strings.ContainsRune("*?[{", character) {
+			return true
+		}
+	}
+	return false
 }

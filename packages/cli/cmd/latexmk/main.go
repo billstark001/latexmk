@@ -27,6 +27,12 @@ var (
 )
 
 type compileOptions struct {
+	explain       string
+	ignoreFiles   []string
+	denyFiles     []string
+	unmatchedGlob string
+	target        string
+	pdfExport     string
 	auxiliary     protocol.AuxiliaryOptions
 	server        string
 	token         string
@@ -125,16 +131,21 @@ func run(args []string) int {
 }
 
 func runCompile(args []string, forcedEngine string, listOnly bool) int {
+	originalArgs := append([]string{}, args...)
+	if listOnly {
+		originalArgs = append(originalArgs, "--dry-run")
+	}
 	detachedJSON := hasJSONFlag(args) && hasDetachFlag(args)
 	cwd, err := os.Getwd()
 	if err != nil {
 		return failAgent("compile.start", detachedJSON, err)
 	}
-	cfg, err := config.Load(cwd)
+	cfg, args, err := config.LoadArgs(cwd, args)
 	if err != nil {
 		return failAgentArguments("compile.start", detachedJSON, err)
 	}
 	opts := compileOptions{
+		ignoreFiles: cfg.IgnoreFiles, denyFiles: cfg.DenyFiles, unmatchedGlob: cfg.UnmatchedGlob,
 		auxiliary:     cfg.Auxiliary,
 		server:        cfg.Server,
 		token:         cfg.Token,
@@ -146,7 +157,7 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		includeFiles:  append([]string(nil), cfg.IncludeFiles...),
 		gitIgnore:     cfg.RespectGitIgnore,
 		engine:        cfg.Engine,
-		outDir:        "",
+		outDir:        cfg.OutDir,
 		timeout:       cfg.Timeout,
 		interaction:   "nonstopmode",
 		synctex:       true,
@@ -169,6 +180,29 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		fmt.Fprintln(os.Stderr, "latexmk:", err)
 		fmt.Fprintln(os.Stderr, "run 'latexmk help' for usage")
 		return 2
+	}
+	if opts.target != "" {
+		if opts.target == "all" {
+			return runAllTargets(originalArgs, cfg)
+		}
+		target, ok := cfg.Targets[opts.target]
+		if !ok {
+			return fail(fmt.Errorf("unknown target %q", opts.target))
+		}
+		if opts.entry != "" {
+			return fail(errors.New("--target cannot be combined with an entry"))
+		}
+		opts.entry, opts.pdfExport = target.Entry, target.PDF
+		if cfg.ConfigPath != "" && !filepath.IsAbs(opts.entry) {
+			opts.entry = filepath.Join(filepath.Dir(cfg.ConfigPath), opts.entry)
+		}
+		if target.Engine != "" && !hasOption(args, "--engine") {
+			opts.engine = target.Engine
+		}
+		if target.OutDir != "" && !hasOption(args, "--out-dir") && !hasOption(args, "-output-directory") {
+			opts.outDir = target.OutDir
+		}
+		opts.includeFiles = append(opts.includeFiles, target.IncludeFiles...)
 	}
 	if opts.entry == "" {
 		err := errors.New("no TeX entry file was provided")
@@ -194,6 +228,10 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		return printManifest(opts)
 	}
 
+	if err := cfg.Authenticate(opts.projectRoot); err != nil {
+		return fail(err)
+	}
+	opts.token = cfg.Token
 	c, err := client.New(opts.server, opts.token, opts.timeout, opts.insecure)
 	if err != nil {
 		if opts.detach {
@@ -216,6 +254,9 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 			)
 		}
 	}
+	c.IgnoreFiles, c.DenyFiles, c.UnmatchedGlob = opts.ignoreFiles, append(
+		opts.denyFiles,
+		cfg.DenyFiles...), opts.unmatchedGlob
 	c.Exclude = opts.exclude
 	c.RespectGitIgnore = opts.gitIgnore
 	c.UploadMode = opts.uploadMode
@@ -284,7 +325,11 @@ func compileWithTimeout(
 ) (client.CompileOutput, error) {
 	ctx, cancel := context.WithTimeout(parent, opts.timeout)
 	defer cancel()
-	return c.Compile(ctx, request, opts.outDir)
+	out, err := c.Compile(ctx, request, opts.outDir)
+	if err == nil {
+		err = exportPDF(opts, out)
+	}
+	return out, err
 }
 
 func reportCompile(out client.CompileOutput, err error, opts compileOptions) int {
@@ -399,6 +444,13 @@ func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOpt
 		if trackErr != nil {
 			return fail(trackErr)
 		}
+		tracker.Refresh = func() ([]projectwatch.Target, error) {
+			selection, err := c.SelectionPaths(request.Entry, request.Engine)
+			if err != nil {
+				return nil, err
+			}
+			return watchTargets(opts, selection.Files), nil
+		}
 		changed, waitErr := tracker.Wait(ctx)
 		if waitErr != nil {
 			if ctx.Err() != nil {
@@ -412,6 +464,9 @@ func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOpt
 }
 
 func selectedFilesChanged(before, after []projectarchive.File) bool {
+	if len(before) != len(after) {
+		return true
+	}
 	current := make(map[string]string, len(after))
 	for _, file := range after {
 		current[file.Path] = file.SHA256
@@ -439,6 +494,24 @@ func watchTargets(opts compileOptions, files []projectarchive.File) []projectwat
 				},
 			)
 		}
+	}
+	if opts.manifestFile == "" && opts.uploadMode == "manifest" && len(opts.includeFiles) == 0 {
+		for _, name := range []string{".latexmk-manifest", ".latexmk-files"} {
+			targets = append(
+				targets,
+				projectwatch.Target{Name: "dependency manifest " + name, Path: filepath.Join(opts.projectRoot, name)},
+			)
+		}
+	}
+	names := opts.ignoreFiles
+	if names == nil {
+		names = []string{".latexmkignore"}
+	}
+	for _, name := range names {
+		targets = append(
+			targets,
+			projectwatch.Target{Name: "ignore policy " + name, Path: filepath.Join(opts.projectRoot, name)},
+		)
 	}
 	if !opts.gitIgnore {
 		return targets
@@ -508,21 +581,58 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 				return err
 			}
 			opts.server = v
-		case a == "--token" || strings.HasPrefix(a, "--token="):
-			v, err := value("--token")
+		case a == "--ignore-file" || strings.HasPrefix(a, "--ignore-file="):
+			v, err := value("--ignore-file")
 			if err != nil {
 				return err
 			}
-			opts.token = v
-		case a == "--token-file" || strings.HasPrefix(a, "--token-file="):
-			v, err := value("--token-file")
+			if opts.ignoreFiles == nil {
+				opts.ignoreFiles = []string{}
+			}
+			opts.ignoreFiles = append(opts.ignoreFiles, v)
+		case a == "--no-ignore-files":
+			opts.ignoreFiles = []string{}
+		case a == "--explain" || strings.HasPrefix(a, "--explain="):
+			v, err := value("--explain")
 			if err != nil {
 				return err
 			}
-			opts.token, err = config.ReadTokenFile(v)
+			opts.explain = v
+			opts.dryRun = true
+		case a == "--unmatched-glob" || strings.HasPrefix(a, "--unmatched-glob="):
+			v, err := value("--unmatched-glob")
 			if err != nil {
 				return err
 			}
+			if v != "error" && v != "warn" && v != "ignore" {
+				return errors.New("--unmatched-glob must be error, warn, or ignore")
+			}
+			opts.unmatchedGlob = v
+		case a == "--local-cache" || strings.HasPrefix(a, "--local-cache="):
+			v, err := value("--local-cache")
+			if err != nil {
+				return err
+			}
+			if v != "none" && v != "cache" && v != "output" {
+				return errors.New("--local-cache must be none, cache, or output")
+			}
+			opts.auxiliary.Local = v
+		case a == "--server-cache-ttl" || strings.HasPrefix(a, "--server-cache-ttl="):
+			v, err := value("--server-cache-ttl")
+			if err != nil {
+				return err
+			}
+			ttl, err := time.ParseDuration(v)
+			if err != nil || ttl <= 0 {
+				return errors.New("--server-cache-ttl must be a positive duration")
+			}
+			opts.auxiliary.ServerTTL = v
+		case a == "--target" || strings.HasPrefix(a, "--target="):
+			v, err := value("--target")
+			if err != nil {
+				return err
+			}
+			opts.target = v
 		case a == "--project-root" || strings.HasPrefix(a, "--project-root="):
 			v, err := value("--project-root")
 			if err != nil {
@@ -549,6 +659,9 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 			if err != nil {
 				return err
 			}
+			if v == "ignore" {
+				v = "all"
+			}
 			if v != "auto" && v != "manifest" && v != "all" {
 				return fmt.Errorf("--upload-mode must be auto, manifest, or all, got %q", v)
 			}
@@ -558,8 +671,8 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 			if err != nil {
 				return err
 			}
-			if v != "none" && v != "reuse" {
-				return errors.New("--server-cache must be none or reuse")
+			if v != "none" && v != "reuse" && v != "retain" {
+				return errors.New("--server-cache must be none, retain, or reuse")
 			}
 			opts.auxiliary.Server = v
 		case a == "--manifest" || strings.HasPrefix(a, "--manifest="):
@@ -774,50 +887,36 @@ type manifestView struct {
 }
 
 func printManifest(opts compileOptions) int {
-	exclude := append([]string(nil), opts.exclude...)
-	manifestPath := ""
-	if opts.manifestFile != "" {
-		var err error
-		manifestPath, err = dependency.NormalizeExplicitManifestPath(opts.manifestFile)
+	if opts.explain != "" {
+		deny := append([]string{}, opts.denyFiles...)
+		if opts.manifestFile != "" {
+			deny = append(deny, filepath.Join(opts.projectRoot, opts.manifestFile))
+		}
+		explanation, err := projectarchive.Explain(
+			projectarchive.Options{
+				Root:             opts.projectRoot,
+				Exclude:          opts.exclude,
+				IgnoreFiles:      opts.ignoreFiles,
+				DenyFiles:        deny,
+				RespectGitIgnore: opts.gitIgnore,
+			},
+			opts.explain,
+		)
 		if err != nil {
-			return fail(fmt.Errorf("manifest path: %w", err))
+			return fail(err)
 		}
-		exclude = append(exclude, manifestPath)
+		if opts.jsonOutput {
+			if err := json.NewEncoder(os.Stdout).Encode(explanation); err != nil {
+				return fail(err)
+			}
+		} else {
+			fmt.Printf("%s: %s\n", explanation.Path, explanation.Reason)
+		}
+		return 0
 	}
-	candidates, _, err := projectarchive.Manifest(projectarchive.Options{
-		Root: opts.projectRoot, Exclude: exclude, RespectGitIgnore: opts.gitIgnore, MaxFiles: 20_000, MaxBytes: 2 << 30,
-	})
+	result, err := selectionClient(opts).Selection(opts.entry, opts.engine, nil)
 	if err != nil {
-		return fail(fmt.Errorf("build project manifest: %w", err))
-	}
-	var cached []string
-	explicit := append([]string(nil), opts.includeFiles...)
-	historyAvailable := false
-	if opts.uploadMode != "all" {
-		manifestFiles, manifestErr := dependency.LoadExplicitManifest(opts.projectRoot, manifestPath)
-		if manifestErr != nil {
-			return fail(fmt.Errorf("load explicit manifest: %w", manifestErr))
-		}
-		explicit = append(explicit, manifestFiles...)
-	}
-	if opts.uploadMode == "auto" || opts.uploadMode == "" {
-		cached, historyAvailable, err = dependency.LoadCachedInputs(opts.projectRoot, opts.entry, opts.engine)
-		if err != nil {
-			return fail(fmt.Errorf("load dependency cache: %w", err))
-		}
-	}
-	result, err := dependency.SelectWithOptions(
-		opts.entry,
-		candidates,
-		dependency.SelectionOptions{
-			Mode:             opts.uploadMode,
-			ExplicitFiles:    explicit,
-			CachedFiles:      cached,
-			HistoryAvailable: historyAvailable,
-		},
-	)
-	if err != nil {
-		return fail(fmt.Errorf("select project dependencies: %w", err))
+		return fail(err)
 	}
 	if opts.jsonOutput {
 		view := manifestView{
@@ -867,14 +966,14 @@ func runMeta(args []string, doctor bool) int {
 	if err != nil {
 		return fail(err)
 	}
-	cfg, err := config.Load(cwd)
+	cfg, args, err := config.LoadArgs(cwd, args)
 	if err != nil {
 		return fail(err)
 	}
 	if doctor {
 		reportDoctorProjectCache(cwd, cfg.ProjectRoot, hasJSONFlag(args))
 	}
-	server, token, timeout, insecure, jsonOutput := cfg.Server, cfg.Token, cfg.Timeout, cfg.InsecureSkipVerify, false
+	server, timeout, insecure, jsonOutput := cfg.Server, cfg.Timeout, cfg.InsecureSkipVerify, false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		next := func() (string, error) {
@@ -894,21 +993,6 @@ func runMeta(args []string, doctor bool) int {
 				return fail(e)
 			}
 			server = v
-		case a == "--token" || strings.HasPrefix(a, "--token="):
-			v, e := next()
-			if e != nil {
-				return fail(e)
-			}
-			token = v
-		case a == "--token-file" || strings.HasPrefix(a, "--token-file="):
-			v, e := next()
-			if e != nil {
-				return fail(e)
-			}
-			token, e = config.ReadTokenFile(v)
-			if e != nil {
-				return fail(e)
-			}
 		case a == "--timeout" || strings.HasPrefix(a, "--timeout="):
 			v, e := next()
 			if e != nil {
@@ -926,7 +1010,13 @@ func runMeta(args []string, doctor bool) int {
 			return fail(fmt.Errorf("unknown option %q", a))
 		}
 	}
-	c, err := client.New(server, token, timeout, insecure)
+	if err := cfg.Authenticate(cfg.ProjectRoot); err != nil {
+		return fail(err)
+	}
+	if doctor && !jsonOutput {
+		fmt.Fprintln(os.Stderr, "authentication:", cfg.TokenSource)
+	}
+	c, err := client.New(server, cfg.Token, timeout, insecure)
 	if err != nil {
 		return fail(err)
 	}
@@ -986,7 +1076,15 @@ func runInit(args []string) int {
 	if _, err := os.Stat(path); err == nil {
 		return fail(fmt.Errorf("%s already exists", path))
 	}
-	if err := config.Write(path, config.FileConfig{Server: server, Engine: "xelatex", Timeout: "3m"}); err != nil {
+	if err := config.Write(
+		path,
+		config.FileConfig{
+			Server:    server,
+			Engine:    "xelatex",
+			Timeout:   "3m",
+			Auxiliary: protocol.AuxiliaryOptions{Local: "none", Server: "none"},
+		},
+	); err != nil {
 		return fail(err)
 	}
 	fmt.Println(path)
@@ -1100,14 +1198,6 @@ func parseRemoteCleanArgs(args []string, opts *remoteCleanOptions) error {
 		switch {
 		case a == "--server" || strings.HasPrefix(a, "--server="):
 			opts.server, err = value("--server")
-		case a == "--token" || strings.HasPrefix(a, "--token="):
-			opts.token, err = value("--token")
-		case a == "--token-file" || strings.HasPrefix(a, "--token-file="):
-			var path string
-			path, err = value("--token-file")
-			if err == nil {
-				opts.token, err = config.ReadTokenFile(path)
-			}
 		case a == "--insecure-skip-verify":
 			opts.insecure = true
 		case a == "--timeout" || strings.HasPrefix(a, "--timeout="):
@@ -1165,7 +1255,7 @@ func runRemoteClean(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	cfg, err := config.Load(cwd)
+	cfg, args, err := config.LoadArgs(cwd, args)
 	if err != nil {
 		return fail(err)
 	}
@@ -1208,6 +1298,10 @@ func runRemoteClean(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
+	if err := cfg.Authenticate(opts.projectRoot); err != nil {
+		return fail(err)
+	}
+	opts.token = cfg.Token
 	c, err := client.New(opts.server, opts.token, opts.timeout, opts.insecure)
 	if err != nil {
 		return fail(err)
@@ -1318,6 +1412,8 @@ Usage:
   latexmk init [--server URL]
   latexmk clean [main.tex]
   latexmk cache ignore [--project-root DIR] [--json]
+  latexmk cache clean [--project-root DIR] [--json]
+  latexmk --target NAME|all [options]
   latexmk remote clean --scope results|snapshot|cache|project [--dry-run] [--json]
   latexmk remote clean --plan-id PLAN_ID --yes [--json]
   latexmk jobs list [--limit 50] [--json]
@@ -1334,13 +1430,23 @@ Compile options:
   --server URL                 Remote server URL
   --token TOKEN                Bearer token (prefer LATEXMK_TOKEN)
   --token-file FILE            Read the bearer token from a file
+  --token-mode MODE            auto (default), env, file, or none
+  --env-file FILE              Read dotenv settings (default .env.latexmk)
+  --no-env-file                Disable dotenv loading
   --project-root DIR           Root directory uploaded to the server
   --project-id ID              Override the persisted local project identity
   --root-mode entry|git        Default root when --project-root is absent
-  --upload-mode MODE           auto (default), manifest, or all
-  --server-cache MODE          none (default) or reuse; --force starts clean
-  --manifest FILE              Read exact project-relative files, one per line
-  --include-file FILE          Add one exact project-relative file (repeatable)
+  --upload-mode MODE           auto (default), manifest, all (alias: ignore)
+  --server-cache MODE          none, retain, or reuse; --force starts clean
+  --server-cache-ttl DURATION   Requested auxiliary retention, capped by server limits
+  --local-cache MODE           none, cache, or output (legacy JSON preserves output)
+  --manifest FILE              Read project-relative paths/globs, one per line
+  --include-file PATTERN       Add project-relative paths/globs (repeatable)
+  --unmatched-glob MODE        error (default), warn, or ignore
+  --ignore-file FILE           Additional Git-style ignore file (repeatable)
+  --no-ignore-files            Disable custom ignore files
+  --explain PATH               Explain upload policy without reading excluded contents
+  --target NAME|all            Compile configured build targets and export PDFs
   --gitignore                  Respect Git ignore rules (default)
   --no-gitignore               Include Git-ignored files unless otherwise excluded
   --out-dir DIR                Local root for returned artifacts
@@ -1353,11 +1459,11 @@ Compile options:
   --dry-run                    Print the upload manifest without contacting the server
   --detach                     Return after creating an immutable queued job
   --watch                      Recompile after selected dependency changes
-  --watch-interval 500ms       Poll only selected files at this interval
+  --watch-interval 500ms       Refresh selection and poll selected files
   --watch-debounce 500ms       Wait for rapid edits to settle before compiling
 
 The executable may be symlinked as xelatex, lualatex, or pdflatex.
-Configuration is read from the user config, .latexmk.json, and environment variables.
+Configuration is read from user/project JSON, .env.latexmk, environment and CLI flags.
 
 Remote cleanup previews create a ten-minute local plan. Apply that exact plan
 with --plan-id PLAN_ID --yes. Use --legacy-project-id only for data created by

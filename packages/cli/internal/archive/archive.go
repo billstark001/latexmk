@@ -3,7 +3,6 @@ package archive
 
 import (
 	"archive/tar"
-	"bufio"
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
@@ -18,6 +17,9 @@ import (
 )
 
 type Options struct {
+	IgnoreFiles      []string
+	DenyFiles        []string
+	DeferHash        bool
 	Root             string
 	Exclude          []string
 	RespectGitIgnore bool
@@ -58,14 +60,22 @@ func CreateFiles(dst io.Writer, files []File) error {
 	gz := gzip.NewWriter(dst)
 	tw := tar.NewWriter(gz)
 	for _, file := range files {
-		info, err := os.Stat(file.Source)
+		f, err := OpenFile(file)
 		if err != nil {
+			_ = tw.Close()
+			_ = gz.Close()
+			return err
+		}
+		info, err := f.Stat()
+		if err != nil {
+			_ = f.Close()
 			_ = tw.Close()
 			_ = gz.Close()
 			return err
 		}
 		hdr, err := tar.FileInfoHeader(info, "")
 		if err != nil {
+			_ = f.Close()
 			_ = tw.Close()
 			_ = gz.Close()
 			return err
@@ -73,17 +83,12 @@ func CreateFiles(dst io.Writer, files []File) error {
 		hdr.Name = file.Path
 		hdr.Mode = 0o644
 		if err := tw.WriteHeader(hdr); err != nil {
+			_ = f.Close()
 			_ = tw.Close()
 			_ = gz.Close()
 			return err
 		}
-		f, err := os.Open(file.Source)
-		if err != nil {
-			_ = tw.Close()
-			_ = gz.Close()
-			return err
-		}
-		_, copyErr := io.Copy(tw, f)
+		_, copyErr := io.CopyN(tw, f, info.Size())
 		closeErr := f.Close()
 		if copyErr != nil {
 			_ = tw.Close()
@@ -109,7 +114,7 @@ func CreateFiles(dst io.Writer, files []File) error {
 
 func Manifest(opts Options) ([]File, Stats, error) {
 	stats := Stats{}
-	patterns, err := loadPatterns(opts.Root, opts.Exclude)
+	policy, err := newPolicy(opts)
 	if err != nil {
 		return nil, stats, err
 	}
@@ -130,7 +135,11 @@ func Manifest(opts Options) ([]File, Stats, error) {
 			return nil
 		}
 		rel = filepath.ToSlash(rel)
-		if excluded(rel, d.IsDir(), patterns) {
+		denied, _, policyErr := policy.excluded(rel, d.IsDir())
+		if policyErr != nil {
+			return policyErr
+		}
+		if denied {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -164,12 +173,15 @@ func Manifest(opts Options) ([]File, Stats, error) {
 		if opts.MaxFiles > 0 && stats.Files > opts.MaxFiles {
 			return fmt.Errorf("project contains more than %d files", opts.MaxFiles)
 		}
-		if opts.MaxBytes > 0 && stats.Bytes > opts.MaxBytes {
+		if !opts.DeferHash && opts.MaxBytes > 0 && stats.Bytes > opts.MaxBytes {
 			return fmt.Errorf("project is larger than %d bytes", opts.MaxBytes)
 		}
-		digest, err := fileSHA256(path)
-		if err != nil {
-			return err
+		digest := ""
+		if !opts.DeferHash {
+			digest, err = fileSHA256(File{Path: rel, Source: path})
+			if err != nil {
+				return err
+			}
 		}
 		files = append(files, File{Path: rel, Source: path, SHA256: digest, Size: info.Size()})
 		return nil
@@ -251,62 +263,52 @@ func hasGitMarker(root string) bool {
 	}
 }
 
-func fileSHA256(path string) (string, error) {
-	f, err := os.Open(path)
+func fileSHA256(file File) (string, error) {
+	f, err := OpenFile(file)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
 	hash := sha256.New()
-	if _, err := io.Copy(hash, f); err != nil {
+	if _, err := io.CopyN(hash, f, info.Size()); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-func loadPatterns(root string, defaults []string) ([]string, error) {
-	patterns := append([]string{}, defaults...)
-	f, err := os.Open(filepath.Join(root, ".latexmkignore"))
-	if os.IsNotExist(err) {
-		return patterns, nil
+// HashSelected finalizes only selected members, applying upload size limits afterwards.
+func HashSelected(files []File, maxBytes int64) error {
+	var total int64
+	for i := range files {
+		f, err := OpenFile(files[i])
+		if err != nil {
+			return err
+		}
+		info, err := f.Stat()
+		if err != nil {
+			_ = f.Close()
+			return err
+		}
+		files[i].Size = info.Size()
+		total += info.Size()
+		if maxBytes > 0 && total > maxBytes {
+			_ = f.Close()
+			return fmt.Errorf("selected files exceed %d bytes", maxBytes)
+		}
+		hash := sha256.New()
+		_, copyErr := io.CopyN(hash, f, info.Size())
+		closeErr := f.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		files[i].SHA256 = hex.EncodeToString(hash.Sum(nil))
 	}
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = f.Close() }()
-	s := bufio.NewScanner(f)
-	for s.Scan() {
-		line := strings.TrimSpace(s.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		patterns = append(patterns, filepath.ToSlash(strings.TrimPrefix(line, "./")))
-	}
-	return patterns, s.Err()
-}
-
-func excluded(rel string, isDir bool, patterns []string) bool {
-	for _, raw := range patterns {
-		p := filepath.ToSlash(strings.TrimSpace(raw))
-		p = strings.TrimPrefix(p, "./")
-		p = strings.TrimSuffix(p, "/")
-		if p == "" {
-			continue
-		}
-		if rel == p || strings.HasPrefix(rel, p+"/") {
-			return true
-		}
-		if ok, _ := path.Match(p, rel); ok {
-			return true
-		}
-		if !strings.Contains(p, "/") {
-			parts := strings.Split(rel, "/")
-			for _, part := range parts {
-				if ok, _ := path.Match(p, part); ok {
-					return true
-				}
-			}
-		}
-	}
-	return false
+	return nil
 }

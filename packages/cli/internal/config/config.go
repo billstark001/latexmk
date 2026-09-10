@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,10 +17,28 @@ import (
 
 const FileName = ".latexmk.json"
 const UserFileName = "config.json"
+const EnvFileName = ".env.latexmk"
+const TokenFileName = ".latexmk-token"
 
 const maxTokenFileSize = 64 << 10
 
+type Target struct {
+	Entry        string   `json:"entry"`
+	Engine       string   `json:"engine,omitempty"`
+	OutDir       string   `json:"outDir,omitempty"`
+	PDF          string   `json:"pdf,omitempty"`
+	IncludeFiles []string `json:"includeFiles,omitempty"`
+}
+
 type FileConfig struct {
+	TokenMode     string            `json:"tokenMode,omitempty"`
+	TokenFile     string            `json:"tokenFile,omitempty"`
+	EnvFile       *string           `json:"envFile,omitempty"`
+	IgnoreFiles   []string          `json:"ignoreFiles"`
+	UnmatchedGlob string            `json:"unmatchedGlob,omitempty"`
+	OutDir        string            `json:"outDir,omitempty"`
+	Targets       map[string]Target `json:"targets,omitempty"`
+
 	Auxiliary          protocol.AuxiliaryOptions `json:"auxiliary,omitempty"`
 	Server             string                    `json:"server"`
 	Token              string                    `json:"token,omitempty"`
@@ -37,6 +56,16 @@ type FileConfig struct {
 }
 
 type Resolved struct {
+	TokenMode     string
+	TokenSource   string
+	EnvPath       string
+	IgnoreFiles   []string
+	UnmatchedGlob string
+	OutDir        string
+	Targets       map[string]Target
+	DenyFiles     []string
+	auth          credentials
+
 	Auxiliary          protocol.AuxiliaryOptions
 	Server             string
 	Token              string
@@ -77,6 +106,7 @@ func DefaultExcludes() []string {
 func DefaultDeny() []string {
 	return []string{
 		FileName,
+		EnvFileName, TokenFileName, ".latexmk.env", ".latexmk-manifest", ".latexmk-cache/",
 		".latexmkignore",
 		".latexmk-files",
 		".env",
@@ -90,9 +120,10 @@ func DefaultDeny() []string {
 	}
 }
 
-func Load(start string) (Resolved, error) {
+func load(start string, envOverride *string) (Resolved, error) {
 	respectGitIgnore := true
 	cfg := FileConfig{
+		TokenMode: "auto", UnmatchedGlob: "error",
 		Server:           "http://127.0.0.1:8080",
 		RootMode:         "entry",
 		UploadMode:       "auto",
@@ -101,7 +132,11 @@ func Load(start string) (Resolved, error) {
 		Timeout:          "3m",
 		Exclude:          DefaultExcludes(),
 	}
-	userPath, err := findUserConfig()
+	userDir, err := userConfigDirectory()
+	if err != nil {
+		return Resolved{}, err
+	}
+	userPath, err := findUserConfig(userDir)
 	if err != nil {
 		return Resolved{}, err
 	}
@@ -110,7 +145,7 @@ func Load(start string) (Resolved, error) {
 			return Resolved{}, err
 		}
 	}
-	userToken := cfg.Token
+	userToken, userTokenFile := cfg.Token, cfg.TokenFile
 
 	path, err := findConfig(start)
 	if err != nil {
@@ -121,59 +156,90 @@ func Load(start string) (Resolved, error) {
 			return Resolved{}, err
 		}
 	}
-	if userToken != "" {
-		cfg.Token = userToken
+	projectToken, projectTokenFile := cfg.Token, cfg.TokenFile
+	if userToken != "" || userTokenFile != "" {
+		cfg.Token, cfg.TokenFile = userToken, userTokenFile
 	}
+	envPath, envValues, err := loadEnvironment(start, path, cfg.EnvFile, envOverride)
+	if err != nil {
+		return Resolved{}, err
+	}
+	get := func(name string) string {
+		if value, ok := os.LookupEnv(name); ok {
+			return value
+		}
+		return envValues[name]
+	}
+
 	cfg.Exclude = mergePatterns(cfg.Exclude, DefaultDeny())
 
-	if v := os.Getenv("LATEXMK_SERVER"); v != "" {
+	if v := get("LATEXMK_SERVER"); v != "" {
 		cfg.Server = v
 	}
-	if v := os.Getenv("LATEXMK_TOKEN_FILE"); v != "" {
-		token, err := ReadTokenFile(v)
-		if err != nil {
-			return Resolved{}, fmt.Errorf("LATEXMK_TOKEN_FILE: %w", err)
-		}
-		cfg.Token = token
-	}
-	if v, ok := os.LookupEnv("LATEXMK_TOKEN"); ok && v != "" {
-		cfg.Token = v
-	}
-	if v := os.Getenv("LATEXMK_ENGINE"); v != "" {
+	if v := get("LATEXMK_ENGINE"); v != "" {
 		cfg.Engine = v
 	}
-	if v := os.Getenv("LATEXMK_PROJECT_ID"); v != "" {
+	if v := get("LATEXMK_PROJECT_ID"); v != "" {
 		cfg.ProjectID = v
 	}
-	if v := os.Getenv("LATEXMK_ROOT_MODE"); v != "" {
+	if v := get("LATEXMK_ROOT_MODE"); v != "" {
 		cfg.RootMode = v
 	}
-	if v := os.Getenv("LATEXMK_UPLOAD_MODE"); v != "" {
+	if v := get("LATEXMK_UPLOAD_MODE"); v != "" {
 		cfg.UploadMode = v
 	}
-	if v := os.Getenv("LATEXMK_MANIFEST_FILE"); v != "" {
+	if v := get("LATEXMK_MANIFEST_FILE"); v != "" {
 		cfg.ManifestFile = v
 	}
-	if v := os.Getenv("LATEXMK_RESPECT_GITIGNORE"); v != "" {
+	if v := get("LATEXMK_RESPECT_GITIGNORE"); v != "" {
 		parsed, err := strconv.ParseBool(v)
 		if err != nil {
 			return Resolved{}, fmt.Errorf("invalid LATEXMK_RESPECT_GITIGNORE %q: %w", v, err)
 		}
 		cfg.RespectGitIgnore = &parsed
 	}
-	if v := os.Getenv("LATEXMK_SERVER_CACHE"); v != "" {
+	if v := get("LATEXMK_SERVER_CACHE"); v != "" {
 		cfg.Auxiliary.Server = v
 	}
-	if cfg.Auxiliary.Server != "" && cfg.Auxiliary.Server != "none" && cfg.Auxiliary.Server != "reuse" {
-		return Resolved{}, errors.New("auxiliary.server must be none or reuse")
+	if v := get("LATEXMK_SERVER_CACHE_TTL"); v != "" {
+		cfg.Auxiliary.ServerTTL = v
+	}
+	if cfg.Auxiliary.Server != "" && cfg.Auxiliary.Server != "none" && cfg.Auxiliary.Server != "reuse" &&
+		cfg.Auxiliary.Server != "retain" {
+		return Resolved{}, errors.New("auxiliary.server must be none, retain, or reuse")
 	}
 	if cfg.RootMode != "entry" && cfg.RootMode != "git" {
 		return Resolved{}, fmt.Errorf("invalid rootMode %q; expected entry or git", cfg.RootMode)
+	}
+	if cfg.UploadMode == "ignore" {
+		cfg.UploadMode = "all"
 	}
 	if cfg.UploadMode != "auto" && cfg.UploadMode != "manifest" && cfg.UploadMode != "all" {
 		return Resolved{}, fmt.Errorf("invalid uploadMode %q; expected auto, manifest, or all", cfg.UploadMode)
 	}
 
+	if v := get("LATEXMK_TOKEN_MODE"); v != "" {
+		cfg.TokenMode = v
+	}
+	if v := get("LATEXMK_LOCAL_CACHE"); v != "" {
+		cfg.Auxiliary.Local = v
+	}
+	if v := get("LATEXMK_UNMATCHED_GLOB"); v != "" {
+		cfg.UnmatchedGlob = v
+	}
+	if cfg.UnmatchedGlob != "error" && cfg.UnmatchedGlob != "warn" && cfg.UnmatchedGlob != "ignore" {
+		return Resolved{}, errors.New("unmatchedGlob must be error, warn, or ignore")
+	}
+	if cfg.Auxiliary.Local != "" && cfg.Auxiliary.Local != "none" && cfg.Auxiliary.Local != "cache" &&
+		cfg.Auxiliary.Local != "output" {
+		return Resolved{}, errors.New("auxiliary.local must be none, cache, or output")
+	}
+	if cfg.Auxiliary.ServerTTL != "" {
+		ttl, err := time.ParseDuration(cfg.Auxiliary.ServerTTL)
+		if err != nil || ttl <= 0 {
+			return Resolved{}, errors.New("auxiliary.serverTTL must be a positive duration")
+		}
+	}
 	timeout, err := time.ParseDuration(cfg.Timeout)
 	if err != nil {
 		return Resolved{}, fmt.Errorf("invalid timeout %q: %w", cfg.Timeout, err)
@@ -203,6 +269,33 @@ func Load(start string) (Resolved, error) {
 	}
 	respectGitIgnore = cfg.RespectGitIgnore == nil || *cfg.RespectGitIgnore
 	return Resolved{
+		TokenMode:     cfg.TokenMode,
+		EnvPath:       envPath,
+		IgnoreFiles:   cfg.IgnoreFiles,
+		UnmatchedGlob: cfg.UnmatchedGlob,
+		OutDir:        cfg.OutDir,
+		Targets:       cfg.Targets,
+		DenyFiles: []string{
+			userPath,
+			filepath.Join(userDir, "token"),
+			envPath,
+			cfg.TokenFile,
+			userTokenFile,
+			projectTokenFile,
+			environmentPath(get("LATEXMK_TOKEN_FILE"), envPath, "LATEXMK_TOKEN_FILE"),
+		},
+		auth: credentials{
+			userDefaultFile: filepath.Join(userDir, "token"),
+			userToken:       userToken,
+			userFile:        userTokenFile,
+			projectToken:    projectToken,
+			projectFile:     projectTokenFile,
+			envToken: get(
+				"LATEXMK_TOKEN",
+			),
+			envFile: environmentPath(get("LATEXMK_TOKEN_FILE"), envPath, "LATEXMK_TOKEN_FILE"),
+			start:   start,
+		},
 		Auxiliary:          cfg.Auxiliary,
 		Server:             cfg.Server,
 		Token:              cfg.Token,
@@ -230,10 +323,51 @@ func mergeFile(path string, cfg *FileConfig) error {
 	if err := json.Unmarshal(b, cfg); err != nil {
 		return fmt.Errorf("parse %s: %w", path, err)
 	}
+	// Existing configurations downloaded auxiliaries and retained them in job
+	// results. A local policy opts into the new independent retention semantics.
+	if cfg.Auxiliary.Local == "" {
+		cfg.Auxiliary.Local = "output"
+		if cfg.Auxiliary.Server == "" {
+			cfg.Auxiliary.Server = "retain"
+		}
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(b, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["outDir"]; ok && cfg.OutDir != "" && !filepath.IsAbs(cfg.OutDir) {
+		cfg.OutDir = filepath.Join(filepath.Dir(path), cfg.OutDir)
+	}
+	if _, ok := fields["projectRoot"]; ok && cfg.ProjectRoot != "" && !filepath.IsAbs(cfg.ProjectRoot) {
+		cfg.ProjectRoot = filepath.Join(filepath.Dir(path), cfg.ProjectRoot)
+	}
+	if raw, ok := fields["targets"]; ok {
+		var declared map[string]Target
+		if err := json.Unmarshal(raw, &declared); err != nil {
+			return err
+		}
+		for name := range declared {
+			target := cfg.Targets[name]
+			if target.Entry != "" && !filepath.IsAbs(target.Entry) {
+				target.Entry = filepath.Join(filepath.Dir(path), target.Entry)
+			}
+			if target.OutDir != "" && !filepath.IsAbs(target.OutDir) {
+				target.OutDir = filepath.Join(filepath.Dir(path), target.OutDir)
+			}
+			cfg.Targets[name] = target
+		}
+	}
+	if _, ok := fields["tokenFile"]; ok && cfg.TokenFile != "" && !filepath.IsAbs(cfg.TokenFile) {
+		cfg.TokenFile = filepath.Join(filepath.Dir(path), cfg.TokenFile)
+	}
+	if _, ok := fields["envFile"]; ok && cfg.EnvFile != nil && *cfg.EnvFile != "" && !filepath.IsAbs(*cfg.EnvFile) {
+		value := filepath.Join(filepath.Dir(path), *cfg.EnvFile)
+		cfg.EnvFile = &value
+	}
 	return nil
 }
 
-func findUserConfig() (string, error) {
+func userConfigDirectory() (string, error) {
 	base := os.Getenv("XDG_CONFIG_HOME")
 	if base == "" {
 		var err error
@@ -242,7 +376,11 @@ func findUserConfig() (string, error) {
 			return "", fmt.Errorf("find user config directory: %w", err)
 		}
 	}
-	path := filepath.Join(base, "latexmk", UserFileName)
+	return filepath.Join(base, "latexmk"), nil
+}
+
+func findUserConfig(base string) (string, error) {
+	path := filepath.Join(base, UserFileName)
 	st, err := os.Stat(path)
 	if err == nil {
 		if !st.Mode().IsRegular() {
@@ -269,9 +407,17 @@ func ReadTokenFile(path string) (string, error) {
 	if st.Size() > maxTokenFileSize {
 		return "", fmt.Errorf("token file %s exceeds %d bytes", path, maxTokenFileSize)
 	}
-	b, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("read token file %s: %w", path, err)
+	}
+	defer func() { _ = f.Close() }()
+	b, err := io.ReadAll(io.LimitReader(f, maxTokenFileSize+1))
+	if err != nil {
+		return "", fmt.Errorf("read token file %s: %w", path, err)
+	}
+	if len(b) > maxTokenFileSize {
+		return "", fmt.Errorf("token file %s exceeds %d bytes", path, maxTokenFileSize)
 	}
 	token := strings.TrimSpace(string(b))
 	if token == "" {
@@ -319,10 +465,6 @@ func Write(path string, cfg FileConfig) error {
 	if cfg.Timeout == "" {
 		cfg.Timeout = "3m"
 	}
-	if len(cfg.Exclude) == 0 {
-		cfg.Exclude = DefaultExcludes()
-	}
-	cfg.Exclude = mergePatterns(cfg.Exclude, DefaultDeny())
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
