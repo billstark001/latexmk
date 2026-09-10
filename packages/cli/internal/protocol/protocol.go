@@ -75,6 +75,21 @@ type Job struct {
 	Error      string         `json:"error,omitempty"`
 }
 
+type CleanupReport struct {
+	ProjectID       string   `json:"projectId"`
+	Scope           string   `json:"scope"`
+	DryRun          bool     `json:"dryRun"`
+	PlanDigest      string   `json:"planDigest,omitempty"`
+	SnapshotPresent bool     `json:"snapshotPresent"`
+	SnapshotFiles   int      `json:"snapshotFiles"`
+	SnapshotBytes   int64    `json:"snapshotBytes"`
+	Jobs            int      `json:"jobs"`
+	Results         int      `json:"results"`
+	ResultBytes     int64    `json:"resultBytes"`
+	ReclaimedBytes  int64    `json:"reclaimedBytes"`
+	ActiveJobs      []string `json:"activeJobs,omitempty"`
+}
+
 type Metadata struct {
 	ProtocolVersion int               `json:"protocolVersion"`
 	Service         string            `json:"service"`
@@ -111,4 +126,5 @@ type Capabilities struct {
 	ResultRetentionMS   int64    `json:"resultRetentionMs"`
 	SnapshotRetentionMS int64    `json:"snapshotRetentionMs"`
 	BlobRetentionMS     int64    `json:"blobRetentionMs"`
+	RemoteCleanup       bool     `json:"remoteCleanup"`
 }

@@ -140,6 +140,38 @@ func (c *Client) Health(ctx context.Context) error {
 	return nil
 }
 
+func (c *Client) CleanupProject(ctx context.Context, projectID, scope string) (protocol.CleanupReport, error) {
+	return c.cleanupProject(ctx, projectID, scope, http.MethodGet, "")
+}
+
+// CleanupProjectWithPlan applies a server-issued preview only while its digest
+// still describes the exact same targets.
+func (c *Client) CleanupProjectWithPlan(ctx context.Context, projectID, scope, expectedDigest string) (protocol.CleanupReport, error) {
+	decoded, err := hex.DecodeString(expectedDigest)
+	if err != nil || len(decoded) != sha256.Size {
+		return protocol.CleanupReport{}, errors.New("cleanup plan digest must be a 64-character SHA-256 digest")
+	}
+	return c.cleanupProject(ctx, projectID, scope, http.MethodDelete, expectedDigest)
+}
+
+func (c *Client) cleanupProject(ctx context.Context, projectID, scope, method, expectedDigest string) (protocol.CleanupReport, error) {
+	var report protocol.CleanupReport
+	if !validProjectID(projectID) {
+		return report, errors.New("project ID is invalid")
+	}
+	if scope != "results" && scope != "snapshot" && scope != "project" {
+		return report, errors.New("cleanup scope must be results, snapshot, or project")
+	}
+	path := "/v1/projects/" + url.PathEscape(projectID) + "/cleanup?scope=" + url.QueryEscape(scope)
+	if expectedDigest != "" {
+		path += "&expectedDigest=" + url.QueryEscape(expectedDigest)
+	}
+	if err := c.jsonRequest(ctx, method, path, nil, &report); err != nil {
+		return report, err
+	}
+	return report, nil
+}
+
 // ListJobs returns jobs in a stable newest-first order. The server accepts
 // limits from 1 through 200.
 func (c *Client) ListJobs(ctx context.Context, limit int) ([]protocol.Job, error) {
