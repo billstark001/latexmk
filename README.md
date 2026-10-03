@@ -80,6 +80,10 @@ For a strict upload list, existing JSON can contain glob patterns directly:
 No separate manifest or ignore file is required. Use `latexmk files` to preview
 the exact selected paths and hashes before compiling.
 
+For a project with one configured build target, run `latexmk` directly. If it
+has several targets, set `defaultTarget` in `.latexmk.json` or pass
+`--target NAME`; see [build targets](docs/CONFIGURATION.md#build-targets-and-output).
+
 ## Documentation
 
 | Topic                                                      | Guide                                       |

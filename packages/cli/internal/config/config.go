@@ -39,6 +39,7 @@ type FileConfig struct {
 	UnmatchedGlob string            `json:"unmatchedGlob,omitempty"`
 	OutDir        string            `json:"outDir,omitempty"`
 	Targets       map[string]Target `json:"targets,omitempty"`
+	DefaultTarget string            `json:"defaultTarget,omitempty"`
 
 	Auxiliary          protocol.AuxiliaryOptions `json:"auxiliary,omitempty"`
 	Server             ServerSources             `json:"server"`
@@ -64,6 +65,7 @@ type Resolved struct {
 	UnmatchedGlob string
 	OutDir        string
 	Targets       map[string]Target
+	DefaultTarget string
 	DenyFiles     []string
 	auth          credentials
 
@@ -283,6 +285,7 @@ func load(start string, envOverride *string) (Resolved, error) {
 		UnmatchedGlob: cfg.UnmatchedGlob,
 		OutDir:        cfg.OutDir,
 		Targets:       cfg.Targets,
+		DefaultTarget: cfg.DefaultTarget,
 		DenyFiles: []string{
 			userPath,
 			filepath.Join(userDir, "token"),

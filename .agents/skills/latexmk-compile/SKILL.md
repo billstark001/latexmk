@@ -51,6 +51,8 @@ switch to `all` or disable Git filtering to make a compile succeed.
 "$LATEXMK_CLI" --engine xelatex main.tex
 # Or use the project's configured target and export destination:
 "$LATEXMK_CLI" --target theory
+# With a sole target or configured defaultTarget, the entry can be omitted:
+"$LATEXMK_CLI"
 ```
 
 Preserve configured engine, output and auxiliary policies unless the user asks

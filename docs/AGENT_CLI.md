@@ -79,6 +79,10 @@ Stable error codes currently include:
 latexmk compile --detach --json main.tex
 ```
 
+The entry may be omitted when `defaultTarget` selects a configured target or
+exactly one target exists. An ambiguous target configuration returns an argument
+error before upload.
+
 The command applies the normal project-root, Git-ignore, denylist, dependency,
 manifest, TLS, and token policies. It uploads the selected files, commits one
 immutable snapshot, and returns after the queued job is created. It does not

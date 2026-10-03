@@ -27,9 +27,44 @@ func hasOption(args []string, flag string) bool {
 	return false
 }
 
+func implicitTarget(cfg config.Resolved) (string, error) {
+	if cfg.DefaultTarget != "" {
+		if cfg.DefaultTarget == "all" {
+			return "", errors.New("defaultTarget cannot be the reserved target name \"all\"")
+		}
+		if _, ok := cfg.Targets[cfg.DefaultTarget]; !ok {
+			return "", fmt.Errorf("defaultTarget %q is not a configured target", cfg.DefaultTarget)
+		}
+		return cfg.DefaultTarget, nil
+	}
+	if len(cfg.Targets) == 1 {
+		for name := range cfg.Targets {
+			if name == "all" {
+				return "", errors.New("target name \"all\" is reserved")
+			}
+			return name, nil
+		}
+	}
+	if len(cfg.Targets) > 1 {
+		names := make([]string, 0, len(cfg.Targets))
+		for name := range cfg.Targets {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return "", fmt.Errorf(
+			"multiple build targets configured (%s); use --target NAME or set defaultTarget",
+			strings.Join(names, ", "),
+		)
+	}
+	return "", nil
+}
+
 func runAllTargets(args []string, cfg config.Resolved) int {
 	if hasOption(args, "--watch") || hasOption(args, "--detach") {
 		return fail(errors.New("--target all does not support watch or detach"))
+	}
+	if _, ok := cfg.Targets["all"]; ok {
+		return fail(errors.New("target name \"all\" is reserved"))
 	}
 	var names []string
 	for name := range cfg.Targets {

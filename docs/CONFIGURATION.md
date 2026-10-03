@@ -213,16 +213,24 @@ that compile several entries or export a renamed PDF:
   "targets": {
     "ehk": { "entry": "ehk.tex", "pdf": "output/pdf/ehk.pdf" },
     "theory": { "entry": "theory.tex", "pdf": "output/pdf/theory.pdf" }
-  }
+  },
+  "defaultTarget": "ehk"
 }
 ```
 
 ```sh
+latexmk
 latexmk --target ehk
 latexmk --target all
 latexmk files --target all
 latexmk watch --target theory
 ```
+
+With no entry or `--target`, `latexmk` uses `defaultTarget` when set, or the
+only configured target when there is exactly one. With multiple targets and no
+default, it reports the available names and requires `--target` or
+`defaultTarget`. An explicit entry or `--target` always takes precedence.
+The name `all` is reserved for compiling every target.
 
 Targets run in name order for `all`, continue after individual failures, and
 return failure if any target fails. `all` rejects watch/detach. Entries are

@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	version   = "0.3.2"
+	version   = "0.3.3"
 	commit    = "unknown"
 	buildDate = "unknown"
 )
@@ -180,6 +180,15 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		fmt.Fprintln(os.Stderr, "latexmk:", err)
 		fmt.Fprintln(os.Stderr, "run 'latexmk help' for usage")
 		return 2
+	}
+	if opts.target == "" && opts.entry == "" {
+		opts.target, err = implicitTarget(cfg)
+		if err != nil {
+			if opts.detach {
+				return failAgentArguments("compile.start", opts.jsonOutput, err)
+			}
+			return fail(err)
+		}
 	}
 	if opts.target != "" {
 		if opts.target == "all" {
@@ -631,6 +640,9 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 			v, err := value("--target")
 			if err != nil {
 				return err
+			}
+			if v == "" {
+				return errors.New("--target requires a nonempty name")
 			}
 			opts.target = v
 		case a == "--project-root" || strings.HasPrefix(a, "--project-root="):
@@ -1404,9 +1416,9 @@ func usage() {
 	fmt.Print(`latexmk - remote, PaaS-hosted LaTeX compiler
 
 Usage:
-  latexmk compile [options] <main.tex>
-  latexmk watch [options] <main.tex>
-  latexmk [latex-compatible-options] <main.tex>
+  latexmk compile [options] [main.tex]
+  latexmk watch [options] [main.tex]
+  latexmk [latex-compatible-options] [main.tex]
   latexmk meta [--json]
   latexmk doctor
   latexmk init [--server URL]
@@ -1423,7 +1435,7 @@ Usage:
   latexmk diagnostics JOB_ID [--json]
   latexmk artifacts list JOB_ID [--json]
   latexmk artifacts get JOB_ID ARTIFACT_ID [--out-dir DIR] [--json]
-  latexmk files [options] <main.tex>
+  latexmk files [options] [main.tex]
   latexmk version
 
 Compile options:
@@ -1464,6 +1476,7 @@ Compile options:
 
 The executable may be symlinked as xelatex, lualatex, or pdflatex.
 Configuration is read from user/project JSON, .env.latexmk, environment and CLI flags.
+Without an entry or --target, the configured defaultTarget or sole target is used.
 
 Remote cleanup previews create a ten-minute local plan. Apply that exact plan
 with --plan-id PLAN_ID --yes. Use --legacy-project-id only for data created by

@@ -107,7 +107,7 @@ func New(baseURL, token string, timeout time.Duration, insecure bool) (*Client, 
 		BaseURL:          baseURL,
 		Token:            token,
 		HTTP:             &http.Client{Timeout: timeout, Transport: transport},
-		UserAgent:        "latexmk-cli/0.3.2",
+		UserAgent:        "latexmk-cli/0.3.3",
 		RespectGitIgnore: true,
 	}, nil
 }

@@ -43,6 +43,25 @@ numbers.
   its first commit's date. These historical version entries do not assert that
   an untagged version was published.
 
+## @latexmk/cli [0.3.3] - 2026-10-03
+
+### Added
+
+- Allow `latexmk`, `latexmk compile`, `latexmk watch`, and `latexmk files` to use
+  the sole configured build target when no entry or `--target` is given.
+- Add `defaultTarget` to select the default when multiple targets are configured.
+  If none is set, list the available targets and require an explicit selection.
+
+### Fixed
+
+- Reject a configured target named `all`, which conflicts with `--target all`,
+  and reject an empty `--target` value instead of selecting the implicit target.
+
+### Changed
+
+- Bump only `@latexmk/cli`, its default executable version, and its HTTP
+  user-agent to `0.3.3`; other workspace package versions are unchanged.
+
 ## @latexmk/cli [0.3.2] - 2026-09-11
 
 ### Added

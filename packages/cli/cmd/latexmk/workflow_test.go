@@ -3,13 +3,109 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
 )
+
+func TestImplicitTargetSelection(t *testing.T) {
+	tests := []struct {
+		name, config, args, entry, errorText string
+	}{
+		{"sole target", `{"targets":{"paper":{"entry":"paper.tex"}}}`, "", "paper.tex", ""},
+		{
+			"configured default",
+			`{"defaultTarget":"b","targets":{"a":{"entry":"a.tex"},"b":{"entry":"b.tex"}}}`,
+			"",
+			"b.tex",
+			"",
+		},
+		{
+			"ambiguous",
+			`{"targets":{"b":{"entry":"b.tex"},"a":{"entry":"a.tex"}}}`,
+			"",
+			"",
+			"multiple build targets configured (a, b)",
+		},
+		{
+			"missing default",
+			`{"defaultTarget":"other","targets":{"paper":{"entry":"paper.tex"}}}`,
+			"",
+			"",
+			`defaultTarget "other" is not a configured target`,
+		},
+		{
+			"reserved default",
+			`{"defaultTarget":"all","targets":{"paper":{"entry":"paper.tex"}}}`,
+			"",
+			"",
+			`defaultTarget cannot be the reserved target name "all"`,
+		},
+		{
+			"empty explicit target",
+			`{"targets":{"paper":{"entry":"paper.tex"}}}`,
+			"--target=",
+			"",
+			"--target requires a nonempty name",
+		},
+		{
+			"reserved target",
+			`{"targets":{"all":{"entry":"paper.tex"}}}`,
+			"--target all",
+			"",
+			`target name "all" is reserved`,
+		},
+		{
+			"explicit target",
+			`{"defaultTarget":"b","targets":{"a":{"entry":"a.tex"},"b":{"entry":"b.tex"}}}`,
+			"--target a",
+			"a.tex",
+			"",
+		},
+		{"explicit entry", `{"defaultTarget":"other","targets":{"paper":{"entry":"paper.tex"}}}`, "a.tex", "a.tex", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			t.Chdir(root)
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			for name, data := range map[string]string{
+				".latexmk.json": tc.config,
+				"a.tex":         "a", "b.tex": "b", "paper.tex": "paper",
+			} {
+				if err := os.WriteFile(filepath.Join(root, name), []byte(data), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			args := []string{"latexmk", "files", "--json"}
+			if tc.args != "" {
+				args = append(args, strings.Fields(tc.args)...)
+			}
+			status, stdout, stderr := captureCommandOutput(t, func() int { return run(args) })
+			if tc.errorText != "" {
+				if status == 0 || !strings.Contains(stderr, tc.errorText) {
+					t.Fatalf("status %d, stderr %q; want %q", status, stderr, tc.errorText)
+				}
+				return
+			}
+			if status != 0 {
+				t.Fatalf("status %d, stderr %q", status, stderr)
+			}
+			var view manifestView
+			if err := json.Unmarshal([]byte(stdout), &view); err != nil {
+				t.Fatal(err)
+			}
+			if view.Entry != tc.entry {
+				t.Fatalf("entry = %q, want %q", view.Entry, tc.entry)
+			}
+		})
+	}
+}
 
 func TestTargetsPreviewPreservesFlagsAndNeedsNoCredentials(t *testing.T) {
 	root := t.TempDir()

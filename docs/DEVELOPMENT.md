@@ -32,7 +32,7 @@ the checks above.
 ## CLI releases
 
 The [CLI release workflow](../.github/workflows/cli-release.yml) runs on `v*` tag
-pushes. Use a version tag such as `v0.3.1` on a tested commit; tags containing a
+pushes. Use a version tag such as `v0.3.3` on a tested commit; tags containing a
 hyphen are published as prereleases and are not selected by the installer's
 default `latest` mode. Update package versions as part of preparing a release.
 
