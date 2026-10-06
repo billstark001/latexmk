@@ -160,7 +160,7 @@ func (c *Client) StreamSessionEvents(
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
 				return fmt.Errorf("invalid session event: %w", err)
 			}
-			if event.Sequence > after {
+			if event.Type == "resync" || event.Sequence > after {
 				after = event.Sequence
 				receive(event)
 			}

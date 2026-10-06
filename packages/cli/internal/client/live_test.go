@@ -88,6 +88,7 @@ func TestLivePublicationKeepsLastGoodAndRejectsOlderOrTamperedBundle(t *testing.
 		RequestID:       "job_2",
 		SessionID:       "ses_1",
 		Revision:        2,
+		SourceRoot:      "/work/project",
 		Success:         true,
 		Artifacts: []protocol.Artifact{
 			{Path: "main.pdf", Size: int64(len(pdf)), SHA256: hex.EncodeToString(digest[:])},
@@ -133,6 +134,13 @@ func TestLivePublicationKeepsLastGoodAndRejectsOlderOrTamperedBundle(t *testing.
 	good, err := os.ReadFile(current)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var publication LivePublication
+	if err := json.Unmarshal(good, &publication); err != nil {
+		t.Fatal(err)
+	}
+	if publication.SourceRoot != c.ProjectRoot || publication.RemoteSourceRoot != result.SourceRoot {
+		t.Fatalf("source mapping lost in publication: %+v", publication)
 	}
 	result.RequestID, result.Revision, result.Success = "job_3", 3, false
 	if root, err := download(); err != nil || root != "" {
@@ -187,5 +195,30 @@ func TestSyncTeXRebaseConfinesLocalSourceMapping(t *testing.T) {
 			data,
 		) != "Input:1:/local/project/main.tex\nInput:2:/local/project/chapters/a.tex\nInput:3:../../secret\nInput:4:/texmf/article.cls\n" {
 		t.Fatalf("mapping=%s %v", data, err)
+	}
+}
+
+func TestSessionResyncCanResetAFutureCursor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(
+			w,
+			"data: {\"sequence\":2,\"type\":\"resync\"}\n\ndata: {\"sequence\":3,\"type\":\"submitted\"}\n\n",
+		)
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "", time.Second, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sequences []uint64
+	err = c.StreamSessionEvents(
+		context.Background(),
+		"ses_1",
+		100,
+		func(e protocol.SessionEvent) { sequences = append(sequences, e.Sequence) },
+	)
+	if !errors.Is(err, io.EOF) || !reflect.DeepEqual(sequences, []uint64{2, 3}) {
+		t.Fatalf("resync=%v %v", sequences, err)
 	}
 }

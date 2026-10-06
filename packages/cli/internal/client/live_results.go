@@ -98,12 +98,14 @@ func (c *Client) DownloadLiveResult(
 		}
 	}
 	manifest := LivePublication{
-		SessionID:  job.SessionID,
-		Revision:   job.Revision,
-		JobID:      job.ID,
-		SnapshotID: job.SnapshotID,
-		Directory:  filepath.Base(generation),
-		Artifacts:  localArtifacts,
+		SessionID:        job.SessionID,
+		Revision:         job.Revision,
+		JobID:            job.ID,
+		SourceRoot:       c.ProjectRoot,
+		RemoteSourceRoot: out.Result.SourceRoot,
+		SnapshotID:       job.SnapshotID,
+		Directory:        filepath.Base(generation),
+		Artifacts:        localArtifacts,
 	}
 	raw, err := json.Marshal(manifest)
 	if err != nil {
