@@ -15,6 +15,14 @@ import (
 )
 
 type Config struct {
+	MaxRealtimeSessions  int
+	RealtimeSessionTTL   time.Duration
+	RunnerImage          string
+	RunnerMemoryBytes    int64
+	RunnerWorkspaceBytes int64
+	RunnerPIDs           int
+	RunnerCPUs           int
+
 	CompileCacheRetention time.Duration
 	MaxCompileCacheBytes  int64
 	CompileCacheEpoch     string
@@ -128,12 +136,38 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 	}
+	maxSessions, err := envInt("LATEXMK_MAX_REALTIME_SESSIONS", 16)
+	if err != nil {
+		return Config{}, err
+	}
+	sessionTTL, err := envDuration("LATEXMK_REALTIME_SESSION_TTL", 10*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	runnerMemory, err := envBytes("LATEXMK_RUNNER_MEMORY_BYTES", 1<<30)
+	if err != nil {
+		return Config{}, err
+	}
+	runnerWorkspace, err := envBytes("LATEXMK_RUNNER_WORKSPACE_BYTES", 512<<20)
+	if err != nil {
+		return Config{}, err
+	}
+	runnerPIDs, err := envInt("LATEXMK_RUNNER_PIDS", 128)
+	if err != nil {
+		return Config{}, err
+	}
+	runnerCPUs, err := envInt("LATEXMK_RUNNER_CPUS", 2)
+	if err != nil {
+		return Config{}, err
+	}
 	apiToken, err := loadAPIToken()
 	if err != nil {
 		return Config{}, err
 	}
 
 	cfg := Config{
+		MaxRealtimeSessions: maxSessions, RealtimeSessionTTL: sessionTTL, RunnerImage: strings.TrimSpace(os.Getenv("LATEXMK_RUNNER_IMAGE")),
+		RunnerMemoryBytes: runnerMemory, RunnerWorkspaceBytes: runnerWorkspace, RunnerPIDs: runnerPIDs, RunnerCPUs: runnerCPUs,
 		CompileCacheRetention: cacheRetention,
 		MaxCompileCacheBytes:  cacheBytes,
 		CompileCacheEpoch:     os.Getenv("LATEXMK_COMPILE_CACHE_EPOCH"),
@@ -168,6 +202,12 @@ func Load() (Config, error) {
 	}
 	if v := os.Getenv("LATEXMK_ADDR"); v != "" {
 		cfg.Addr = v
+	}
+	if cfg.MaxRealtimeSessions <= 0 || cfg.RealtimeSessionTTL <= 0 || cfg.RunnerPIDs <= 0 || cfg.RunnerCPUs <= 0 {
+		return Config{}, fmt.Errorf("realtime session and runner limits must be positive")
+	}
+	if cfg.RunnerImage != "" && !validRunnerImage(cfg.RunnerImage) {
+		return Config{}, fmt.Errorf("LATEXMK_RUNNER_IMAGE must be an immutable sha256 image reference")
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -389,4 +429,22 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func validRunnerImage(value string) bool {
+	parts := strings.Split(value, "@sha256:")
+	if len(parts) != 2 || parts[0] == "" || len(parts[1]) != 64 {
+		return false
+	}
+	for _, c := range parts[0] {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("._/:-", c)) {
+			return false
+		}
+	}
+	for _, c := range parts[1] {
+		if !(c >= 'a' && c <= 'f' || c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return true
 }

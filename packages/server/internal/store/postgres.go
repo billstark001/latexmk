@@ -77,6 +77,9 @@ type ProjectSnapshot struct {
 // CompileJob stores the immutable source manifest required for an exact retry.
 // Source bytes, logs, and compiled artifacts remain on the state volume.
 type CompileJob struct {
+	SessionID string `gorm:"index;size:40"`
+	Revision  uint64
+
 	ID               string     `gorm:"primaryKey;size:40"`
 	OwnerID          string     `gorm:"not null;index"`
 	ProjectID        string     `gorm:"not null;index;size:128"`

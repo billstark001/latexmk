@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,6 +50,8 @@ type Manager struct {
 	jobs        map[string]record
 	queue       chan string
 	workers     sync.WaitGroup
+	sessions    map[string]*liveSession
+	active      map[string]context.CancelFunc
 }
 
 func New(
@@ -64,11 +67,13 @@ func New(
 		// Cancellation is cooperative: a cancelled identifier can still be in
 		// the channel until a worker observes it. Extra channel room prevents a
 		// burst of cancellations from blocking an otherwise valid replacement.
+		sessions: make(map[string]*liveSession), active: make(map[string]context.CancelFunc),
 		jobs: make(map[string]record), queue: make(chan string, cfg.MaxQueuedJobs*2),
 	}
 }
 
 func (m *Manager) Start(ctx context.Context) {
+	go m.maintainSessions(ctx)
 	recoverIDs := make([]string, 0)
 	if m.db != nil {
 		pending, err := m.db.ListPendingJobs(ctx)
@@ -76,6 +81,11 @@ func (m *Manager) Start(ctx context.Context) {
 			m.logger.Error("could not recover queued jobs", "error", err)
 		} else {
 			for _, job := range pending {
+				if job.SessionID != "" {
+					now := time.Now().UTC()
+					_ = m.db.UpdateJob(ctx, job.ID, map[string]any{"status": "cancelled", "error": "session ended when the server restarted; submit a new session", "finished_at": &now})
+					continue
+				}
 				rec, decodeErr := recordFromRow(job)
 				if decodeErr != nil {
 					now := time.Now().UTC()
@@ -286,6 +296,8 @@ func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]api.Jo
 }
 
 func (m *Manager) Cancel(ctx context.Context, ownerID, id string) (api.Job, error) {
+	m.admissionMu.Lock()
+	defer m.admissionMu.Unlock()
 	rec, err := m.load(ctx, id)
 	if err != nil {
 		return api.Job{}, err
@@ -293,11 +305,25 @@ func (m *Manager) Cancel(ctx context.Context, ownerID, id string) (api.Job, erro
 	if rec.OwnerID != ownerID {
 		return api.Job{}, errors.New("job not found")
 	}
-	if rec.Job.Status != "queued" {
-		return api.Job{}, errors.New("only queued jobs can be cancelled")
-	}
-	if err := m.cancel(ctx, id, "cancelled by user"); err != nil {
-		return api.Job{}, err
+	if rec.Job.Status == "queued" {
+		if err := m.cancel(ctx, id, "cancelled by user"); err != nil {
+			return api.Job{}, err
+		}
+	} else if rec.Job.Status == "running" {
+		cancel := m.active[id]
+		if cancel == nil {
+			return api.Job{}, errors.New("job is not running on this instance")
+		}
+		now := time.Now().UTC()
+		rec.Job.Status, rec.Job.Error, rec.Job.FinishedAt = "cancelled", "cancelled by user", &now
+		if changed, err := m.transition(ctx, rec, "running"); err != nil {
+			return api.Job{}, err
+		} else if !changed {
+			return api.Job{}, errors.New("job already finished")
+		}
+		cancel()
+	} else {
+		return api.Job{}, errors.New("only queued or running jobs can be cancelled")
 	}
 	return m.Get(ctx, ownerID, id)
 }
@@ -354,6 +380,11 @@ func (m *Manager) cleanupProject(
 	}
 	m.admissionMu.Lock()
 	defer m.admissionMu.Unlock()
+	report.ActiveSessions = m.sessionProjectIDsLocked(ownerID, projectID)
+	sort.Strings(report.ActiveSessions)
+	if len(report.ActiveSessions) > 0 && !dryRun {
+		return report, errors.New("project has live sessions; close them before cleanup")
+	}
 	records, err := m.projectRecords(ctx, ownerID, projectID)
 	if err != nil {
 		return report, err
@@ -541,7 +572,12 @@ func (m *Manager) worker(ctx context.Context, worker int) {
 		case <-ctx.Done():
 			return
 		case id := <-m.queue:
-			m.run(ctx, worker, id)
+			if strings.HasPrefix(id, "ses_") {
+				id = m.takeSession(id)
+			}
+			if id != "" {
+				m.run(ctx, worker, id)
+			}
 		}
 	}
 }
@@ -555,12 +591,25 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 		}
 		return
 	}
+	defer m.finishSession(context.WithoutCancel(ctx), rec)
 	if rec.Job.Status != "queued" {
 		return
 	}
+	if err := m.validateSessionJob(rec); err != nil {
+		_ = m.cancel(ctx, id, err.Error())
+		return
+	}
+	jobCtx, cancelJob := context.WithCancel(ctx)
+	defer cancelJob()
+	m.admissionMu.Lock()
 	now := time.Now().UTC()
 	rec.Job.Status, rec.Job.StartedAt = "running", &now
 	changed, err := m.transition(ctx, rec, "queued")
+	if changed && err == nil {
+		m.active[id] = cancelJob
+	}
+	m.admissionMu.Unlock()
+	defer func() { m.admissionMu.Lock(); delete(m.active, id); m.admissionMu.Unlock() }()
 	if err != nil {
 		m.logger.Error("mark job running", "job_id", id, "error", err)
 		m.requeue(ctx, id)
@@ -596,7 +645,7 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 		}
 		cacheInfo = &info
 	}
-	compileCtx, cancelCompile := context.WithTimeout(ctx, m.cfg.CompileTimeout)
+	compileCtx, cancelCompile := context.WithTimeout(jobCtx, m.cfg.CompileTimeout)
 	defer cancelCompile()
 	compileStarted := time.Now()
 	output := m.runner.Run(compileCtx, workspace, rec.Request, rec.Job.ID)
@@ -616,6 +665,7 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 		}
 		output = m.runner.Run(compileCtx, workspace, rec.Request, rec.Job.ID)
 	}
+	output.Result.SessionID, output.Result.Revision = rec.Job.SessionID, rec.Job.Revision
 	output.Result.DurationMS = time.Since(compileStarted).Milliseconds()
 	output.Result.CompileCache = cacheInfo
 	output.Result.ServerVersion = m.meta.Version
@@ -685,6 +735,9 @@ func (m *Manager) finish(
 		return
 	}
 	if !changed {
+		if current, getErr := m.Get(persistCtx, rec.OwnerID, rec.Job.ID); getErr == nil && current.Status == "cancelled" {
+			m.projects.ReleaseSnapshot(rec.Snapshot.ID)
+		}
 		m.logger.Warn("compile job state changed before finish", "job_id", rec.Job.ID)
 		return
 	}
@@ -881,6 +934,7 @@ func (m *Manager) save(ctx context.Context, rec record) error {
 	return m.db.CreateJob(
 		ctx,
 		store.CompileJob{
+			SessionID: rec.Job.SessionID, Revision: rec.Job.Revision,
 			ID:               rec.Job.ID,
 			OwnerID:          rec.OwnerID,
 			ProjectID:        rec.Job.ProjectID,
@@ -910,6 +964,7 @@ func recordFromRow(row store.CompileJob) (record, error) {
 		return record{}, fmt.Errorf("decode queued job request: %w", err)
 	}
 	job := api.Job{
+		SessionID: row.SessionID, Revision: row.Revision,
 		ID:         row.ID,
 		ProjectID:  row.ProjectID,
 		Status:     row.Status,

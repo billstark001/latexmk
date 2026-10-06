@@ -49,6 +49,9 @@ type Artifact struct {
 }
 
 type CompileResult struct {
+	SessionID          string        `json:"sessionId,omitempty"`
+	Revision           uint64        `json:"revision,omitempty"`
+	WorkspaceReuse     bool          `json:"workspaceReuse,omitempty"`
 	AuxiliaryExpiresAt *time.Time    `json:"auxiliaryExpiresAt,omitempty"`
 	CompileCache       *CompileCache `json:"compileCache,omitempty"`
 	ProtocolVersion    int           `json:"protocolVersion"`
@@ -87,7 +90,43 @@ type UploadPlan struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
+type SessionRequest struct {
+	ProjectID string         `json:"projectId"`
+	Request   CompileRequest `json:"request"`
+	Workspace string         `json:"workspace"`
+}
+
+type RevisionRequest struct {
+	UploadID       string `json:"uploadId"`
+	BaseRevision   uint64 `json:"baseRevision"`
+	IdempotencyKey string `json:"idempotencyKey"`
+}
+
+// Session is an ephemeral, owner-scoped scheduling lease. Jobs and snapshots remain immutable.
+type Session struct {
+	ID                  string    `json:"id"`
+	ProjectID           string    `json:"projectId"`
+	Workspace           string    `json:"workspace"`
+	Revision            uint64    `json:"revision"`
+	LatestJobID         string    `json:"latestJobId,omitempty"`
+	RunningJobID        string    `json:"runningJobId,omitempty"`
+	PendingJobID        string    `json:"pendingJobId,omitempty"`
+	LastSuccessfulJobID string    `json:"lastSuccessfulJobId,omitempty"`
+	EventSequence       uint64    `json:"eventSequence"`
+	ExpiresAt           time.Time `json:"expiresAt"`
+}
+
+type SessionEvent struct {
+	Sequence uint64 `json:"sequence"`
+	Type     string `json:"type"`
+	Revision uint64 `json:"revision"`
+	JobID    string `json:"jobId,omitempty"`
+	Status   string `json:"status,omitempty"`
+}
+
 type Job struct {
+	SessionID  string         `json:"sessionId,omitempty"`
+	Revision   uint64         `json:"revision,omitempty"`
 	ID         string         `json:"id"`
 	ProjectID  string         `json:"projectId"`
 	SnapshotID string         `json:"snapshotId,omitempty"`
@@ -100,6 +139,7 @@ type Job struct {
 }
 
 type CleanupReport struct {
+	ActiveSessions     []string `json:"activeSessions,omitempty"`
 	CompileCaches      int      `json:"compileCaches,omitempty"`
 	CompileCacheBytes  int64    `json:"compileCacheBytes,omitempty"`
 	CompileCacheDigest string   `json:"compileCacheDigest,omitempty"`
@@ -133,6 +173,10 @@ type Metadata struct {
 }
 
 type Capabilities struct {
+	RealtimeSessions        bool     `json:"realtimeSessions"`
+	IsolatedWorkspaces      bool     `json:"isolatedWorkspaces"`
+	MaxRealtimeSessions     int      `json:"maxRealtimeSessions"`
+	SessionTTLMS            int64    `json:"sessionTtlMs"`
 	CompileCache            bool     `json:"compileCache"`
 	AuxiliaryRetention      bool     `json:"auxiliaryRetention"`
 	CompileCacheRetentionMS int64    `json:"compileCacheRetentionMs"`
