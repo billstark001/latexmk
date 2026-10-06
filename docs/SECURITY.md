@@ -130,7 +130,10 @@ Reusable realtime sessions require the opt-in digest-pinned Docker runner.
 Its disposable workers receive verified source/checkpoint bytes over stdin and
 return bounded result archives over stdout. They receive no host mounts, network,
 controller credentials or Docker socket. CPU, memory, PIDs, writable bytes and
-inodes are limited independently of ordinary source/log/artifact quotas. Only a
+inodes are limited independently of ordinary source/log/artifact quotas.
+All queued jobs execute in workers once a runner is configured; synchronous
+legacy compilation and shell escape are disallowed in that mode. The privileged
+controller never executes user TeX. Only a
 successful checkpoint can be reused; failure, cancellation, expiration and restart
 invalidate it. Session owner checks apply to uploads, revision receipts, job results
 and SSE. See [configuration and trust boundaries](REALTIME.md).

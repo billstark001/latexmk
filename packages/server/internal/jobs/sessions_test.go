@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -141,6 +142,22 @@ func TestSessionCoalescesWithoutGrowingQueueAndReplaysReceipts(t *testing.T) {
 	}
 	if _, err := m.GetSession(ctx, "owner", s.ID); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatal("closed session remained live")
+	}
+}
+
+func TestSessionRejectsControlIdempotencyKeys(t *testing.T) {
+	m, req := sessionManager(t)
+	s, err := m.CreateSession(context.Background(), "owner", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, control := range []string{"\x1b", "\x00", "\x7f", "\u0085"} {
+		_, err := m.SubmitRevision(context.Background(), "owner", s.ID, api.RevisionRequest{
+			IdempotencyKey: "revision-key-0001" + control,
+		})
+		if err == nil || !strings.Contains(err.Error(), "control characters") {
+			t.Fatalf("control %q accepted: %v", control, err)
+		}
 	}
 }
 
@@ -359,5 +376,32 @@ func TestRevisionRateIsSharedAcrossOwnerSessionsAndReceiptsRemainReplayable(t *t
 		ErrQueueCapacity,
 	) {
 		t.Fatalf("cancelled pending bypassed queue limit: %v", err)
+	}
+}
+
+func TestConfiguredRunnerNeverFallsBackToNativeForOrdinaryJobs(t *testing.T) {
+	m, req := sessionManager(t)
+	m.cfg.RunnerImage = "test@sha256:" + strings.Repeat("a", 64)
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(bin, "latexmk"),
+		[]byte("#!/bin/sh\nprintf native > main.pdf\n"),
+		0700,
+	); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	snapshot := commitTestSnapshot(t, m.projects, req.Request, []byte("source"))
+	job, err := m.Enqueue(context.Background(), snapshot.OwnerID, snapshot, req.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.run(context.Background(), 1, job.ID)
+	state, err := m.Get(context.Background(), snapshot.OwnerID, job.ID)
+	if err != nil || state.Status != "failed" {
+		t.Fatalf("native fallback executed on controller: %+v %v", state, err)
 	}
 }

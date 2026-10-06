@@ -290,3 +290,14 @@ func Validate(ctx context.Context, cfg config.Config) error {
 	}
 	return nil
 }
+
+func ValidateSourcePaths(files []api.ProjectFile) error {
+	for _, file := range files {
+		for _, reserved := range []string{".latexmk-build", ".latexmk-home"} {
+			if file.Path == reserved || strings.HasPrefix(file.Path, reserved+"/") {
+				return errors.New("source uses a reserved runner directory")
+			}
+		}
+	}
+	return nil
+}

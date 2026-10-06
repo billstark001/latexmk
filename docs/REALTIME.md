@@ -40,7 +40,7 @@ idempotency receipt. Ambiguous responses replay the same operation.
 
 Successful downloads are verified into a new directory beneath
 `OUT/.latexmk-live/TARGET/generation-*`. The authoritative `current.json` names
-the generation and includes session, revision, job, snapshot and artifact hashes.
+the generation and includes session, revision, job, snapshot, source roots and artifact hashes.
 On Unix, `current` is an atomically replaced convenience symlink. Readers needing
 an entire consistent bundle must read `current.json` once and open its named
 generation; resolving the convenience symlink separately for several files can
@@ -114,8 +114,16 @@ and its own state directory; this is not a shared-state multi-controller session
 service. Existing global queue, source, artifact, log, cache and state limits remain
 in force. Revision admission shares a per-owner token bucket, defaulting to five
 revisions/second with a two-second burst; exact receipt replay does not consume it.
-Superseded jobs release their heavy snapshot metadata. `LATEXMK_MAX_REALTIME_SESSIONS=0` disables sessions. The default checkpoint
+Superseded jobs release their heavy snapshot metadata.
+`LATEXMK_MAX_REALTIME_SESSIONS=0` disables sessions. The default checkpoint
 limit is 16 MiB; configure `LATEXMK_MAX_COMPILE_CACHE_BYTES` for larger documents.
+
+Configuring a runner moves every queued job into a worker, including ordinary
+one-shot jobs. Ordinary jobs reuse the existing portable auxiliary cache through
+the same validated checkpoint transport. Legacy synchronous compilation and
+shell escape must be disabled in this deployment mode; configuration fails if
+either is enabled alongside a runner. The controller never executes user TeX while
+holding daemon access.
 
 Workers have no network, host bind mounts, Docker socket or controller credentials.
 They run as UID 10001 with a read-only image, dropped capabilities, no-new-privileges,
@@ -123,8 +131,8 @@ PID/CPU/memory limits and size/inode-limited tmpfs. `/work` is `noexec`;
 `/tmp` permits execution for Biber's bundled Perl interpreter and shared libraries,
 with an independent 128 MiB / 8192-inode bound. TeX and bibliography tools are
 treated as untrusted code inside the container boundary; `noexec` is an additional
-restriction on the source/build mount rather than the execution security boundary. Shell escape is rejected in
-isolated realtime sessions. Source copies are read-only and outputs use a separate
+restriction on the source/build mount rather than the execution security boundary.
+Shell escape is rejected in isolated jobs. Source copies are read-only and outputs use a separate
 build directory. Transport and checkpoint extraction reuse root-confined regular
 file validation and bounded hash verification. Cancelling an attempt kills its
 process group and force-removes its named container.

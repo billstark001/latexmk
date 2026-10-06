@@ -18,19 +18,22 @@ import (
 )
 
 type execution struct {
-	output     compile.Output
-	cache      *api.CompileCache
-	cacheKey   string
-	isolated   bool
-	checkpoint string
-	stamps     map[string]int64
+	output            compile.Output
+	cache             *api.CompileCache
+	cacheKey          string
+	sessionCheckpoint bool
+	checkpoint        string
+	stamps            map[string]int64
 }
 
 func (m *Manager) execute(ctx context.Context, rec record, workspace *compile.Workspace) execution {
-	// Isolation follows the immutable job identity, even if its live session was
-	// concurrently closed. A session job must never fall back to a native runner.
-	isolated := rec.Job.SessionID != "" && m.cfg.RunnerImage != ""
+	// Every queued job must leave the controller's daemon credential boundary.
+	// Closing a session cannot cause its job to fall back to a native runner.
+	isolated := m.cfg.RunnerImage != ""
 	if isolated {
+		if rec.Job.SessionID == "" {
+			return m.executePortableIsolated(ctx, rec, workspace)
+		}
 		return m.executeIsolated(ctx, rec, workspace)
 	}
 	e := execution{cacheKey: project.CompileCacheKey(rec.Request, m.meta, m.cfg.CompileCacheEpoch)}
@@ -60,9 +63,11 @@ func (m *Manager) execute(ctx context.Context, rec record, workspace *compile.Wo
 }
 
 func (m *Manager) executeIsolated(ctx context.Context, rec record, workspace *compile.Workspace) execution {
-	e := execution{isolated: true, stamps: make(map[string]int64)}
+	e := execution{stamps: make(map[string]int64)}
 	m.admissionMu.Lock()
 	s := m.sessions[rec.Job.SessionID]
+	reuse := s != nil && s.state.Workspace == "reuse"
+	e.sessionCheckpoint = reuse
 	cachePath := ""
 	if s != nil && s.state.Workspace == "reuse" && !rec.Request.Force && time.Now().Before(s.cacheExpires) &&
 		project.CompatibleCacheInputs(s.cacheInputs, rec.Snapshot.Files) {
@@ -85,41 +90,10 @@ func (m *Manager) executeIsolated(ctx context.Context, rec record, workspace *co
 		info.Status = "bypass"
 		info.Reason = "forced clean compile"
 	}
-	e.cache = &info
-	var err error
-	e.output, e.checkpoint, err = sandbox.Run(
-		ctx,
-		m.cfg,
-		rec.Request,
-		rec.Job.ID,
-		rec.Snapshot.Files,
-		e.stamps,
-		cachePath,
-		workspace.Project,
-		filepath.Join(workspace.Path, "isolated"),
-	)
-	if cachePath != "" && (err != nil || !e.output.Result.Success) && ctx.Err() == nil && !e.output.Result.TimedOut {
-		info.ColdRetry = true
-		info.Reason = "warm workspace failed; retried with clean sources"
-		// The cold attempt uses a separate transport directory and a new container.
-		e.output, e.checkpoint, err = sandbox.Run(
-			ctx,
-			m.cfg,
-			rec.Request,
-			rec.Job.ID+"-cold",
-			rec.Snapshot.Files,
-			e.stamps,
-			"",
-			workspace.Project,
-			filepath.Join(workspace.Path, "isolated-cold"),
-		)
+	if reuse {
+		e.cache = &info
 	}
-	if err != nil {
-		e.output = failedOutput(rec, err)
-		e.output.Result.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
-	}
-	// The worker's private attempt ID is replaced by the public immutable job ID.
-	e.output.Result.RequestID = rec.Job.ID
+	m.runIsolated(ctx, rec, workspace, &e, cachePath)
 	return e
 }
 
@@ -142,7 +116,7 @@ func (m *Manager) publishExecution(ctx context.Context, rec record, workspace *c
 	if e.cache == nil || !e.output.Result.Success || ctx.Err() != nil {
 		return
 	}
-	if e.isolated {
+	if e.sessionCheckpoint {
 		s := m.sessions[rec.Job.SessionID]
 		if s == nil || s.state.Workspace != "reuse" || s.state.RunningJobID != rec.Job.ID || e.checkpoint == "" {
 			return
@@ -223,4 +197,86 @@ func checkpointDigest(r io.Reader, max int64) (string, int64, error) {
 		err = safefs.ErrLimit
 	}
 	return hex.EncodeToString(hash.Sum(nil)), size, err
+}
+
+// Ordinary jobs retain their portable auxiliary policy while moving all TeX
+// execution out of a controller that has access to the Docker daemon.
+func (m *Manager) executePortableIsolated(ctx context.Context, rec record, workspace *compile.Workspace) execution {
+	e := execution{
+		cacheKey: project.CompileCacheKey(rec.Request, m.meta, m.cfg.CompileCacheEpoch),
+		stamps:   make(map[string]int64),
+	}
+	for _, file := range rec.Snapshot.Files {
+		e.stamps[file.Path] = 946684800
+	}
+	checkpoint := ""
+	if rec.Request.Auxiliary.Server == "reuse" {
+		info := api.CompileCache{Status: "bypass", Reason: "forced clean compile"}
+		if !rec.Request.Force {
+			portable := filepath.Join(workspace.Path, "portable")
+			if err := os.MkdirAll(portable, 0700); err != nil {
+				e.output = failedOutput(rec, err)
+				return e
+			}
+			info = m.projects.RestoreCompileCache(rec.Snapshot, e.cacheKey, portable)
+			if info.Status == "hit" {
+				checkpoint = filepath.Join(workspace.Path, "portable.tar.gz")
+				if err := sandbox.ArchiveCheckpoint(
+					portable,
+					checkpoint,
+					m.cfg.MaxFiles,
+					m.cfg.MaxCompileCacheBytes,
+				); err != nil {
+					info.Status, info.Reason, info.Warning = "miss", "portable checkpoint packaging failed", err.Error()
+					checkpoint = ""
+				}
+			}
+		}
+		e.cache = &info
+	}
+	m.runIsolated(ctx, rec, workspace, &e, checkpoint)
+	return e
+}
+
+func (m *Manager) runIsolated(
+	ctx context.Context,
+	rec record,
+	workspace *compile.Workspace,
+	e *execution,
+	checkpoint string,
+) {
+	var err error
+	e.output, e.checkpoint, err = sandbox.Run(
+		ctx,
+		m.cfg,
+		rec.Request,
+		rec.Job.ID,
+		rec.Snapshot.Files,
+		e.stamps,
+		checkpoint,
+		workspace.Project,
+		filepath.Join(workspace.Path, "isolated"),
+	)
+	if checkpoint != "" && (err != nil || !e.output.Result.Success) && ctx.Err() == nil && !e.output.Result.TimedOut {
+		e.cache.ColdRetry = true
+		e.cache.Reason = "warm state failed; retried with clean sources"
+		// The cold attempt uses a separate transport directory and a new container.
+		e.output, e.checkpoint, err = sandbox.Run(
+			ctx,
+			m.cfg,
+			rec.Request,
+			rec.Job.ID+"-cold",
+			rec.Snapshot.Files,
+			e.stamps,
+			"",
+			workspace.Project,
+			filepath.Join(workspace.Path, "isolated-cold"),
+		)
+	}
+	if err != nil {
+		e.output = failedOutput(rec, err)
+		e.output.Result.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
+	}
+	// The worker's private attempt ID is replaced by the public immutable job ID.
+	e.output.Result.RequestID = rec.Job.ID
 }

@@ -120,3 +120,13 @@ func writeArchiveFile(path string, members []archiveMember, maxBytes int64) erro
 }
 
 func ensureDir(path string) error { return os.MkdirAll(path, 0700) }
+
+// ArchiveCheckpoint uses the same bounded transport as full session state for
+// previously verified portable auxiliaries restored by the project manager.
+func ArchiveCheckpoint(root, destination string, maxFiles int, maxBytes int64) error {
+	members, err := collectState(root, maxFiles, maxBytes)
+	if err != nil {
+		return err
+	}
+	return writeArchiveFile(destination, members, maxBytes+(1<<20))
+}

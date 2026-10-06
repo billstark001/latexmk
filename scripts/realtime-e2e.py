@@ -6,6 +6,7 @@ Optionally --controller-binary /absolute/linux-amd64-server tests local changes.
 Build the CLI first. Requires a pre-pulled amd64 application image and Docker.
 """
 import argparse
+import gzip
 import hashlib
 import io
 import json
@@ -54,7 +55,7 @@ def main():
     network_started = False
     command = ["run", "-d", "--platform", "linux/amd64", "--name", name,
                "--user", "0:0", "-p", "127.0.0.1::8080", "--read-only",
-               "--tmpfs", "/tmp:rw,nosuid,nodev,size=512m,mode=1777",
+               "--tmpfs", "/tmp:rw,nosuid,nodev,exec,size=512m,mode=1777",
                "-v", "/var/run/docker.sock:/var/run/docker.sock",
                "-e", "LATEXMK_AUTH_MODE=token", "-e", "LATEXMK_API_TOKEN=" + token,
                "-e", "LATEXMK_ENGINES=xelatex", "-e", "LATEXMK_MAX_CONCURRENT_COMPILES=1",
@@ -75,7 +76,8 @@ def main():
                    "--network", name, "-e", "POSTGRES_DB=latexmk", "-e", "POSTGRES_USER=latexmk",
                    "-e", "POSTGRES_PASSWORD=" + password, args.database_image)
             database_started = True
-            wait_for(lambda: subprocess.run(["docker", "exec", database, "pg_isready", "-U", "latexmk"],
+            # The initdb bootstrap server has only a Unix socket; wait for final TCP readiness.
+            wait_for(lambda: subprocess.run(["docker", "exec", database, "pg_isready", "-h", "127.0.0.1", "-d", "latexmk", "-U", "latexmk"],
                      capture_output=True).returncode == 0, timeout=30)
             command[-1:-1] = ["--network", name, "-e",
                 "DATABASE_URL=postgres://latexmk:" + password + "@" + database + ":5432/latexmk?sslmode=disable"]
@@ -108,14 +110,18 @@ def main():
         sid = session["id"]
         revision = 0
 
-        def submit(files):
-            nonlocal revision
+        def upload(files):
             manifest = [{"path": path, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
                         for path, data in sorted(files.items())]
             plan = api("POST", "/v1/uploads/plans", {"projectId": "e2e-paper", "request": request, "files": manifest})
             blobs = {hashlib.sha256(data).hexdigest(): data for data in files.values()}
             for digest in plan["missing"]:
                 api("PUT", "/v1/uploads/" + plan["uploadId"] + "/blobs/" + digest, blobs[digest])
+            return plan
+
+        def submit(files):
+            nonlocal revision
+            plan = upload(files)
             payload = {"uploadId": plan["uploadId"], "baseRevision": revision, "idempotencyKey": secrets.token_hex(16)}
             job = api("POST", "/v1/sessions/" + sid + "/revisions", payload)
             repeated = api("POST", "/v1/sessions/" + sid + "/revisions", payload)
@@ -129,11 +135,13 @@ def main():
                 return result if result["status"] in ("succeeded", "failed", "cancelled") else None
             return wait_for(status)
 
-        def bundle(job):
+        def bundle(job, expected_session=None):
+            if expected_session is None:
+                expected_session = sid
             data = api("GET", "/v1/jobs/" + job["id"] + "/result")
             with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
                 result = json.load(archive.extractfile("result.json"))
-                assert result["revision"] == job["revision"] and result["sessionId"] == sid
+                assert result.get("revision", 0) == job.get("revision", 0) and result.get("sessionId", "") == expected_session
                 assert job["snapshotId"], "terminal database job lost immutable snapshot identity"
                 for artifact in result.get("artifacts", []):
                     data = archive.extractfile("artifacts/" + artifact["path"]).read()
@@ -209,6 +217,24 @@ def main():
         api("DELETE", "/v1/sessions/" + sid)
         print("PASS running cancellation, coalescing and container isolation", flush=True)
 
+        ordinary_files = {"main.tex": source(r"Ordinary \label{sample} reference \ref{sample}")}
+        def ordinary():
+            plan = upload(ordinary_files)
+            return completed(api("POST", "/v1/uploads/" + plan["uploadId"] + "/commit"))
+        cold_job = ordinary()
+        assert cold_job["status"] == "succeeded", cold_job
+        assert cold_job["result"]["compileCache"]["storedFiles"] > 0, cold_job
+        warm_job = ordinary()
+        assert warm_job["status"] == "succeeded" and warm_job["result"]["compileCache"]["status"] == "hit", warm_job
+        result, _ = bundle(warm_job, "")
+        assert result.get("workspaceReuse"), result
+        try:
+            api("POST", "/v1/compile", b"")
+            raise AssertionError("legacy native compile route is enabled on the Docker controller")
+        except urllib.error.HTTPError as failure:
+            assert failure.code == 404
+        print("PASS ordinary jobs stay isolated and reuse portable auxiliaries", flush=True)
+
         with tempfile.TemporaryDirectory(prefix="latexmk-live-cli-e2e-") as temp:
             project = Path(temp)
             entry = project / "main.tex"
@@ -226,6 +252,16 @@ def main():
             current = wait_for(publication)
             assert current["revision"] == 1
             pointer = next((project / "out").glob(".latexmk-live/*/current.json"))
+            generation = pointer.parent / current["directory"]
+            assert current["sourceRoot"] == str(project), current
+            for artifact in current["artifacts"]:
+                content = (generation / artifact["path"]).read_bytes()
+                assert len(content) == artifact["size"]
+                assert hashlib.sha256(content).hexdigest() == artifact["sha256"]
+                if artifact["path"].endswith(".synctex.gz"):
+                    sync = gzip.decompress(content)
+                    assert str(entry).encode() in sync, sync
+                    assert b"/work/project/" not in sync, sync
             first_pointer = pointer.read_bytes()
             entry.write_bytes(source(r"\undefinedcommand"))
             wait_for(lambda: "retaining the last successful PDF" in (project / "live-test.txt").read_text())

@@ -270,6 +270,9 @@ func loadAPIToken() (string, error) {
 }
 
 func (c Config) Validate() error {
+	if c.RunnerImage != "" && (c.EnableLegacyCompile || c.AllowShellEscape) {
+		return fmt.Errorf("isolated runner requires legacy synchronous compilation and shell escape to be disabled")
+	}
 	switch c.AuthMode {
 	case "none":
 	case "token":

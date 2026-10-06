@@ -22,6 +22,7 @@ import (
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/project"
+	"github.com/billstark001/latexmk/packages/server/internal/sandbox"
 	"github.com/billstark001/latexmk/packages/server/internal/store"
 )
 
@@ -181,6 +182,11 @@ func (m *Manager) Enqueue(
 	snapshot project.Snapshot,
 	request api.CompileRequest,
 ) (api.Job, error) {
+	if m.cfg.RunnerImage != "" {
+		if err := sandbox.ValidateSourcePaths(snapshot.Files); err != nil {
+			return api.Job{}, err
+		}
+	}
 	if err := m.runner.ValidateRequest(request); err != nil {
 		return api.Job{}, err
 	}

@@ -256,11 +256,6 @@ func (m *Manager) SaveCompileCache(
 	for _, file := range snapshot.Files {
 		sources[filepath.ToSlash(filepath.Clean(file.Path))] = true
 	}
-	fs, err := safefs.Open(workspace)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = fs.Close() }()
 	var total int64
 	for _, file := range output.Files {
 		if !reusableAuxiliary(file.RelativePath) || sources[file.RelativePath] {
@@ -269,7 +264,12 @@ func (m *Manager) SaveCompileCache(
 		if file.Size < 0 || file.Size > m.cfg.MaxCompileCacheBytes-total {
 			return 0, errors.New("auxiliary cache exceeds size limit")
 		}
-		data, err := fs.ReadLimited(file.RelativePath, file.Size)
+		input, err := file.Open()
+		if err != nil {
+			return 0, err
+		}
+		data, readErr := io.ReadAll(io.LimitReader(input, file.Size+1))
+		err = errors.Join(readErr, input.Close())
 		if err != nil {
 			return 0, err
 		}
@@ -277,7 +277,8 @@ func (m *Manager) SaveCompileCache(
 		if int64(len(data)) != file.Size {
 			return 0, errors.New("auxiliary changed after collection")
 		}
-		if bytes.Contains(data, []byte(workspace)) {
+		if bytes.Contains(data, []byte(workspace)) ||
+			(output.Result.SourceRoot != "" && bytes.Contains(data, []byte(output.Result.SourceRoot))) {
 			return 0, errors.New("auxiliary contains a nonportable workspace path")
 		}
 		digest := sha256.Sum256(data)

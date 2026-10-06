@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/project"
+	"github.com/billstark001/latexmk/packages/server/internal/sandbox"
 )
 
 var (
@@ -125,7 +127,7 @@ func (m *Manager) GetSession(ctx context.Context, ownerID, id string) (api.Sessi
 // token exists per idle session, so rapid replacements cannot fill the channel.
 func (m *Manager) SubmitRevision(ctx context.Context, ownerID, id string, req api.RevisionRequest) (api.Job, error) {
 	if len(req.IdempotencyKey) < 16 || len(req.IdempotencyKey) > 64 ||
-		strings.ContainsAny(req.IdempotencyKey, "\r\n\x00") {
+		strings.IndexFunc(req.IdempotencyKey, unicode.IsControl) >= 0 {
 		return api.Job{}, errors.New("idempotencyKey must have 16-64 characters without control characters")
 	}
 	m.admissionMu.Lock()
@@ -161,12 +163,8 @@ func (m *Manager) SubmitRevision(ctx context.Context, ownerID, id string, req ap
 	if snapshot.ProjectID != s.state.ProjectID || string(expected) != string(actual) {
 		return api.Job{}, errors.New("upload project or compile options do not match the session")
 	}
-	for _, file := range snapshot.Files {
-		if file.Path == ".latexmk-build" || strings.HasPrefix(file.Path, ".latexmk-build/") ||
-			file.Path == ".latexmk-home" ||
-			strings.HasPrefix(file.Path, ".latexmk-home/") {
-			return api.Job{}, errors.New("source uses a reserved runner directory")
-		}
+	if err := sandbox.ValidateSourcePaths(snapshot.Files); err != nil {
+		return api.Job{}, err
 	}
 	pending, err := m.pendingCount(ctx)
 	if err != nil {

@@ -90,6 +90,9 @@ func runWorker(
 		return err
 	}
 	defer func() { _ = sourceFS.Close() }()
+	if err := ValidateSourcePaths(req.Sources); err != nil {
+		return err
+	}
 	expected := make(map[string]bool)
 	var total int64
 	for _, file := range req.Sources {

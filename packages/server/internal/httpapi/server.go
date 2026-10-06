@@ -76,7 +76,7 @@ func New(
 
 	compileAuth := authManager.Middleware(false)
 	adminAuth := authManager.Middleware(true)
-	if cfg.EnableLegacyCompile {
+	if cfg.EnableLegacyCompile && cfg.RunnerImage == "" {
 		engine.POST("/v1/compile", compileAuth, s.compileLegacy)
 	}
 	engine.POST("/v1/uploads/plans", compileAuth, s.planUpload)
