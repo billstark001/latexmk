@@ -236,7 +236,7 @@ def main():
         print("PASS ordinary jobs stay isolated and reuse portable auxiliaries", flush=True)
 
         with tempfile.TemporaryDirectory(prefix="latexmk-live-cli-e2e-") as temp:
-            project = Path(temp)
+            project = Path(temp).resolve()
             entry = project / "main.tex"
             entry.write_bytes(source("First"))
             (project / ".latexmk.json").write_text(json.dumps({"server": base, "token": {"env": "LATEXMK_E2E_TOKEN"}, "engine": "xelatex"}))
