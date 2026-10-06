@@ -123,3 +123,19 @@ retention, quotas and job transitions remain in their owning business packages.
 Do not offer this image as an anonymous public TeX compiler without additional
 microVM/container isolation, strict egress control, abuse prevention, and a
 separate threat-model review.
+
+## Realtime workers
+
+Reusable realtime sessions require the opt-in digest-pinned Docker runner.
+Its disposable workers receive verified source/checkpoint bytes over stdin and
+return bounded result archives over stdout. They receive no host mounts, network,
+controller credentials or Docker socket. CPU, memory, PIDs, writable bytes and
+inodes are limited independently of ordinary source/log/artifact quotas. Only a
+successful checkpoint can be reused; failure, cancellation, expiration and restart
+invalidate it. Session owner checks apply to uploads, revision receipts, job results
+and SSE. See [configuration and trust boundaries](REALTIME.md).
+
+Docker access belongs to the trusted controller and grants administrative control
+of its daemon. Use a dedicated host/VM or broker for hostile tenants. Native fresh
+sessions retain the existing compiler trust boundary; enabling realtime alone
+without a runner does not add OS isolation.

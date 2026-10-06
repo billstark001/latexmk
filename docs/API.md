@@ -216,3 +216,36 @@ Returns `{"users":[...]}`.
 
 The plaintext token is returned only once. The database stores only its SHA-256
 hash.
+
+## Realtime sessions
+
+All session endpoints use the existing compile authentication and owner boundary.
+Session availability is advertised by `realtimeSessions`, `isolatedWorkspaces`,
+`maxRealtimeSessions` and `sessionTTLMS` in metadata. See [realtime behavior](REALTIME.md).
+
+- `POST /v1/sessions`: strict JSON `{ "projectId": "paper", "workspace": "fresh|reuse", "request": COMPILE_REQUEST }`.
+  Returns 201 and `Location`. Compile options are immutable for its lifetime.
+- `GET /v1/sessions/:id`: renews the idle lease and returns revision, latest/running/
+  pending job IDs, last successful job ID, event sequence and expiration.
+- `DELETE /v1/sessions/:id`: cancels pending/running work and releases checkpoint
+  and source pins. Closed/expired/foreign sessions return 404.
+- `POST /v1/sessions/:id/revisions`: strict JSON `{ "uploadId": "upl_...", "baseRevision": 0, "idempotencyKey": "16-to-64-characters" }`.
+  Upload its exact manifest through existing upload-plan/blob endpoints first.
+  Returns 202 with an immutable job tagged by `sessionId` and monotonic `revision`.
+  It does not modify the ordinary project's current snapshot. A stale base returns
+  409; replaying exactly the same bounded receipt returns the original job, even
+  after its upload plan is consumed. Reusing a key for different payloads returns 400. Receipts retain the latest 128 operations; older retries cannot create a
+  duplicate because their base revision is stale. Session/queue limits return 429.
+- `GET /v1/sessions/:id/events`: SSE `event: session` with sequence as `id` and
+  compact JSON `{ "sequence": 1, "type": "submitted", "revision": 1, "jobId": "job_...", "status": "queued" }`.
+  `Last-Event-ID` enables replay of the latest 64 events. Lost or invalid history
+  emits `type: resync`; fetch session state to reconcile. Heartbeats are comments,
+  sent every 15 seconds with lease renewal and credential revalidation. Four active
+  streams per session are allowed. Request cancellation and server shutdown end
+  the subscription.
+
+Session admission rejects sources using `.latexmk-build` or `.latexmk-home`.
+`DELETE /v1/jobs/:id` now cancels running jobs on the owning instance as well as
+queued jobs. Session results include `sessionId`, `revision`, optional
+`workspaceReuse` and `sourceRoot` for local SyncTeX mapping. Source/artifact hashes
+remain immutable. Session lifetime and restart recovery are described in REALTIME.md.

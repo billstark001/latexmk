@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""Local-only Docker integration checks; never reads deployment configuration.
+
+python3 scripts/realtime-e2e.py --image ghcr.io/owner/latexmk@sha256:...
+Optionally --controller-binary /absolute/linux-amd64-server tests local changes.
+Build the CLI first. Requires a pre-pulled amd64 application image and Docker.
+"""
+import argparse
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import secrets
+import signal
+import subprocess
+import tarfile
+import tempfile
+import time
+import urllib.error
+import urllib.request
+
+
+def docker(*args):
+    return subprocess.check_output(["docker", *args], text=True).strip()
+
+
+def wait_for(predicate, timeout=120):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(0.2)
+    raise AssertionError("timed out waiting for realtime state")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--image", required=True)
+    parser.add_argument("--controller-binary", type=Path)
+    parser.add_argument("--cli", type=Path, default=Path("packages/cli/dist/latexmk"))
+    args = parser.parse_args()
+    assert "@sha256:" in args.image, "use a pinned, pre-pulled test image"
+    cli = str(args.cli.resolve())
+    name = "latexmk-realtime-e2e-" + secrets.token_hex(6)
+    namespace = "e2e-" + secrets.token_hex(8)
+    token = secrets.token_hex(32)
+    processes = []
+    command = ["run", "-d", "--platform", "linux/amd64", "--name", name,
+               "--user", "0:0", "-p", "127.0.0.1::8080", "--read-only",
+               "--tmpfs", "/tmp:rw,nosuid,nodev,size=512m,mode=1777",
+               "-v", "/var/run/docker.sock:/var/run/docker.sock",
+               "-e", "LATEXMK_AUTH_MODE=token", "-e", "LATEXMK_API_TOKEN=" + token,
+               "-e", "LATEXMK_ENGINES=xelatex", "-e", "LATEXMK_MAX_CONCURRENT_COMPILES=1",
+               "-e", "LATEXMK_MAX_REALTIME_SESSIONS_PER_OWNER=4",
+               "-e", "LATEXMK_COMPILE_TIMEOUT=20s",
+               "-e", "LATEXMK_RUNNER_IMAGE=" + args.image,
+               "-e", "LATEXMK_RUNNER_NAMESPACE=" + namespace]
+    if args.controller_binary:
+        command += ["-v", str(args.controller_binary.resolve()) + ":/usr/local/bin/latexmk-server:ro"]
+    command.append(args.image)
+    try:
+        docker(*command)
+        port = docker("port", name, "8080/tcp").split(":")[-1]
+        base = "http://127.0.0.1:" + port
+
+        def api(method, path, body=None):
+            raw = json.dumps(body).encode() if isinstance(body, dict) else body
+            req = urllib.request.Request(base + path, raw, {"Authorization": "Bearer " + token,
+                  "Content-Type": "application/json" if isinstance(body, dict) else "application/octet-stream"}, method=method)
+            with urllib.request.urlopen(req, timeout=30) as response:
+                data = response.read()
+                if response.headers.get("Content-Type", "").startswith("application/json"):
+                    return json.loads(data)
+                return data
+
+        def ready():
+            try:
+                return api("GET", "/healthz")
+            except (OSError, urllib.error.HTTPError):
+                return None
+        wait_for(ready)
+        request = {"protocolVersion": 2, "entry": "main.tex", "engine": "xelatex",
+                   "interaction": "nonstopmode", "synctex": True, "haltOnError": True,
+                   "fileLineError": True, "recordInputs": True,
+                   "auxiliary": {"local": "none", "server": "reuse", "serverTTL": "5m"}}
+        session = api("POST", "/v1/sessions", {"projectId": "e2e-paper", "workspace": "reuse", "request": request})
+        sid = session["id"]
+        revision = 0
+
+        def submit(files):
+            nonlocal revision
+            manifest = [{"path": path, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+                        for path, data in sorted(files.items())]
+            plan = api("POST", "/v1/uploads/plans", {"projectId": "e2e-paper", "request": request, "files": manifest})
+            blobs = {hashlib.sha256(data).hexdigest(): data for data in files.values()}
+            for digest in plan["missing"]:
+                api("PUT", "/v1/uploads/" + plan["uploadId"] + "/blobs/" + digest, blobs[digest])
+            payload = {"uploadId": plan["uploadId"], "baseRevision": revision, "idempotencyKey": secrets.token_hex(16)}
+            job = api("POST", "/v1/sessions/" + sid + "/revisions", payload)
+            repeated = api("POST", "/v1/sessions/" + sid + "/revisions", payload)
+            assert repeated["id"] == job["id"], "idempotent admission changed the job"
+            revision = job["revision"]
+            return job
+
+        def completed(job):
+            def status():
+                result = api("GET", "/v1/jobs/" + job["id"])
+                return result if result["status"] in ("succeeded", "failed", "cancelled") else None
+            return wait_for(status)
+
+        def bundle(job):
+            data = api("GET", "/v1/jobs/" + job["id"] + "/result")
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+                result = json.load(archive.extractfile("result.json"))
+                assert result["revision"] == job["revision"] and result["sessionId"] == sid
+                for artifact in result.get("artifacts", []):
+                    data = archive.extractfile("artifacts/" + artifact["path"]).read()
+                    assert len(data) == artifact["size"] and hashlib.sha256(data).hexdigest() == artifact["sha256"]
+                stdout = archive.extractfile("stdout.log").read().decode()
+            return result, stdout
+
+        def source(text):
+            return (r"\documentclass{article}\begin{document}" + text + r"\end{document}" + "\n").encode()
+        files = {"main.tex": source("Alpha")}
+        first = completed(submit(files))
+        assert first["status"] == "succeeded", first
+        result, _ = bundle(first)
+        assert not result.get("workspaceReuse", False)
+        assert any(a["path"].endswith(".synctex.gz") for a in result["artifacts"])
+        print("PASS cold compilation and verified PDF/SyncTeX", flush=True)
+        noop = completed(submit(files))
+        result, stdout = bundle(noop)
+        assert result.get("workspaceReuse") and "Nothing to do" in stdout, (result, stdout)
+        print("PASS checkpoint preserves true latexmk no-op", flush=True)
+        files["main.tex"] = source("Bravo")  # Same size; no one-second sleep.
+        warm = completed(submit(files))
+        result, stdout = bundle(warm)
+        assert result["success"] and result.get("workspaceReuse") and "Nothing to do" not in stdout, (result, stdout)
+        print("PASS rapid same-size TeX edit rebuilds", flush=True)
+        files["extra.sty"] = b"\\ProvidesPackage{extra}\n"
+        changed = completed(submit(files))
+        result, _ = bundle(changed)
+        assert result["success"] and not result.get("workspaceReuse", False)
+        del files["extra.sty"]
+        deleted = completed(submit(files))
+        result, _ = bundle(deleted)
+        assert result["success"] and not result.get("workspaceReuse", False)
+        print("PASS input membership invalidates checkpoint", flush=True)
+        files["main.tex"] = source(r"\undefinedcommand")
+        failed = completed(submit(files))
+        assert failed["status"] == "failed", failed
+        state = api("GET", "/v1/sessions/" + sid)
+        assert state["lastSuccessfulJobId"] == deleted["id"]
+        files["main.tex"] = source("Fixed")
+        fixed = completed(submit(files))
+        result, _ = bundle(fixed)
+        assert result["success"] and not result.get("workspaceReuse", False)
+        print("PASS errors retain last good result and recover cold", flush=True)
+        files["main.tex"] = source(r"\loop\iftrue\repeat")
+        blocked = submit(files)
+        wait_for(lambda: api("GET", "/v1/jobs/" + blocked["id"])["status"] == "running")
+        def running_container():
+            found = docker("ps", "-q", "--filter", "name=latexmk-attempt-" + blocked["id"])
+            return json.loads(docker("inspect", found))[0] if found else None
+        inspect = wait_for(running_container, timeout=15)
+        host = inspect["HostConfig"]
+        assert host["NetworkMode"] == "none" and host["ReadonlyRootfs"] and not inspect["Mounts"]
+        assert host["Memory"] > 0 and host["PidsLimit"] > 0 and "ALL" in host["CapDrop"]
+        second = submit({"main.tex": source("Second")})
+        third = submit({"main.tex": source("Third!")})
+        assert api("GET", "/v1/jobs/" + second["id"])["status"] == "cancelled"
+        api("DELETE", "/v1/jobs/" + blocked["id"])
+        assert completed(blocked)["status"] == "cancelled"
+        assert completed(third)["status"] == "succeeded"
+        api("DELETE", "/v1/sessions/" + sid)
+        print("PASS running cancellation, coalescing and container isolation", flush=True)
+
+        with tempfile.TemporaryDirectory(prefix="latexmk-live-cli-e2e-") as temp:
+            project = Path(temp)
+            entry = project / "main.tex"
+            entry.write_bytes(source("First"))
+            (project / ".latexmk.json").write_text(json.dumps({"server": base, "token": {"env": "LATEXMK_E2E_TOKEN"}, "engine": "xelatex"}))
+            env = {key: value for key, value in os.environ.items() if not key.startswith("LATEXMK_")}
+            env.update({"HOME": temp, "XDG_CONFIG_HOME": temp, "LATEXMK_E2E_TOKEN": token})
+            log = open(project / "live-test.txt", "w")
+            process = subprocess.Popen([cli, "--realtime", "--server-cache", "reuse", "--out-dir", str(project / "out"), "main.tex"], cwd=temp, env=env, stdout=log, stderr=log)
+            processes.append(process)
+            def publication():
+                assert process.poll() is None, (project / "live-test.txt").read_text()
+                paths = list((project / "out").glob(".latexmk-live/*/current.json"))
+                return json.loads(paths[0].read_text()) if paths else None
+            current = wait_for(publication)
+            assert current["revision"] == 1
+            pointer = next((project / "out").glob(".latexmk-live/*/current.json"))
+            first_pointer = pointer.read_bytes()
+            entry.write_bytes(source(r"\undefinedcommand"))
+            wait_for(lambda: "retaining the last successful PDF" in (project / "live-test.txt").read_text())
+            assert pointer.read_bytes() == first_pointer
+            replacement = project / "replacement.tex"
+            replacement.write_bytes(source("Third"))
+            replacement.replace(entry)
+            current = wait_for(lambda: (value if (value := publication())["revision"] >= 3 else None))
+            assert (pointer.parent / current["directory"] / "main.pdf").is_file()
+            old_session = current["sessionId"]
+            api("DELETE", "/v1/sessions/" + old_session)
+            current = wait_for(lambda: (value if (value := publication())["sessionId"] != old_session else None))
+            assert current["revision"] == 1
+            process.send_signal(signal.SIGINT)
+            assert process.wait(timeout=20) == 0
+            log.close()
+            print("PASS CLI watch, atomic publication, failure recovery and session reconnect", flush=True)
+    except BaseException:
+        print(docker("logs", "--tail", "60", name), flush=True)
+        raise
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=20)
+        docker("rm", "--force", name)
+        attempts = docker("ps", "-aq", "--filter", "label=latexmk.runner.namespace=" + namespace).split()
+        if attempts:
+            docker("rm", "--force", *attempts)
+
+
+if __name__ == "__main__":
+    main()

@@ -112,3 +112,6 @@ has several targets, set `defaultTarget` in `.latexmk.json` or pass
 Source snapshots, result archives and auxiliary reuse are independently managed.
 Shell escape is disabled by default; project latexmkrc files are not executed.
 Persistent state depends on the deployment's configured storage volume.
+
+Realtime remote compilation is available with `--realtime`, optionally using isolated
+workspace checkpoints with `--server-cache reuse`. See [realtime compilation](docs/REALTIME.md).
