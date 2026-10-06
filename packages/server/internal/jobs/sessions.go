@@ -13,7 +13,10 @@ import (
 )
 
 var (
+	ErrRevisionRate     = errors.New("realtime revision rate exhausted")
 	ErrSessionNotFound  = errors.New("realtime session not found or expired")
+	ErrSessionCapacity  = errors.New("realtime session capacity exhausted")
+	ErrQueueCapacity    = errors.New("compile queue is full")
 	ErrRevisionConflict = errors.New("session revision conflict; refresh session state")
 )
 
@@ -22,6 +25,8 @@ type revisionReceipt struct {
 	jobID   string
 }
 type liveSession struct {
+	subscribers  int
+	cacheExpires time.Time
 	cachePath    string
 	cacheInputs  []api.ProjectFile
 	cacheHashes  map[string]string
@@ -47,14 +52,15 @@ func (m *Manager) CreateSession(ctx context.Context, ownerID string, req api.Ses
 	if req.Workspace != "fresh" && req.Workspace != "reuse" {
 		return api.Session{}, errors.New("workspace must be fresh or reuse")
 	}
-	if req.Workspace == "reuse" && (m.cfg.RunnerImage == "" || req.Request.Auxiliary.Server != "reuse") {
+	if req.Workspace == "reuse" &&
+		(m.cfg.RunnerImage == "" || req.Request.Auxiliary.Server != "reuse" || m.cfg.MaxCompileCacheBytes <= 0) {
 		return api.Session{}, errors.New("workspace reuse requires an isolated runner and auxiliary.server=reuse")
 	}
 	if err := m.runner.ValidateRequest(req.Request); err != nil {
 		return api.Session{}, err
 	}
-	if req.Workspace == "reuse" && req.Request.ShellEscape {
-		return api.Session{}, errors.New("realtime workspace reuse does not allow shell escape")
+	if m.cfg.RunnerImage != "" && req.Request.ShellEscape {
+		return api.Session{}, errors.New("isolated realtime workspaces do not allow shell escape")
 	}
 	if err := ctx.Err(); err != nil {
 		return api.Session{}, err
@@ -63,7 +69,16 @@ func (m *Manager) CreateSession(ctx context.Context, ownerID string, req api.Ses
 	defer m.admissionMu.Unlock()
 	m.expireSessionsLocked(ctx)
 	if len(m.sessions) >= m.cfg.MaxRealtimeSessions {
-		return api.Session{}, errors.New("realtime session capacity exhausted")
+		return api.Session{}, ErrSessionCapacity
+	}
+	ownerSessions := 0
+	for _, s := range m.sessions {
+		if s.ownerID == ownerID {
+			ownerSessions++
+		}
+	}
+	if m.cfg.MaxRealtimeSessionsPerOwner > 0 && ownerSessions >= m.cfg.MaxRealtimeSessionsPerOwner {
+		return api.Session{}, ErrSessionCapacity
 	}
 	id, err := randomID("ses")
 	if err != nil {
@@ -128,6 +143,9 @@ func (m *Manager) SubmitRevision(ctx context.Context, ownerID, id string, req ap
 	if req.BaseRevision != s.state.Revision || s.state.Revision >= 1<<31 {
 		return api.Job{}, ErrRevisionConflict
 	}
+	if !m.allowRevisionLocked(ownerID) {
+		return api.Job{}, ErrRevisionRate
+	}
 	snapshot, request, err := m.projects.PrepareUpload(ownerID, req.UploadID)
 	if err != nil {
 		return api.Job{}, err
@@ -155,10 +173,16 @@ func (m *Manager) SubmitRevision(ctx context.Context, ownerID, id string, req ap
 		return api.Job{}, err
 	}
 	if s.state.PendingJobID != "" {
-		pending--
+		previous, err := m.Get(ctx, ownerID, s.state.PendingJobID)
+		if err != nil {
+			return api.Job{}, err
+		}
+		if previous.Status == "queued" {
+			pending--
+		}
 	}
 	if pending >= m.cfg.MaxQueuedJobs {
-		return api.Job{}, errors.New("compile queue is full")
+		return api.Job{}, ErrQueueCapacity
 	}
 	jobID, err := randomID("job")
 	if err != nil {
@@ -181,6 +205,7 @@ func (m *Manager) SubmitRevision(ctx context.Context, ownerID, id string, req ap
 	if err := m.save(ctx, rec); err != nil {
 		return api.Job{}, err
 	}
+	transferred = true // The persisted job now owns the prepared snapshot pin.
 	if s.state.PendingJobID != "" {
 		if err := m.cancel(ctx, s.state.PendingJobID, "superseded by a newer session revision"); err != nil {
 			_ = m.cancel(context.WithoutCancel(ctx), jobID, "session admission failed")
@@ -189,6 +214,7 @@ func (m *Manager) SubmitRevision(ctx context.Context, ownerID, id string, req ap
 	}
 	// One pin belongs to the job and one to the live session's current source tree.
 	if err := m.projects.PinSnapshot(snapshot); err != nil {
+		_ = m.cancel(context.WithoutCancel(ctx), jobID, "session snapshot pin failed")
 		return api.Job{}, err
 	}
 	if s.snapshot.ID != "" {
@@ -326,6 +352,15 @@ func (m *Manager) closeSessionLocked(ctx context.Context, s *liveSession) error 
 		}
 	}
 	if cancel := m.active[s.state.RunningJobID]; cancel != nil {
+		rec, err := m.load(ctx, s.state.RunningJobID)
+		if err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		rec.Job.Status, rec.Job.Error, rec.Job.FinishedAt = "cancelled", "session closed", &now
+		if _, err := m.transition(ctx, rec, "running"); err != nil {
+			return err
+		}
 		cancel()
 	}
 	if s.snapshot.ID != "" {
@@ -338,7 +373,15 @@ func (m *Manager) closeSessionLocked(ctx context.Context, s *liveSession) error 
 }
 
 func (m *Manager) expireSessionsLocked(ctx context.Context) {
+	for owner, budget := range m.revisionBudgets {
+		if time.Since(budget.updated) > m.cfg.RealtimeSessionTTL {
+			delete(m.revisionBudgets, owner)
+		}
+	}
 	for _, s := range m.sessions {
+		if s.cachePath != "" && time.Now().After(s.cacheExpires) {
+			m.clearSessionCacheLocked(s)
+		}
 		if time.Now().After(s.state.ExpiresAt) {
 			if err := m.closeSessionLocked(ctx, s); err != nil {
 				m.logger.Warn("expire session", "error", err)
@@ -382,12 +425,10 @@ func (m *Manager) sessionProjectIDsLocked(ownerID, projectID string) []string {
 	return ids
 }
 
-func (m *Manager) validateSessionJob(rec record) error {
+func (m *Manager) validateSessionJobLocked(rec record) error {
 	if rec.Job.SessionID == "" {
 		return nil
 	}
-	m.admissionMu.Lock()
-	defer m.admissionMu.Unlock()
 	s, err := m.sessionLocked(rec.OwnerID, rec.Job.SessionID)
 	if err != nil {
 		return err
@@ -396,4 +437,45 @@ func (m *Manager) validateSessionJob(rec record) error {
 		return fmt.Errorf("session no longer owns this compile attempt")
 	}
 	return nil
+}
+
+// SubscribeSession bounds streaming connections independently from job workers.
+func (m *Manager) SubscribeSession(ownerID, id string) (func(), error) {
+	m.admissionMu.Lock()
+	defer m.admissionMu.Unlock()
+	s, err := m.sessionLocked(ownerID, id)
+	if err != nil {
+		return nil, err
+	}
+	if s.subscribers >= 4 {
+		return nil, ErrSessionCapacity
+	}
+	s.subscribers++
+	return func() { m.admissionMu.Lock(); defer m.admissionMu.Unlock(); s.subscribers-- }, nil
+}
+
+type revisionBudget struct {
+	tokens  float64
+	updated time.Time
+}
+
+func (m *Manager) allowRevisionLocked(owner string) bool {
+	rate := m.cfg.MaxRealtimeRevisionRate
+	if rate <= 0 {
+		return true
+	}
+	now := time.Now()
+	burst := float64(rate * 2)
+	budget := m.revisionBudgets[owner]
+	if budget == nil {
+		budget = &revisionBudget{tokens: burst, updated: now}
+		m.revisionBudgets[owner] = budget
+	}
+	budget.tokens = min(burst, budget.tokens+now.Sub(budget.updated).Seconds()*float64(rate))
+	budget.updated = now
+	if budget.tokens < 1 {
+		return false
+	}
+	budget.tokens--
+	return true
 }

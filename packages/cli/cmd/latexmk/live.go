@@ -23,6 +23,8 @@ import (
 
 const reloadLiveSettings = -20
 
+var errLiveSettingsChanged = errors.New("realtime settings changed")
+
 type liveObservation struct {
 	changed chan struct{}
 	reload  chan struct{}
@@ -34,17 +36,18 @@ func observeLive(
 	c *client.Client,
 	request protocol.CompileRequest,
 	opts compileOptions,
+	invalidate context.CancelCauseFunc,
 ) liveObservation {
 	observation := liveObservation{
 		changed: make(chan struct{}, 1),
 		reload:  make(chan struct{}, 1),
 		errors:  make(chan error, 1),
 	}
-	go func() {
+	{
 		selection, err := c.SelectionPaths(request.Entry, request.Engine)
 		if err != nil {
 			observation.errors <- err
-			return
+			return observation
 		}
 		targets := watchTargets(opts, selection.Files)
 		for _, file := range opts.controlFiles {
@@ -59,7 +62,7 @@ func observeLive(
 		tracker, err := projectwatch.New(targets, opts.watchInterval, opts.watchDebounce)
 		if err != nil {
 			observation.errors <- err
-			return
+			return observation
 		}
 		tracker.Refresh = func() ([]projectwatch.Target, error) {
 			next, err := c.SelectionPaths(request.Entry, request.Engine)
@@ -75,29 +78,32 @@ func observeLive(
 			targets = refreshed
 			return targets, nil
 		}
-		for {
-			names, err := tracker.Wait(ctx)
-			if err != nil {
-				if ctx.Err() == nil {
-					observation.errors <- err
-				}
-				return
-			}
-			for _, name := range names {
-				if strings.HasPrefix(name, "settings: ") {
-					select {
-					case observation.reload <- struct{}{}:
-					default:
+		go func() {
+			for {
+				names, err := tracker.Wait(ctx)
+				if err != nil {
+					if ctx.Err() == nil {
+						observation.errors <- err
 					}
 					return
 				}
+				for _, name := range names {
+					if strings.HasPrefix(name, "settings: ") {
+						invalidate(errLiveSettingsChanged)
+						select {
+						case observation.reload <- struct{}{}:
+						default:
+						}
+						return
+					}
+				}
+				select {
+				case observation.changed <- struct{}{}:
+				default:
+				}
 			}
-			select {
-			case observation.changed <- struct{}{}:
-			default:
-			}
-		}
-	}()
+		}()
+	}
 	return observation
 }
 
@@ -123,9 +129,16 @@ func observeSession(ctx context.Context, c *client.Client, id string) <-chan str
 	return changed
 }
 
-func runLive(c *client.Client, request protocol.CompileRequest, opts compileOptions) int {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+func runLive(c *client.Client, request protocol.CompileRequest, opts compileOptions) (code int) {
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	ctx, cancel := context.WithCancelCause(signalCtx)
+	defer cancel(nil)
+	defer func() {
+		if errors.Is(context.Cause(ctx), errLiveSettingsChanged) {
+			code = reloadLiveSettings
+		}
+	}()
 	operation, finish := context.WithTimeout(ctx, opts.timeout)
 	meta, err := c.Metadata(operation)
 	finish()
@@ -144,7 +157,7 @@ func runLive(c *client.Client, request protocol.CompileRequest, opts compileOpti
 	if request.Auxiliary.Server == "reuse" {
 		mode = "reuse"
 	}
-	observation := observeLive(ctx, c, request, opts)
+	observation := observeLive(ctx, c, request, opts, cancel)
 	for ctx.Err() == nil {
 		operation, finish := context.WithTimeout(ctx, opts.timeout)
 		session, err := c.CreateSession(

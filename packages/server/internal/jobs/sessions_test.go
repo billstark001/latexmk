@@ -23,21 +23,22 @@ import (
 func sessionManager(t *testing.T) (*Manager, api.SessionRequest) {
 	t.Helper()
 	cfg := config.Config{
-		StateDir:              t.TempDir(),
-		TempDir:               t.TempDir(),
-		Engines:               []string{"xelatex"},
-		MaxFiles:              100,
-		MaxExpandedBytes:      8192,
-		MaxUploadBytes:        8192,
-		MaxStateBytes:         1 << 20,
-		MaxArtifactBytes:      8192,
-		MaxLogBytes:           8192,
-		MaxConcurrentCompiles: 2,
-		MaxQueuedJobs:         2,
-		CompileTimeout:        3 * time.Second,
-		ShutdownTimeout:       time.Second,
-		MaxRealtimeSessions:   4,
-		RealtimeSessionTTL:    time.Minute,
+		StateDir:                    t.TempDir(),
+		TempDir:                     t.TempDir(),
+		Engines:                     []string{"xelatex"},
+		MaxFiles:                    100,
+		MaxExpandedBytes:            8192,
+		MaxUploadBytes:              8192,
+		MaxStateBytes:               1 << 20,
+		MaxArtifactBytes:            8192,
+		MaxLogBytes:                 8192,
+		MaxConcurrentCompiles:       2,
+		MaxQueuedJobs:               2,
+		CompileTimeout:              3 * time.Second,
+		ShutdownTimeout:             time.Second,
+		MaxRealtimeSessions:         4,
+		MaxRealtimeSessionsPerOwner: 4,
+		RealtimeSessionTTL:          time.Minute,
 	}
 	p, err := project.New(cfg, nil)
 	if err != nil {
@@ -219,5 +220,144 @@ func TestSessionExpiryReclaimsPinsAndCancelsPending(t *testing.T) {
 	job, _ = m.Get(context.Background(), "owner", job.ID)
 	if job.Status != "cancelled" {
 		t.Fatalf("expired job=%+v", job)
+	}
+}
+
+func TestSessionOwnerQuotaAndAlreadyCancelledPendingClosure(t *testing.T) {
+	m, req := sessionManager(t)
+	m.cfg.MaxRealtimeSessionsPerOwner = 1
+	ctx := context.Background()
+	s, err := m.CreateSession(ctx, "owner", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.CreateSession(ctx, "owner", req); !errors.Is(err, ErrSessionCapacity) {
+		t.Fatalf("quota=%v", err)
+	}
+	if _, err := m.CreateSession(ctx, "other", req); err != nil {
+		t.Fatal(err)
+	}
+	job, err := m.SubmitRevision(ctx, "owner", s.ID, planRevision(t, m, req, "source", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Cancel(ctx, "owner", job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CloseSession(ctx, "owner", s.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionBoundsSubscribersAndExpiresCheckpoint(t *testing.T) {
+	m, req := sessionManager(t)
+	s, err := m.CreateSession(context.Background(), "owner", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var releases []func()
+	for i := 0; i < 4; i++ {
+		release, err := m.SubscribeSession("owner", s.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		releases = append(releases, release)
+	}
+	if _, err := m.SubscribeSession("owner", s.ID); !errors.Is(err, ErrSessionCapacity) {
+		t.Fatal("unbounded subscribers")
+	}
+	for _, release := range releases {
+		release()
+	}
+	live := m.sessions[s.ID]
+	live.cachePath = "expired-checkpoint"
+	live.cacheExpires = time.Now().Add(-time.Second)
+	if _, err := m.GetSession(context.Background(), "owner", s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if live.cachePath != "" {
+		t.Fatal("expired checkpoint survived renewal")
+	}
+}
+
+func TestClosedSessionCannotStartDequeuedJob(t *testing.T) {
+	m, req := sessionManager(t)
+	ctx := context.Background()
+	s, err := m.CreateSession(ctx, "owner", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := m.SubmitRevision(ctx, "owner", s.ID, planRevision(t, m, req, "source", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := m.takeSession(<-m.queue)
+	if err := m.CloseSession(ctx, "owner", s.ID); err != nil {
+		t.Fatal(err)
+	}
+	m.run(ctx, 1, id)
+	state, err := m.Get(ctx, "owner", job.ID)
+	if err != nil || state.Status != "cancelled" || state.StartedAt != nil {
+		t.Fatalf("closed attempt started: %+v %v", state, err)
+	}
+}
+
+func TestRevisionRateIsSharedAcrossOwnerSessionsAndReceiptsRemainReplayable(t *testing.T) {
+	m, req := sessionManager(t)
+	m.cfg.MaxRealtimeRevisionRate = 1
+	ctx := context.Background()
+	s, err := m.CreateSession(ctx, "owner", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := planRevision(t, m, req, "first", 0)
+	first, err := m.SubmitRevision(ctx, "owner", s.ID, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := m.SubmitRevision(ctx, "owner", s.ID, planRevision(t, m, req, "second", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.SubmitRevision(ctx, "owner", s.ID, payload); err != nil {
+		t.Fatal("receipt consumed rate budget:", err)
+	}
+	other, err := m.CreateSession(ctx, "owner", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.SubmitRevision(
+		ctx,
+		"owner",
+		other.ID,
+		planRevision(t, m, req, "third", 0),
+	); !errors.Is(
+		err,
+		ErrRevisionRate,
+	) {
+		t.Fatalf("owner rate was bypassed: %v", err)
+	}
+	rec, err := m.load(ctx, first.ID)
+	if err != nil || rec.Job.Status != "cancelled" || len(rec.Snapshot.Files) != 0 {
+		t.Fatal("superseded job retained heavy snapshot metadata")
+	}
+	if _, err := m.Cancel(ctx, "owner", second.ID); err != nil {
+		t.Fatal(err)
+	}
+	m.cfg.MaxRealtimeRevisionRate = 0
+	m.cfg.MaxQueuedJobs = 1
+	if _, err := m.SubmitRevision(ctx, "owner", other.ID, planRevision(t, m, req, "other", 0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.SubmitRevision(
+		ctx,
+		"owner",
+		s.ID,
+		planRevision(t, m, req, "over-limit", 2),
+	); !errors.Is(
+		err,
+		ErrQueueCapacity,
+	) {
+		t.Fatalf("cancelled pending bypassed queue limit: %v", err)
 	}
 }

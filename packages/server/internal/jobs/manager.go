@@ -45,13 +45,14 @@ type Manager struct {
 	db       *store.Postgres
 	logger   *slog.Logger
 
-	mu          sync.Mutex
-	admissionMu sync.Mutex
-	jobs        map[string]record
-	queue       chan string
-	workers     sync.WaitGroup
-	sessions    map[string]*liveSession
-	active      map[string]context.CancelFunc
+	mu              sync.Mutex
+	admissionMu     sync.Mutex
+	jobs            map[string]record
+	queue           chan string
+	workers         sync.WaitGroup
+	sessions        map[string]*liveSession
+	revisionBudgets map[string]*revisionBudget
+	active          map[string]context.CancelFunc
 }
 
 func New(
@@ -63,12 +64,22 @@ func New(
 	logger *slog.Logger,
 ) *Manager {
 	return &Manager{
-		cfg: cfg, meta: meta, runner: runner, projects: projects, db: db, logger: logger,
+		cfg:      cfg,
+		meta:     meta,
+		runner:   runner,
+		projects: projects,
+		db:       db,
+		logger:   logger,
 		// Cancellation is cooperative: a cancelled identifier can still be in
 		// the channel until a worker observes it. Extra channel room prevents a
 		// burst of cancellations from blocking an otherwise valid replacement.
-		sessions: make(map[string]*liveSession), active: make(map[string]context.CancelFunc),
-		jobs: make(map[string]record), queue: make(chan string, cfg.MaxQueuedJobs*2),
+		revisionBudgets: make(
+			map[string]*revisionBudget,
+		),
+		sessions: make(map[string]*liveSession),
+		active:   make(map[string]context.CancelFunc),
+		jobs:     make(map[string]record),
+		queue:    make(chan string, cfg.MaxQueuedJobs*2),
 	}
 }
 
@@ -599,17 +610,23 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 		}
 		return
 	}
-	defer m.finishSession(context.WithoutCancel(ctx), rec)
+	finishSession := true
+	defer func() {
+		if finishSession {
+			m.finishSession(context.WithoutCancel(ctx), rec)
+		}
+	}()
 	if rec.Job.Status != "queued" {
-		return
-	}
-	if err := m.validateSessionJob(rec); err != nil {
-		_ = m.cancel(ctx, id, err.Error())
 		return
 	}
 	jobCtx, cancelJob := context.WithCancel(ctx)
 	defer cancelJob()
 	m.admissionMu.Lock()
+	if err := m.validateSessionJobLocked(rec); err != nil {
+		_ = m.cancel(context.WithoutCancel(ctx), id, err.Error())
+		m.admissionMu.Unlock()
+		return
+	}
 	now := time.Now().UTC()
 	rec.Job.Status, rec.Job.StartedAt = "running", &now
 	changed, err := m.transition(ctx, rec, "queued")
@@ -620,6 +637,7 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	defer func() { m.admissionMu.Lock(); delete(m.active, id); m.admissionMu.Unlock() }()
 	if err != nil {
 		m.logger.Error("mark job running", "job_id", id, "error", err)
+		finishSession = false
 		m.requeue(ctx, id)
 		return
 	}
@@ -728,6 +746,9 @@ func (m *Manager) cancel(ctx context.Context, id, message string) error {
 	if err != nil {
 		return err
 	}
+	if rec.Job.Status == "cancelled" {
+		return nil
+	}
 	now := time.Now().UTC()
 	rec.Job.Status, rec.Job.Error, rec.Job.FinishedAt = "cancelled", message, &now
 	changed, err := m.transition(ctx, rec, "queued")
@@ -753,6 +774,9 @@ func (m *Manager) transition(ctx context.Context, rec record, expectedStatus str
 			return false, nil
 		}
 		current.Job = rec.Job
+		if rec.Job.FinishedAt != nil {
+			current.Snapshot = project.Snapshot{}
+		}
 		m.jobs[rec.Job.ID] = current
 		return true, nil
 	}
@@ -760,10 +784,14 @@ func (m *Manager) transition(ctx context.Context, rec record, expectedStatus str
 	if err != nil {
 		return false, err
 	}
-	return m.db.TransitionJob(ctx, rec.Job.ID, expectedStatus, map[string]any{
+	updates := map[string]any{
 		"status": rec.Job.Status, "result": result, "error": rec.Job.Error,
 		"started_at": rec.Job.StartedAt, "finished_at": rec.Job.FinishedAt,
-	})
+	}
+	if rec.Job.FinishedAt != nil {
+		updates["snapshot_manifest"] = nil
+	}
+	return m.db.TransitionJob(ctx, rec.Job.ID, expectedStatus, updates)
 }
 
 func (m *Manager) transitionWithRetry(ctx context.Context, rec record, expectedStatus string) (bool, error) {

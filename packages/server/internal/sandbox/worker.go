@@ -76,7 +76,7 @@ func runWorker(
 	}
 	if req.Version != 1 || req.Request.ShellEscape || req.MaxFiles <= 0 || req.MaxSourceBytes <= 0 ||
 		req.MaxArtifactBytes <= 0 ||
-		req.MaxStateBytes <= 0 ||
+		req.MaxStateBytes < 0 || (req.Warm && req.MaxStateBytes == 0) ||
 		req.MaxLogBytes <= 0 ||
 		req.TimeoutMS <= 0 {
 		return errors.New("invalid worker protocol or limits")
@@ -198,7 +198,7 @@ func runWorker(
 		return err
 	}
 	members := []archiveMember{{name: "result.tar.gz", file: response}}
-	if result.Result.Success {
+	if result.Result.Success && req.MaxStateBytes > 0 {
 		// A successful no-op retains recorder and final output files from the previous
 		// verified state; failure never exports a partially mutated checkpoint.
 		state, err := collectState(build, req.MaxFiles, req.MaxStateBytes)

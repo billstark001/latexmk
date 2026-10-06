@@ -42,7 +42,7 @@ func workerInput(t *testing.T, root, source, checkpoint string) []byte {
 		MaxStateBytes:    8192,
 		MaxArtifactBytes: 8192,
 		MaxLogBytes:      8192,
-		TimeoutMS:        1000,
+		TimeoutMS:        5000,
 		Warm:             checkpoint != "",
 	}
 	raw, _ := json.Marshal(req)

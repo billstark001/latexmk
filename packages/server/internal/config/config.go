@@ -15,14 +15,16 @@ import (
 )
 
 type Config struct {
-	RunnerNamespace      string
-	MaxRealtimeSessions  int
-	RealtimeSessionTTL   time.Duration
-	RunnerImage          string
-	RunnerMemoryBytes    int64
-	RunnerWorkspaceBytes int64
-	RunnerPIDs           int
-	RunnerCPUs           int
+	MaxRealtimeRevisionRate     int
+	RunnerNamespace             string
+	MaxRealtimeSessions         int
+	MaxRealtimeSessionsPerOwner int
+	RealtimeSessionTTL          time.Duration
+	RunnerImage                 string
+	RunnerMemoryBytes           int64
+	RunnerWorkspaceBytes        int64
+	RunnerPIDs                  int
+	RunnerCPUs                  int
 
 	CompileCacheRetention time.Duration
 	MaxCompileCacheBytes  int64
@@ -137,7 +139,18 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 	}
-	maxSessions, err := envInt("LATEXMK_MAX_REALTIME_SESSIONS", 16)
+	maxSessions := 0
+	if strings.TrimSpace(os.Getenv("LATEXMK_MAX_REALTIME_SESSIONS")) != "0" {
+		maxSessions, err = envInt("LATEXMK_MAX_REALTIME_SESSIONS", 16)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	revisionRate, err := envInt("LATEXMK_MAX_REALTIME_REVISION_RATE", 5)
+	if err != nil {
+		return Config{}, err
+	}
+	ownerSessions, err := envInt("LATEXMK_MAX_REALTIME_SESSIONS_PER_OWNER", 4)
 	if err != nil {
 		return Config{}, err
 	}
@@ -167,50 +180,52 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		MaxRealtimeSessions:   maxSessions,
-		RealtimeSessionTTL:    sessionTTL,
-		RunnerImage:           strings.TrimSpace(os.Getenv("LATEXMK_RUNNER_IMAGE")),
-		RunnerNamespace:       strings.TrimSpace(os.Getenv("LATEXMK_RUNNER_NAMESPACE")),
-		RunnerMemoryBytes:     runnerMemory,
-		RunnerWorkspaceBytes:  runnerWorkspace,
-		RunnerPIDs:            runnerPIDs,
-		RunnerCPUs:            runnerCPUs,
-		CompileCacheRetention: cacheRetention,
-		MaxCompileCacheBytes:  cacheBytes,
-		CompileCacheEpoch:     os.Getenv("LATEXMK_COMPILE_CACHE_EPOCH"),
-		Addr:                  ":" + env("PORT", "8080"),
-		AuthMode:              env("LATEXMK_AUTH_MODE", "token"),
-		APIToken:              apiToken,
-		BootstrapToken:        os.Getenv("LATEXMK_BOOTSTRAP_TOKEN"),
-		DatabaseURL:           os.Getenv("DATABASE_URL"),
-		ImageProfile:          env("LATEXMK_IMAGE_PROFILE", "development"),
-		Engines:               splitCSV(env("LATEXMK_ENGINES", "xelatex,lualatex,pdflatex")),
-		AllowShellEscape:      allowShellEscape,
-		EnableLegacyCompile:   enableLegacyCompile,
-		CompileTimeout:        compileTimeout,
-		ShutdownTimeout:       shutdownTimeout,
-		MaxUploadBytes:        maxUploadBytes,
-		MaxExpandedBytes:      maxExpandedBytes,
-		MaxArtifactBytes:      maxArtifactBytes,
-		MaxFiles:              maxFiles,
-		MaxConcurrentCompiles: maxConcurrent,
-		MaxQueuedJobs:         maxQueuedJobs,
-		MaxLogBytes:           maxLogBytes,
-		MaxStateBytes:         maxStateBytes,
-		MaxUploadSessions:     maxUploadSessions,
-		ResultRetention:       resultRetention,
-		SnapshotRetention:     snapshotRetention,
-		BlobRetention:         blobRetention,
-		StateSweepInterval:    stateSweepInterval,
-		TempDir:               os.Getenv("LATEXMK_TEMP_DIR"),
-		StateDir:              env("LATEXMK_STATE_DIR", "/tmp/latexmk-state"),
-		DatabaseMode:          env("LATEXMK_DATABASE_MODE", "postgres"),
-		CORSOrigins:           splitRawCSV(os.Getenv("LATEXMK_CORS_ORIGINS")),
+		MaxRealtimeRevisionRate:     revisionRate,
+		MaxRealtimeSessions:         maxSessions,
+		MaxRealtimeSessionsPerOwner: ownerSessions,
+		RealtimeSessionTTL:          sessionTTL,
+		RunnerImage:                 strings.TrimSpace(os.Getenv("LATEXMK_RUNNER_IMAGE")),
+		RunnerNamespace:             strings.TrimSpace(os.Getenv("LATEXMK_RUNNER_NAMESPACE")),
+		RunnerMemoryBytes:           runnerMemory,
+		RunnerWorkspaceBytes:        runnerWorkspace,
+		RunnerPIDs:                  runnerPIDs,
+		RunnerCPUs:                  runnerCPUs,
+		CompileCacheRetention:       cacheRetention,
+		MaxCompileCacheBytes:        cacheBytes,
+		CompileCacheEpoch:           os.Getenv("LATEXMK_COMPILE_CACHE_EPOCH"),
+		Addr:                        ":" + env("PORT", "8080"),
+		AuthMode:                    env("LATEXMK_AUTH_MODE", "token"),
+		APIToken:                    apiToken,
+		BootstrapToken:              os.Getenv("LATEXMK_BOOTSTRAP_TOKEN"),
+		DatabaseURL:                 os.Getenv("DATABASE_URL"),
+		ImageProfile:                env("LATEXMK_IMAGE_PROFILE", "development"),
+		Engines:                     splitCSV(env("LATEXMK_ENGINES", "xelatex,lualatex,pdflatex")),
+		AllowShellEscape:            allowShellEscape,
+		EnableLegacyCompile:         enableLegacyCompile,
+		CompileTimeout:              compileTimeout,
+		ShutdownTimeout:             shutdownTimeout,
+		MaxUploadBytes:              maxUploadBytes,
+		MaxExpandedBytes:            maxExpandedBytes,
+		MaxArtifactBytes:            maxArtifactBytes,
+		MaxFiles:                    maxFiles,
+		MaxConcurrentCompiles:       maxConcurrent,
+		MaxQueuedJobs:               maxQueuedJobs,
+		MaxLogBytes:                 maxLogBytes,
+		MaxStateBytes:               maxStateBytes,
+		MaxUploadSessions:           maxUploadSessions,
+		ResultRetention:             resultRetention,
+		SnapshotRetention:           snapshotRetention,
+		BlobRetention:               blobRetention,
+		StateSweepInterval:          stateSweepInterval,
+		TempDir:                     os.Getenv("LATEXMK_TEMP_DIR"),
+		StateDir:                    env("LATEXMK_STATE_DIR", "/tmp/latexmk-state"),
+		DatabaseMode:                env("LATEXMK_DATABASE_MODE", "postgres"),
+		CORSOrigins:                 splitRawCSV(os.Getenv("LATEXMK_CORS_ORIGINS")),
 	}
 	if v := os.Getenv("LATEXMK_ADDR"); v != "" {
 		cfg.Addr = v
 	}
-	if cfg.MaxRealtimeSessions <= 0 || cfg.RealtimeSessionTTL <= 0 || cfg.RunnerPIDs <= 0 || cfg.RunnerCPUs <= 0 {
+	if cfg.MaxRealtimeSessions < 0 || cfg.RealtimeSessionTTL <= 0 || cfg.RunnerPIDs <= 0 || cfg.RunnerCPUs <= 0 {
 		return Config{}, fmt.Errorf("realtime session and runner limits must be positive")
 	}
 	if cfg.RunnerImage != "" &&

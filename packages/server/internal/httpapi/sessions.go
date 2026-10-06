@@ -24,7 +24,11 @@ func (s *Server) createSession(c *gin.Context) {
 	principal, _ := auth.FromContext(c.Request.Context())
 	session, err := s.jobs.CreateSession(c.Request.Context(), principal.ID, req)
 	if err != nil {
-		writeError(c, http.StatusBadRequest, err.Error())
+		status := http.StatusBadRequest
+		if errors.Is(err, jobs.ErrSessionCapacity) {
+			status = http.StatusTooManyRequests
+		}
+		writeError(c, status, err.Error())
 		return
 	}
 	c.Header("Location", "/v1/sessions/"+session.ID)
@@ -60,6 +64,9 @@ func (s *Server) submitRevision(c *gin.Context) {
 	job, err := s.jobs.SubmitRevision(c.Request.Context(), principal.ID, c.Param("id"), req)
 	if err != nil {
 		status := http.StatusBadRequest
+		if errors.Is(err, jobs.ErrQueueCapacity) || errors.Is(err, jobs.ErrRevisionRate) {
+			status = http.StatusTooManyRequests
+		}
 		if errors.Is(err, jobs.ErrSessionNotFound) {
 			status = http.StatusNotFound
 		}
@@ -88,6 +95,16 @@ func (s *Server) sessionEvents(c *gin.Context) {
 		writeError(c, http.StatusNotFound, err.Error())
 		return
 	}
+	release, err := s.jobs.SubscribeSession(principal.ID, c.Param("id"))
+	if err != nil {
+		status := http.StatusNotFound
+		if errors.Is(err, jobs.ErrSessionCapacity) {
+			status = http.StatusTooManyRequests
+		}
+		writeError(c, status, err.Error())
+		return
+	}
+	defer release()
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Accel-Buffering", "no")

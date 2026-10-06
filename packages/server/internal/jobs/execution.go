@@ -27,10 +27,9 @@ type execution struct {
 }
 
 func (m *Manager) execute(ctx context.Context, rec record, workspace *compile.Workspace) execution {
-	m.admissionMu.Lock()
-	s := m.sessions[rec.Job.SessionID]
-	isolated := s != nil && s.state.Workspace == "reuse"
-	m.admissionMu.Unlock()
+	// Isolation follows the immutable job identity, even if its live session was
+	// concurrently closed. A session job must never fall back to a native runner.
+	isolated := rec.Job.SessionID != "" && m.cfg.RunnerImage != ""
 	if isolated {
 		return m.executeIsolated(ctx, rec, workspace)
 	}
@@ -65,7 +64,8 @@ func (m *Manager) executeIsolated(ctx context.Context, rec record, workspace *co
 	m.admissionMu.Lock()
 	s := m.sessions[rec.Job.SessionID]
 	cachePath := ""
-	if s != nil && !rec.Request.Force && project.CompatibleCacheInputs(s.cacheInputs, rec.Snapshot.Files) {
+	if s != nil && s.state.Workspace == "reuse" && !rec.Request.Force && time.Now().Before(s.cacheExpires) &&
+		project.CompatibleCacheInputs(s.cacheInputs, rec.Snapshot.Files) {
 		cachePath = s.cachePath
 	}
 	for _, file := range rec.Snapshot.Files {
@@ -144,7 +144,7 @@ func (m *Manager) publishExecution(ctx context.Context, rec record, workspace *c
 	}
 	if e.isolated {
 		s := m.sessions[rec.Job.SessionID]
-		if s == nil || s.state.RunningJobID != rec.Job.ID || e.checkpoint == "" {
+		if s == nil || s.state.Workspace != "reuse" || s.state.RunningJobID != rec.Job.ID || e.checkpoint == "" {
 			return
 		}
 		root, err := safefs.Open(filepath.Dir(e.checkpoint))
@@ -169,6 +169,13 @@ func (m *Manager) publishExecution(ctx context.Context, rec record, workspace *c
 			e.cache.Warning = err.Error()
 			return
 		}
+		ttl := m.cfg.CompileCacheRetention
+		if rec.Request.Auxiliary.ServerTTL != "" {
+			requested, _ := time.ParseDuration(rec.Request.Auxiliary.ServerTTL)
+			ttl = min(ttl, requested)
+		}
+		s.cacheExpires = time.Now().UTC().Add(ttl)
+		e.output.Result.AuxiliaryExpiresAt = &s.cacheExpires
 		s.cachePath = path
 		s.cacheInputs = append([]api.ProjectFile(nil), rec.Snapshot.Files...)
 		s.cacheStamps = e.stamps
@@ -199,6 +206,7 @@ func (m *Manager) publishExecution(ctx context.Context, rec record, workspace *c
 }
 
 func (m *Manager) clearSessionCacheLocked(s *liveSession) {
+	s.cacheExpires = time.Time{}
 	s.cachePath = ""
 	s.cacheInputs = nil
 	s.cacheStamps = nil

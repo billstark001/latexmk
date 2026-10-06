@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -93,6 +94,7 @@ func main() {
 	apiServer := httpapi.New(cfg, meta, runner, authManager, db, projects, queue, logger)
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
+		BaseContext:       func(net.Listener) context.Context { return signalCtx },
 		Handler:           apiServer.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,

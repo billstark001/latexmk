@@ -91,3 +91,14 @@ func TestCompileCacheLimitCanDisableFeature(t *testing.T) {
 		t.Fatalf("cache limits: %+v %v", cfg, err)
 	}
 }
+
+func TestRealtimeSessionsCanBeDisabled(t *testing.T) {
+	t.Setenv("LATEXMK_AUTH_MODE", "none")
+	t.Setenv("LATEXMK_API_TOKEN", "")
+	t.Setenv("LATEXMK_API_TOKEN_FILE", "")
+	t.Setenv("LATEXMK_MAX_REALTIME_SESSIONS", "0")
+	cfg, err := Load()
+	if err != nil || cfg.MaxRealtimeSessions != 0 || cfg.MaxRealtimeSessionsPerOwner <= 0 {
+		t.Fatalf("sessions=%+v %v", cfg, err)
+	}
+}
