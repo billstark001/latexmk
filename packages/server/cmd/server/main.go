@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/billstark001/latexmk/packages/server/internal/jobs"
 	"github.com/billstark001/latexmk/packages/server/internal/metadata"
 	"github.com/billstark001/latexmk/packages/server/internal/project"
+	"github.com/billstark001/latexmk/packages/server/internal/sandbox"
 	"github.com/billstark001/latexmk/packages/server/internal/store"
 )
 
@@ -27,6 +30,24 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 {
+		if len(os.Args) != 4 || os.Args[1] != "compile-worker" {
+			fmt.Fprintln(os.Stderr, "invalid server invocation")
+			os.Exit(2)
+		}
+		maxBytes, err := strconv.ParseInt(os.Args[2], 10, 64)
+		maxFiles, parseErr := strconv.Atoi(os.Args[3])
+		if err != nil || parseErr != nil || maxBytes <= 0 || maxFiles <= 0 {
+			fmt.Fprintln(os.Stderr, "invalid worker limits")
+			os.Exit(2)
+		}
+		if err := sandbox.Worker(os.Stdin, os.Stdout, maxBytes, maxFiles); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	cfg, err := config.Load()
 	if err != nil {
@@ -36,6 +57,10 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	if err := sandbox.Validate(ctx, cfg); err != nil {
+		logger.Error("isolated runner initialization failed", "error", err)
+		os.Exit(2)
+	}
 	var db *store.Postgres
 	if cfg.DatabaseURL != "" {
 		db, err = store.Open(ctx, cfg.DatabaseURL)

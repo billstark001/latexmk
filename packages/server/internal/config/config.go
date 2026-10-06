@@ -15,6 +15,7 @@ import (
 )
 
 type Config struct {
+	RunnerNamespace      string
 	MaxRealtimeSessions  int
 	RealtimeSessionTTL   time.Duration
 	RunnerImage          string
@@ -166,8 +167,14 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		MaxRealtimeSessions: maxSessions, RealtimeSessionTTL: sessionTTL, RunnerImage: strings.TrimSpace(os.Getenv("LATEXMK_RUNNER_IMAGE")),
-		RunnerMemoryBytes: runnerMemory, RunnerWorkspaceBytes: runnerWorkspace, RunnerPIDs: runnerPIDs, RunnerCPUs: runnerCPUs,
+		MaxRealtimeSessions:   maxSessions,
+		RealtimeSessionTTL:    sessionTTL,
+		RunnerImage:           strings.TrimSpace(os.Getenv("LATEXMK_RUNNER_IMAGE")),
+		RunnerNamespace:       strings.TrimSpace(os.Getenv("LATEXMK_RUNNER_NAMESPACE")),
+		RunnerMemoryBytes:     runnerMemory,
+		RunnerWorkspaceBytes:  runnerWorkspace,
+		RunnerPIDs:            runnerPIDs,
+		RunnerCPUs:            runnerCPUs,
 		CompileCacheRetention: cacheRetention,
 		MaxCompileCacheBytes:  cacheBytes,
 		CompileCacheEpoch:     os.Getenv("LATEXMK_COMPILE_CACHE_EPOCH"),
@@ -205,6 +212,10 @@ func Load() (Config, error) {
 	}
 	if cfg.MaxRealtimeSessions <= 0 || cfg.RealtimeSessionTTL <= 0 || cfg.RunnerPIDs <= 0 || cfg.RunnerCPUs <= 0 {
 		return Config{}, fmt.Errorf("realtime session and runner limits must be positive")
+	}
+	if cfg.RunnerImage != "" &&
+		(len(cfg.RunnerNamespace) < 8 || len(cfg.RunnerNamespace) > 64 || strings.Trim(cfg.RunnerNamespace, "abcdefghijklmnopqrstuvwxyz0123456789-_") != "") {
+		return Config{}, fmt.Errorf("LATEXMK_RUNNER_NAMESPACE must be a unique 8-64 character lowercase identifier")
 	}
 	if cfg.RunnerImage != "" && !validRunnerImage(cfg.RunnerImage) {
 		return Config{}, fmt.Errorf("LATEXMK_RUNNER_IMAGE must be an immutable sha256 image reference")

@@ -22,20 +22,52 @@ import (
 
 func sessionManager(t *testing.T) (*Manager, api.SessionRequest) {
 	t.Helper()
-	cfg := config.Config{StateDir: t.TempDir(), TempDir: t.TempDir(), Engines: []string{"xelatex"}, MaxFiles: 100, MaxExpandedBytes: 8192, MaxUploadBytes: 8192, MaxStateBytes: 1 << 20, MaxArtifactBytes: 8192, MaxLogBytes: 8192, MaxConcurrentCompiles: 2, MaxQueuedJobs: 2, CompileTimeout: 3 * time.Second, ShutdownTimeout: time.Second, MaxRealtimeSessions: 4, RealtimeSessionTTL: time.Minute}
+	cfg := config.Config{
+		StateDir:              t.TempDir(),
+		TempDir:               t.TempDir(),
+		Engines:               []string{"xelatex"},
+		MaxFiles:              100,
+		MaxExpandedBytes:      8192,
+		MaxUploadBytes:        8192,
+		MaxStateBytes:         1 << 20,
+		MaxArtifactBytes:      8192,
+		MaxLogBytes:           8192,
+		MaxConcurrentCompiles: 2,
+		MaxQueuedJobs:         2,
+		CompileTimeout:        3 * time.Second,
+		ShutdownTimeout:       time.Second,
+		MaxRealtimeSessions:   4,
+		RealtimeSessionTTL:    time.Minute,
+	}
 	p, err := project.New(cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	m := New(cfg, api.Metadata{}, compile.NewRunner(cfg), p, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	return m, api.SessionRequest{ProjectID: "paper", Workspace: "fresh", Request: api.CompileRequest{ProtocolVersion: 2, Entry: "main.tex", Engine: "xelatex", Interaction: "nonstopmode"}}
+	return m, api.SessionRequest{
+		ProjectID: "paper",
+		Workspace: "fresh",
+		Request: api.CompileRequest{
+			ProtocolVersion: 2,
+			Entry:           "main.tex",
+			Engine:          "xelatex",
+			Interaction:     "nonstopmode",
+		},
+	}
 }
 
 func planRevision(t *testing.T, m *Manager, req api.SessionRequest, content string, base uint64) api.RevisionRequest {
 	t.Helper()
 	digest := sha256.Sum256([]byte(content))
 	hash := hex.EncodeToString(digest[:])
-	plan, err := m.projects.Plan("owner", api.UploadPlanRequest{ProjectID: req.ProjectID, Request: req.Request, Files: []api.ProjectFile{{Path: "main.tex", SHA256: hash, Size: int64(len(content))}}})
+	plan, err := m.projects.Plan(
+		"owner",
+		api.UploadPlanRequest{
+			ProjectID: req.ProjectID,
+			Request:   req.Request,
+			Files:     []api.ProjectFile{{Path: "main.tex", SHA256: hash, Size: int64(len(content))}},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +76,11 @@ func planRevision(t *testing.T, m *Manager, req api.SessionRequest, content stri
 			t.Fatal(err)
 		}
 	}
-	return api.RevisionRequest{UploadID: plan.UploadID, BaseRevision: base, IdempotencyKey: fmt.Sprintf("revision-key-%016d", base)}
+	return api.RevisionRequest{
+		UploadID:       plan.UploadID,
+		BaseRevision:   base,
+		IdempotencyKey: fmt.Sprintf("revision-key-%016d", base),
+	}
 }
 
 func TestSessionCoalescesWithoutGrowingQueueAndReplaysReceipts(t *testing.T) {

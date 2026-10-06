@@ -86,6 +86,16 @@ func New(cfg config.Config, db *store.Postgres) (*Manager, error) {
 			return nil, fmt.Errorf("create state directory: %w", err)
 		}
 	}
+	// Session leases are process-local; startup never resumes an orphaned checkpoint.
+	stateRoot, err := safefs.Open(stateDir)
+	if err != nil {
+		return nil, err
+	}
+	cleanupErr := stateRoot.RemoveAll("live-cache")
+	closeErr := stateRoot.Close()
+	if err := errors.Join(cleanupErr, closeErr); err != nil {
+		return nil, err
+	}
 	stateBytes, err := directorySize(stateDir)
 	if err != nil {
 		return nil, fmt.Errorf("measure state directory: %w", err)

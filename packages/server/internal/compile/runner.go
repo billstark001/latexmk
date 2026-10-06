@@ -105,7 +105,22 @@ func (r *Runner) ValidateRequest(req api.CompileRequest) error {
 	return nil
 }
 
+type RunOptions struct {
+	BuildDirectory   string
+	PreserveRecorder bool
+}
+
 func (r *Runner) Run(parent context.Context, workspace string, req api.CompileRequest, requestID string) Output {
+	return r.RunWithOptions(parent, workspace, req, requestID, RunOptions{})
+}
+
+func (r *Runner) RunWithOptions(
+	parent context.Context,
+	workspace string,
+	req api.CompileRequest,
+	requestID string,
+	opts RunOptions,
+) Output {
 	started := time.Now()
 	result := api.CompileResult{
 		ProtocolVersion: api.ProtocolVersion,
@@ -132,12 +147,21 @@ func (r *Runner) Run(parent context.Context, workspace string, req api.CompileRe
 
 	ctx, cancel := context.WithTimeout(parent, r.Config.CompileTimeout)
 	defer cancel()
-	if err := removeStaleRecorderFiles(workspace); err != nil {
-		result.Error = err.Error()
-		result.DurationMS = time.Since(started).Milliseconds()
-		return Output{Result: result}
+	if !opts.PreserveRecorder {
+		if err := removeStaleRecorderFiles(workspace); err != nil {
+			result.Error = err.Error()
+			result.DurationMS = time.Since(started).Milliseconds()
+			return Output{Result: result}
+		}
 	}
 	args := commandArgs(req)
+	if opts.BuildDirectory != "" {
+		if opts.BuildDirectory != ".latexmk-build" {
+			result.Error = "invalid build directory"
+			return Output{Result: result}
+		}
+		args = append(args[:len(args)-1], "-outdir="+opts.BuildDirectory, req.Entry)
+	}
 	env, err := sandboxEnvironment(workspace, req.ShellEscape)
 	if err != nil {
 		result.Error = err.Error()
@@ -167,6 +191,18 @@ func (r *Runner) Run(parent context.Context, workspace string, req api.CompileRe
 		}
 		result.Success = false
 	}
+	if opts.BuildDirectory != "" {
+		var generated []File
+		prefix := opts.BuildDirectory + "/"
+		for _, file := range files {
+			if strings.HasPrefix(file.RelativePath, prefix) {
+				file.Workspace = filepath.Join(workspace, opts.BuildDirectory)
+				file.RelativePath = strings.TrimPrefix(file.RelativePath, prefix)
+				generated = append(generated, file)
+			}
+		}
+		files = generated
+	}
 	for _, f := range files {
 		result.Artifacts = append(result.Artifacts, api.Artifact{Path: f.RelativePath, Size: f.Size, SHA256: f.SHA256})
 	}
@@ -180,7 +216,11 @@ func (r *Runner) Run(parent context.Context, workspace string, req api.CompileRe
 			}
 			result.Success = false
 		} else {
-			result.InputFiles = inputFiles
+			for _, name := range inputFiles {
+				if !strings.HasPrefix(name, ".latexmk-build/") && !strings.HasPrefix(name, ".latexmk-home/") {
+					result.InputFiles = append(result.InputFiles, name)
+				}
+			}
 		}
 	}
 	if req.DetectMissingFiles && !result.Success {

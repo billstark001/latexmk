@@ -142,7 +142,7 @@ func (m *Manager) readCompileCache(path string) (compileCacheRecord, error) {
 	return record, nil
 }
 
-func compatibleCacheInputs(previous, current []api.ProjectFile) bool {
+func CompatibleCacheInputs(previous, current []api.ProjectFile) bool {
 	if len(previous) != len(current) {
 		return false
 	}
@@ -190,7 +190,7 @@ func (m *Manager) RestoreCompileCache(snapshot Snapshot, key, workspace string) 
 		info.Reason = "auxiliary cache expired"
 		return info
 	}
-	if !compatibleCacheInputs(record.Inputs, snapshot.Files) {
+	if !CompatibleCacheInputs(record.Inputs, snapshot.Files) {
 		info.Reason = "input set or non-TeX input changed"
 		return info
 	}

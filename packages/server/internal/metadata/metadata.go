@@ -54,7 +54,10 @@ func Collect(cfg config.Config, build BuildInfo) api.Metadata {
 		AuthMode:        cfg.AuthMode,
 		Database:        database,
 		Capabilities: api.Capabilities{
-			RealtimeSessions: cfg.MaxRealtimeSessions > 0, IsolatedWorkspaces: cfg.RunnerImage != "", MaxRealtimeSessions: cfg.MaxRealtimeSessions, SessionTTLMS: cfg.RealtimeSessionTTL.Milliseconds(),
+			RealtimeSessions:        cfg.MaxRealtimeSessions > 0,
+			IsolatedWorkspaces:      cfg.RunnerImage != "",
+			MaxRealtimeSessions:     cfg.MaxRealtimeSessions,
+			SessionTTLMS:            cfg.RealtimeSessionTTL.Milliseconds(),
 			CompileCache:            cfg.CompileCacheRetention > 0 && cfg.MaxCompileCacheBytes > 0,
 			AuxiliaryRetention:      true,
 			CompileCacheRetentionMS: cfg.CompileCacheRetention.Milliseconds(),

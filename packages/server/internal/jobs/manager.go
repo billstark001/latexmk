@@ -83,7 +83,15 @@ func (m *Manager) Start(ctx context.Context) {
 			for _, job := range pending {
 				if job.SessionID != "" {
 					now := time.Now().UTC()
-					_ = m.db.UpdateJob(ctx, job.ID, map[string]any{"status": "cancelled", "error": "session ended when the server restarted; submit a new session", "finished_at": &now})
+					_ = m.db.UpdateJob(
+						ctx,
+						job.ID,
+						map[string]any{
+							"status":      "cancelled",
+							"error":       "session ended when the server restarted; submit a new session",
+							"finished_at": &now,
+						},
+					)
 					continue
 				}
 				rec, decodeErr := recordFromRow(job)
@@ -636,71 +644,28 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 		m.finish(ctx, rec, nil, "could not materialize project: "+err.Error(), false)
 		return
 	}
-	cacheKey := project.CompileCacheKey(rec.Request, m.meta, m.cfg.CompileCacheEpoch)
-	var cacheInfo *api.CompileCache
-	if rec.Request.Auxiliary.Server == "reuse" {
-		info := api.CompileCache{Status: "bypass", Reason: "forced clean compile"}
-		if !rec.Request.Force {
-			info = m.projects.RestoreCompileCache(rec.Snapshot, cacheKey, workspace)
-		}
-		cacheInfo = &info
-	}
+
 	compileCtx, cancelCompile := context.WithTimeout(jobCtx, m.cfg.CompileTimeout)
 	defer cancelCompile()
-	compileStarted := time.Now()
-	output := m.runner.Run(compileCtx, workspace, rec.Request, rec.Job.ID)
-	if cacheInfo != nil && cacheInfo.Status == "hit" && !output.Result.Success && !output.Result.TimedOut &&
-		compileCtx.Err() == nil {
-		// Auxiliary files can refer to macros removed by an ordinary TeX edit.
-		// Retry once from the immutable source snapshot, within the same deadline.
-		cacheInfo.ColdRetry = true
-		cacheInfo.Reason = "warm compile failed; retried with clean sources"
-		resetErr := jobWorkspace.Reset()
-		if resetErr == nil {
-			resetErr = m.projects.Materialize(rec.Snapshot, workspace)
-		}
-		if resetErr != nil {
-			m.finish(ctx, rec, nil, "could not reset warm compile workspace", false)
-			return
-		}
-		output = m.runner.Run(compileCtx, workspace, rec.Request, rec.Job.ID)
-	}
+	started := time.Now()
+	executed := m.execute(compileCtx, rec, jobWorkspace)
+	output := executed.output
 	output.Result.SessionID, output.Result.Revision = rec.Job.SessionID, rec.Job.Revision
-	output.Result.DurationMS = time.Since(compileStarted).Milliseconds()
-	output.Result.CompileCache = cacheInfo
+	output.Result.DurationMS = time.Since(started).Milliseconds()
+	output.Result.CompileCache = executed.cache
 	output.Result.ServerVersion = m.meta.Version
 	output.Result.ImageProfile = m.meta.ImageProfile
 	retained := compile.RetainArtifacts(output, rec.Request, m.cfg.ResultRetention)
-	_, err = m.projects.WriteResult(rec.OwnerID, rec.Job.ID, retained)
-	if err != nil {
+	if _, err := m.projects.WriteResult(rec.OwnerID, rec.Job.ID, retained); err != nil {
 		m.finish(ctx, rec, &output.Result, "could not package compile result: "+err.Error(), false)
 		return
 	}
-	if cacheInfo != nil && output.Result.Success && ctx.Err() == nil {
-		if rec.Request.Auxiliary.ServerTTL != "" {
-			ttl, _ := time.ParseDuration(rec.Request.Auxiliary.ServerTTL)
-			if ttl > m.cfg.CompileCacheRetention {
-				ttl = m.cfg.CompileCacheRetention
-			}
-			expires := time.Now().UTC().Add(ttl)
-			output.Result.AuxiliaryExpiresAt = &expires
-		}
-		count, cacheErr := m.projects.SaveCompileCache(
-			rec.Snapshot,
-			cacheKey,
-			workspace,
-			rec.Job.ID,
-			rec.Job.CreatedAt,
-			output,
-		)
-		cacheInfo.StoredFiles = count
-		if cacheErr != nil {
-			cacheInfo.Warning = cacheErr.Error()
-			m.logger.Warn("could not publish compile cache", "job_id", id, "error", cacheErr)
-		}
-	}
-	retained.Result.CompileCache = cacheInfo
+	m.admissionMu.Lock()
+	executed.output = output
+	m.publishExecution(compileCtx, rec, jobWorkspace, &executed)
+	retained.Result.CompileCache = executed.cache
 	m.finish(ctx, rec, &retained.Result, retained.Result.Error, true)
+	m.admissionMu.Unlock()
 }
 
 func (m *Manager) finish(
@@ -735,7 +700,12 @@ func (m *Manager) finish(
 		return
 	}
 	if !changed {
-		if current, getErr := m.Get(persistCtx, rec.OwnerID, rec.Job.ID); getErr == nil && current.Status == "cancelled" {
+		if current, getErr := m.Get(
+			persistCtx,
+			rec.OwnerID,
+			rec.Job.ID,
+		); getErr == nil &&
+			current.Status == "cancelled" {
 			m.projects.ReleaseSnapshot(rec.Snapshot.ID)
 		}
 		m.logger.Warn("compile job state changed before finish", "job_id", rec.Job.ID)

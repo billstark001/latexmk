@@ -22,6 +22,10 @@ type revisionReceipt struct {
 	jobID   string
 }
 type liveSession struct {
+	cachePath    string
+	cacheInputs  []api.ProjectFile
+	cacheHashes  map[string]string
+	cacheStamps  map[string]int64
 	ownerID      string
 	request      api.CompileRequest
 	state        api.Session
@@ -65,7 +69,18 @@ func (m *Manager) CreateSession(ctx context.Context, ownerID string, req api.Ses
 	if err != nil {
 		return api.Session{}, err
 	}
-	s := &liveSession{ownerID: ownerID, request: req.Request, state: api.Session{ID: id, ProjectID: req.ProjectID, Workspace: req.Workspace, ExpiresAt: time.Now().UTC().Add(m.cfg.RealtimeSessionTTL)}, receipts: make(map[string]revisionReceipt), changed: make(chan struct{})}
+	s := &liveSession{
+		ownerID: ownerID,
+		request: req.Request,
+		state: api.Session{
+			ID:        id,
+			ProjectID: req.ProjectID,
+			Workspace: req.Workspace,
+			ExpiresAt: time.Now().UTC().Add(m.cfg.RealtimeSessionTTL),
+		},
+		receipts: make(map[string]revisionReceipt),
+		changed:  make(chan struct{}),
+	}
 	m.sessions[id] = s
 	m.publishSessionLocked(s, "created", api.Job{})
 	return s.state, nil
@@ -94,7 +109,8 @@ func (m *Manager) GetSession(ctx context.Context, ownerID, id string) (api.Sessi
 // SubmitRevision atomically chooses the next wanted snapshot. Only one queue
 // token exists per idle session, so rapid replacements cannot fill the channel.
 func (m *Manager) SubmitRevision(ctx context.Context, ownerID, id string, req api.RevisionRequest) (api.Job, error) {
-	if len(req.IdempotencyKey) < 16 || len(req.IdempotencyKey) > 64 || strings.ContainsAny(req.IdempotencyKey, "\r\n\x00") {
+	if len(req.IdempotencyKey) < 16 || len(req.IdempotencyKey) > 64 ||
+		strings.ContainsAny(req.IdempotencyKey, "\r\n\x00") {
 		return api.Job{}, errors.New("idempotencyKey must have 16-64 characters without control characters")
 	}
 	m.admissionMu.Lock()
@@ -128,7 +144,9 @@ func (m *Manager) SubmitRevision(ctx context.Context, ownerID, id string, req ap
 		return api.Job{}, errors.New("upload project or compile options do not match the session")
 	}
 	for _, file := range snapshot.Files {
-		if file.Path == ".latexmk-build" || strings.HasPrefix(file.Path, ".latexmk-build/") || file.Path == ".latexmk-home" || strings.HasPrefix(file.Path, ".latexmk-home/") {
+		if file.Path == ".latexmk-build" || strings.HasPrefix(file.Path, ".latexmk-build/") ||
+			file.Path == ".latexmk-home" ||
+			strings.HasPrefix(file.Path, ".latexmk-home/") {
 			return api.Job{}, errors.New("source uses a reserved runner directory")
 		}
 	}
@@ -146,7 +164,20 @@ func (m *Manager) SubmitRevision(ctx context.Context, ownerID, id string, req ap
 	if err != nil {
 		return api.Job{}, err
 	}
-	rec := record{OwnerID: ownerID, Snapshot: snapshot, Request: request, Job: api.Job{ID: jobID, ProjectID: snapshot.ProjectID, SnapshotID: snapshot.ID, SessionID: id, Revision: s.state.Revision + 1, Status: "queued", CreatedAt: time.Now().UTC()}}
+	rec := record{
+		OwnerID:  ownerID,
+		Snapshot: snapshot,
+		Request:  request,
+		Job: api.Job{
+			ID:         jobID,
+			ProjectID:  snapshot.ProjectID,
+			SnapshotID: snapshot.ID,
+			SessionID:  id,
+			Revision:   s.state.Revision + 1,
+			Status:     "queued",
+			CreatedAt:  time.Now().UTC(),
+		},
+	}
 	if err := m.save(ctx, rec); err != nil {
 		return api.Job{}, err
 	}
@@ -230,6 +261,8 @@ func (m *Manager) finishSession(ctx context.Context, rec record) {
 	s.state.RunningJobID = ""
 	if job.Status == "succeeded" {
 		s.state.LastSuccessfulJobID = job.ID
+	} else {
+		m.clearSessionCacheLocked(s)
 	}
 	m.publishSessionLocked(s, "finished", job)
 	m.scheduleSessionLocked(s)
@@ -237,7 +270,16 @@ func (m *Manager) finishSession(ctx context.Context, rec record) {
 
 func (m *Manager) publishSessionLocked(s *liveSession, kind string, job api.Job) {
 	s.state.EventSequence++
-	s.events = append(s.events, api.SessionEvent{Sequence: s.state.EventSequence, Type: kind, Revision: job.Revision, JobID: job.ID, Status: job.Status})
+	s.events = append(
+		s.events,
+		api.SessionEvent{
+			Sequence: s.state.EventSequence,
+			Type:     kind,
+			Revision: job.Revision,
+			JobID:    job.ID,
+			Status:   job.Status,
+		},
+	)
 	if len(s.events) > 64 {
 		s.events = s.events[len(s.events)-64:]
 	}
@@ -245,7 +287,7 @@ func (m *Manager) publishSessionLocked(s *liveSession, kind string, job api.Job)
 	s.changed = make(chan struct{})
 }
 
-// Events returns a bounded replay plus a broadcast notification. Subscribers
+// SessionEvents returns a bounded replay plus a broadcast notification. Subscribers
 // never run on a compile worker, and slow clients cannot backpressure compiles.
 func (m *Manager) SessionEvents(ownerID, id string, after uint64) ([]api.SessionEvent, <-chan struct{}, error) {
 	m.admissionMu.Lock()
@@ -289,6 +331,7 @@ func (m *Manager) closeSessionLocked(ctx context.Context, s *liveSession) error 
 	if s.snapshot.ID != "" {
 		m.projects.ReleaseSnapshot(s.snapshot.ID)
 	}
+	m.clearSessionCacheLocked(s)
 	close(s.changed)
 	delete(m.sessions, s.state.ID)
 	return nil

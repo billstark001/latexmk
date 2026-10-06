@@ -8,10 +8,11 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/auth"
 	"github.com/billstark001/latexmk/packages/server/internal/jobs"
-	"github.com/gin-gonic/gin"
 )
 
 func (s *Server) createSession(c *gin.Context) {
@@ -111,7 +112,12 @@ func (s *Server) sessionEvents(c *gin.Context) {
 			if err := controller.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
 				return
 			}
-			if _, err := fmt.Fprintf(c.Writer, "id: %d\nevent: session\ndata: %s\n\n", event.Sequence, data); err != nil {
+			if _, err := fmt.Fprintf(
+				c.Writer,
+				"id: %d\nevent: session\ndata: %s\n\n",
+				event.Sequence,
+				data,
+			); err != nil {
 				return
 			}
 			if err := controller.Flush(); err != nil {

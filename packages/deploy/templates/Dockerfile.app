@@ -2,6 +2,8 @@
 ARG GO_IMAGE=__GO_IMAGE__
 ARG RUNTIME_IMAGE=__RUNTIME_IMAGE__
 
+FROM __DOCKER_CLI_IMAGE__ AS docker-cli
+
 FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS builder
 WORKDIR /src
 ENV GOWORK=off CGO_ENABLED=0
@@ -21,6 +23,7 @@ RUN __GO_CACHE_MOUNT__ \
 
 FROM ${RUNTIME_IMAGE}
 RUN test "$LATEXMK_IMAGE_PROFILE" = "__IMAGE_PROFILE__"
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=builder --chmod=0755 /out/latexmk-server /usr/local/bin/latexmk-server
 EXPOSE 8080
 STOPSIGNAL SIGTERM

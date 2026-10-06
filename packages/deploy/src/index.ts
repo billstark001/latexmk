@@ -260,6 +260,7 @@ async function bundle(options: BundleOptions) {
         '__GO_CACHE_MOUNT__',
         options.preset.startsWith('railway') ? '' : '--mount=type=cache,target=/root/.cache/go-build,sharing=locked',
       )
+      .replaceAll('__DOCKER_CLI_IMAGE__', lock.dockerCliImage)
       .replaceAll('__GO_IMAGE__', lock.goImage)
       .replaceAll('__RUNTIME_IMAGE__', options.runtimeImage)
       .replaceAll('__IMAGE_PROFILE__', options.profile === 'slim' ? 'xelatex-cjk-slim' : 'texlive-full'),
@@ -336,6 +337,7 @@ interface RuntimeLock {
   texliveYear: number;
   repository: string;
   goImage: string;
+  dockerCliImage: string;
   images: Record<string, string>;
 }
 
