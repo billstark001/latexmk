@@ -123,6 +123,7 @@ func (r *Runner) RunWithOptions(
 ) Output {
 	started := time.Now()
 	result := api.CompileResult{
+		SourceRoot:      filepath.ToSlash(workspace),
 		ProtocolVersion: api.ProtocolVersion,
 		RequestID:       requestID,
 		Entry:           req.Entry,

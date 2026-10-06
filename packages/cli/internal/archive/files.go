@@ -41,7 +41,7 @@ func OpenFile(file File) (*os.File, error) {
 			return nil, fmt.Errorf("selected file is not regular: %s", file.Path)
 		}
 	}
-	f, err := fs.Open(name)
+	f, err := fs.OpenFile(name, os.O_RDONLY|regularOpenFlags, 0)
 	if err != nil {
 		return nil, err
 	}

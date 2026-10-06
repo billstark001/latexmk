@@ -60,7 +60,7 @@ func implicitTarget(cfg config.Resolved) (string, error) {
 }
 
 func runAllTargets(args []string, cfg config.Resolved) int {
-	if hasOption(args, "--watch") || hasOption(args, "--detach") {
+	if hasOption(args, "--realtime") || hasOption(args, "--watch") || hasOption(args, "--detach") {
 		return fail(errors.New("--target all does not support watch or detach"))
 	}
 	if _, ok := cfg.Targets["all"]; ok {

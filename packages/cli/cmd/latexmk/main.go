@@ -58,6 +58,8 @@ type compileOptions struct {
 	dryRun        bool
 	detach        bool
 	watch         bool
+	realtime      bool
+	controlFiles  []string
 	watchInterval time.Duration
 	watchDebounce time.Duration
 	insecure      bool
@@ -127,7 +129,12 @@ func run(args []string) int {
 	case "pdflatex", "pdflatex.exe":
 		forcedEngine = "pdflatex"
 	}
-	return runCompile(argv, forcedEngine, false)
+	for {
+		code := runCompile(argv, forcedEngine, false)
+		if code != reloadLiveSettings {
+			return code
+		}
+	}
 }
 
 func runCompile(args []string, forcedEngine string, listOnly bool) int {
@@ -241,6 +248,15 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		return fail(err)
 	}
 	opts.token = cfg.Token
+	opts.controlFiles = append(
+		[]string{
+			cfg.ConfigPath,
+			cfg.UserConfigPath,
+			cfg.EnvPath,
+			filepath.Join(opts.projectRoot, config.FileName),
+			filepath.Join(opts.projectRoot, config.EnvFileName),
+		},
+		cfg.DenyFiles...)
 	c, err := client.New(opts.server, opts.token, opts.timeout, opts.insecure)
 	if err != nil {
 		if opts.detach {
@@ -284,6 +300,9 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		JobName:         opts.jobName,
 		Force:           opts.force,
 		Quiet:           opts.quiet,
+	}
+	if opts.realtime {
+		return runLive(c, request, opts)
 	}
 	if opts.watch {
 		return runWatch(c, request, opts)
@@ -769,6 +788,8 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 			opts.dryRun = true
 		case a == "--detach":
 			opts.detach = true
+		case a == "--realtime":
+			opts.realtime, opts.watch = true, true
 		case a == "--watch":
 			opts.watch = true
 		case a == "--watch-interval" || strings.HasPrefix(a, "--watch-interval="):
@@ -1470,6 +1491,7 @@ Compile options:
   --json                       Print machine-readable result
   --dry-run                    Print the upload manifest without contacting the server
   --detach                     Return after creating an immutable queued job
+  --realtime                   Watch with revisioned sessions and atomic PDF bundles
   --watch                      Recompile after selected dependency changes
   --watch-interval 500ms       Refresh selection and poll selected files
   --watch-debounce 500ms       Wait for rapid edits to settle before compiling

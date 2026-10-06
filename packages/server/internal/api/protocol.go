@@ -53,6 +53,7 @@ type Artifact struct {
 type CompileResult struct {
 	SessionID          string        `json:"sessionId,omitempty"`
 	Revision           uint64        `json:"revision,omitempty"`
+	SourceRoot         string        `json:"sourceRoot,omitempty"`
 	WorkspaceReuse     bool          `json:"workspaceReuse,omitempty"`
 	AuxiliaryExpiresAt *time.Time    `json:"auxiliaryExpiresAt,omitempty"`
 	CompileCache       *CompileCache `json:"compileCache,omitempty"`

@@ -111,7 +111,7 @@ func DefaultDeny() []string {
 		FileName,
 		EnvFileName, TokenFileName, ".latexmk.env", ".latexmk-manifest", ".latexmk-cache/",
 		".latexmkignore",
-		".latexmk-files",
+		".latexmk-files", ".latexmk-live/",
 		".env",
 		".env.*",
 		"*.key",

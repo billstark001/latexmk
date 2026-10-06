@@ -504,16 +504,37 @@ func (c *Client) startQueued(
 	request protocol.CompileRequest,
 	files []projectarchive.File,
 ) (protocol.Job, error) {
+	plan, err := c.uploadManifest(ctx, request, files)
+	if err != nil {
+		return protocol.Job{}, err
+	}
 	var job protocol.Job
+	if err := c.jsonRequest(
+		ctx,
+		http.MethodPost,
+		"/v1/uploads/"+url.PathEscape(plan.UploadID)+"/commit",
+		nil,
+		&job,
+	); err != nil {
+		return job, err
+	}
+	return job, nil
+}
+
+func (c *Client) uploadManifest(
+	ctx context.Context,
+	request protocol.CompileRequest,
+	files []projectarchive.File,
+) (protocol.UploadPlan, error) {
 	if c.ProjectRoot == "" {
-		return job, errors.New("project root is not configured")
+		return protocol.UploadPlan{}, errors.New("project root is not configured")
 	}
 	projectID := c.ProjectID
 	if projectID == "" {
 		var err error
 		projectID, err = ResolveProjectID(c.ProjectRoot, true)
 		if err != nil {
-			return job, err
+			return protocol.UploadPlan{}, err
 		}
 	}
 	planRequest := protocol.UploadPlanRequest{
@@ -533,27 +554,18 @@ func (c *Client) startQueued(
 	}
 	var plan protocol.UploadPlan
 	if err := c.jsonRequest(ctx, http.MethodPost, "/v1/uploads/plans", planRequest, &plan); err != nil {
-		return job, err
+		return protocol.UploadPlan{}, err
 	}
 	for _, digest := range plan.Missing {
 		source, ok := byDigest[digest]
 		if !ok {
-			return job, fmt.Errorf("server requested digest absent from manifest: %s", digest)
+			return protocol.UploadPlan{}, fmt.Errorf("server requested digest absent from manifest: %s", digest)
 		}
 		if err := c.uploadBlob(ctx, plan.UploadID, digest, source); err != nil {
-			return job, err
+			return protocol.UploadPlan{}, err
 		}
 	}
-	if err := c.jsonRequest(
-		ctx,
-		http.MethodPost,
-		"/v1/uploads/"+url.PathEscape(plan.UploadID)+"/commit",
-		nil,
-		&job,
-	); err != nil {
-		return job, err
-	}
-	return job, nil
+	return plan, nil
 }
 
 func (c *Client) makeMultipart(request protocol.CompileRequest, files []projectarchive.File) (*os.File, string, error) {
