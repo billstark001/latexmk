@@ -333,7 +333,7 @@ func runDetachedCompile(c *client.Client, request protocol.CompileRequest, opts 
 		return 0
 	}
 	for _, warning := range out.Warnings {
-		fmt.Fprintln(os.Stderr, "latexmk: warning:", warning)
+		fmt.Fprintln(os.Stderr, "latexmk: warning:", terminalText(warning))
 	}
 	fmt.Printf(
 		"job ID: %s\nproject ID: %s\nsnapshot ID: %s\nstatus: %s\n",
@@ -365,16 +365,16 @@ func reportCompile(out client.CompileOutput, err error, opts compileOptions) int
 		return fail(err)
 	}
 	for _, warning := range out.Warnings {
-		fmt.Fprintln(os.Stderr, "latexmk: warning:", warning)
+		fmt.Fprintln(os.Stderr, "latexmk: warning:", terminalText(warning))
 	}
 	if opts.jsonOutput {
 		_ = json.NewEncoder(os.Stdout).Encode(out.Result)
 	} else {
 		if !opts.quiet && len(out.Stdout) > 0 {
-			_, _ = os.Stdout.Write(out.Stdout)
+			_, _ = fmt.Fprint(os.Stdout, terminalText(string(out.Stdout)))
 		}
 		if len(out.Stderr) > 0 {
-			_, _ = os.Stderr.Write(out.Stderr)
+			_, _ = fmt.Fprint(os.Stderr, terminalText(string(out.Stderr)))
 		}
 		if cache := out.Result.CompileCache; cache != nil {
 			fmt.Fprintf(
@@ -383,10 +383,10 @@ func reportCompile(out client.CompileOutput, err error, opts compileOptions) int
 				cache.Status,
 				cache.RestoredFiles,
 				cache.StoredFiles,
-				cache.Reason,
+				terminalText(cache.Reason),
 			)
 			if cache.Warning != "" {
-				fmt.Fprintln(os.Stderr, "latexmk: compile cache:", cache.Warning)
+				fmt.Fprintln(os.Stderr, "latexmk: compile cache:", terminalText(cache.Warning))
 			}
 		}
 		fmt.Fprintf(
@@ -405,7 +405,7 @@ func reportCompile(out client.CompileOutput, err error, opts compileOptions) int
 	}
 	if !out.Result.Success {
 		if out.Result.Error != "" {
-			fmt.Fprintln(os.Stderr, "latexmk:", out.Result.Error)
+			fmt.Fprintln(os.Stderr, "latexmk:", terminalText(out.Result.Error))
 		}
 		if out.Result.TimedOut {
 			return 124

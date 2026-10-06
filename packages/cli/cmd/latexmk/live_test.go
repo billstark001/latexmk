@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,5 +53,22 @@ func TestRealtimeSettingsChangeCancelsInFlightOperations(t *testing.T) {
 		t.Fatal(err)
 	case <-time.After(3 * time.Second):
 		t.Fatal("settings change left upload context active")
+	}
+}
+
+func TestCompilerReportDoesNotExecuteTerminalControls(t *testing.T) {
+	_, stdout, stderr := captureCommandOutput(t, func() int {
+		return reportCompile(
+			client.CompileOutput{
+				Result: protocol.CompileResult{Success: true},
+				Stdout: []byte("中文\n\x1b]52;clipboard\a\r\u009bunsafe"),
+				Stderr: []byte("\x1b[2Jerror"),
+			},
+			nil,
+			compileOptions{},
+		)
+	})
+	if strings.ContainsAny(stdout+stderr, "\x1b\a\r\u009b") || !strings.Contains(stdout, "中文\n") {
+		t.Fatalf("unsafe terminal text: %q %q", stdout, stderr)
 	}
 }
