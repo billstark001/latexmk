@@ -84,7 +84,8 @@ func New(
 }
 
 func (m *Manager) Start(ctx context.Context) {
-	go m.maintainSessions(ctx)
+	m.workers.Add(1)
+	go func() { defer m.workers.Done(); m.maintainSessions(ctx) }()
 	recoverIDs := make([]string, 0)
 	if m.db != nil {
 		pending, err := m.db.ListPendingJobs(ctx)
@@ -98,9 +99,10 @@ func (m *Manager) Start(ctx context.Context) {
 						ctx,
 						job.ID,
 						map[string]any{
-							"status":      "cancelled",
-							"error":       "session ended when the server restarted; submit a new session",
-							"finished_at": &now,
+							"snapshot_manifest": nil,
+							"status":            "cancelled",
+							"error":             "session ended when the server restarted; submit a new session",
+							"finished_at":       &now,
 						},
 					)
 					continue
@@ -964,6 +966,7 @@ func recordFromRow(row store.CompileJob) (record, error) {
 	job := api.Job{
 		SessionID: row.SessionID, Revision: row.Revision,
 		ID:         row.ID,
+		SnapshotID: row.SnapshotID,
 		ProjectID:  row.ProjectID,
 		Status:     row.Status,
 		CreatedAt:  row.CreatedAt,

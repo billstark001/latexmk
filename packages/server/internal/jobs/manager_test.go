@@ -411,3 +411,21 @@ func commitTestSnapshot(
 type testWriter struct{ t *testing.T }
 
 func (w testWriter) Write(p []byte) (int, error) { return len(p), nil }
+
+func TestTerminalDatabaseJobKeepsSnapshotIdentityAfterManifestPruning(t *testing.T) {
+	rec, err := recordFromRow(
+		store.CompileJob{
+			ID:         "job_done",
+			OwnerID:    "owner",
+			ProjectID:  "paper",
+			SnapshotID: "src_immutable",
+			SessionID:  "ses_live",
+			Revision:   7,
+			Status:     "succeeded",
+			Request:    []byte(`{"protocolVersion":2,"entry":"main.tex","engine":"xelatex"}`),
+		},
+	)
+	if err != nil || rec.Job.SnapshotID != "src_immutable" || rec.Job.SessionID != "ses_live" || rec.Job.Revision != 7 {
+		t.Fatalf("terminal identity=%+v %v", rec.Job, err)
+	}
+}
