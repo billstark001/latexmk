@@ -39,6 +39,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
     parser.add_argument("--controller-binary", type=Path)
+    parser.add_argument("--database-image", help="Optional pinned PostgreSQL test image")
     parser.add_argument("--cli", type=Path, default=Path("packages/cli/dist/latexmk"))
     args = parser.parse_args()
     assert "@sha256:" in args.image, "use a pinned, pre-pulled test image"
@@ -47,6 +48,10 @@ def main():
     namespace = "e2e-" + secrets.token_hex(8)
     token = secrets.token_hex(32)
     processes = []
+    database = name + "-db"
+    database_started = False
+    controller_started = False
+    network_started = False
     command = ["run", "-d", "--platform", "linux/amd64", "--name", name,
                "--user", "0:0", "-p", "127.0.0.1::8080", "--read-only",
                "--tmpfs", "/tmp:rw,nosuid,nodev,size=512m,mode=1777",
@@ -54,14 +59,28 @@ def main():
                "-e", "LATEXMK_AUTH_MODE=token", "-e", "LATEXMK_API_TOKEN=" + token,
                "-e", "LATEXMK_ENGINES=xelatex", "-e", "LATEXMK_MAX_CONCURRENT_COMPILES=1",
                "-e", "LATEXMK_MAX_REALTIME_SESSIONS_PER_OWNER=4",
-               "-e", "LATEXMK_COMPILE_TIMEOUT=20s",
+               "-e", "LATEXMK_COMPILE_TIMEOUT=60s",
                "-e", "LATEXMK_RUNNER_IMAGE=" + args.image,
                "-e", "LATEXMK_RUNNER_NAMESPACE=" + namespace]
     if args.controller_binary:
         command += ["-v", str(args.controller_binary.resolve()) + ":/usr/local/bin/latexmk-server:ro"]
     command.append(args.image)
     try:
+        if args.database_image:
+            assert "@sha256:" in args.database_image, "pin the test database image"
+            docker("network", "create", name)
+            network_started = True
+            password = secrets.token_hex(24)
+            docker("run", "-d", "--platform", "linux/amd64", "--name", database,
+                   "--network", name, "-e", "POSTGRES_DB=latexmk", "-e", "POSTGRES_USER=latexmk",
+                   "-e", "POSTGRES_PASSWORD=" + password, args.database_image)
+            database_started = True
+            wait_for(lambda: subprocess.run(["docker", "exec", database, "pg_isready", "-U", "latexmk"],
+                     capture_output=True).returncode == 0, timeout=30)
+            command[-1:-1] = ["--network", name, "-e",
+                "DATABASE_URL=postgres://latexmk:" + password + "@" + database + ":5432/latexmk?sslmode=disable"]
         docker(*command)
+        controller_started = True
         port = docker("port", name, "8080/tcp").split(":")[-1]
         base = "http://127.0.0.1:" + port
 
@@ -115,6 +134,7 @@ def main():
             with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
                 result = json.load(archive.extractfile("result.json"))
                 assert result["revision"] == job["revision"] and result["sessionId"] == sid
+                assert job["snapshotId"], "terminal database job lost immutable snapshot identity"
                 for artifact in result.get("artifacts", []):
                     data = archive.extractfile("artifacts/" + artifact["path"]).read()
                     assert len(data) == artifact["size"] and hashlib.sha256(data).hexdigest() == artifact["sha256"]
@@ -148,6 +168,18 @@ def main():
         result, _ = bundle(deleted)
         assert result["success"] and not result.get("workspaceReuse", False)
         print("PASS input membership invalidates checkpoint", flush=True)
+        files = {"main.tex": (r"\documentclass{article}\usepackage[backend=biber]{biblatex}"
+                 r"\addbibresource{refs.bib}\begin{document}\cite{sample}\printbibliography\end{document}" + "\n").encode(),
+                 "refs.bib": b"@book{sample,author={Example, Alice},title={First},year={2026}}\n"}
+        bibliography = completed(submit(files))
+        result, stdout = bundle(bibliography)
+        assert result["success"] and any(a["path"].endswith(".bbl") for a in result["artifacts"]), (result, stdout)
+        files["refs.bib"] = files["refs.bib"].replace(b"First", b"Other")
+        bibliography = completed(submit(files))
+        result, stdout = bundle(bibliography)
+        assert result["success"] and not result.get("workspaceReuse", False), (result, stdout)
+        deleted = bibliography
+        print("PASS Biber runs with bounded temporary storage and bibliography edits rebuild cold", flush=True)
         files["main.tex"] = source(r"\undefinedcommand")
         failed = completed(submit(files))
         assert failed["status"] == "failed", failed
@@ -211,15 +243,37 @@ def main():
             assert process.wait(timeout=20) == 0
             log.close()
             print("PASS CLI watch, atomic publication, failure recovery and session reconnect", flush=True)
+        if args.database_image:
+            session = api("POST", "/v1/sessions", {"projectId": "e2e-paper", "workspace": "reuse", "request": request})
+            sid, revision = session["id"], 0
+            blocked = submit({"main.tex": source(r"\loop\iftrue\repeat")})
+            wait_for(lambda: api("GET", "/v1/jobs/" + blocked["id"])["status"] == "running")
+            docker("kill", "--signal", "KILL", name)
+            docker("start", name)
+            base = "http://127.0.0.1:" + docker("port", name, "8080/tcp").split(":")[-1]
+            wait_for(ready)
+            assert api("GET", "/v1/jobs/" + blocked["id"])["status"] == "cancelled"
+            try:
+                api("GET", "/v1/sessions/" + sid)
+                raise AssertionError("session survived controller crash")
+            except urllib.error.HTTPError as failure:
+                assert failure.code == 404
+            print("PASS PostgreSQL terminal identity and crash recovery", flush=True)
     except BaseException:
-        print(docker("logs", "--tail", "60", name), flush=True)
+        if controller_started:
+            print(docker("logs", "--tail", "60", name), flush=True)
         raise
     finally:
         for process in processes:
             if process.poll() is None:
                 process.terminate()
                 process.wait(timeout=20)
-        docker("rm", "--force", name)
+        if controller_started:
+            docker("rm", "--force", name)
+        if database_started:
+            docker("rm", "--force", "-v", database)
+        if network_started:
+            docker("network", "rm", name)
         attempts = docker("ps", "-aq", "--filter", "label=latexmk.runner.namespace=" + namespace).split()
         if attempts:
             docker("rm", "--force", *attempts)

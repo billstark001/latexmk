@@ -241,7 +241,9 @@ func containerArgs(cfg config.Config, name string) []string {
 			3*cfg.MaxFiles+100,
 		),
 		"--tmpfs",
-		"/tmp:rw,nosuid,nodev,noexec,size=67108864,nr_inodes=1024,mode=1777",
+		// Biber PAR unpacks its interpreter and shared libraries here. Execution is
+		// already confined by the disposable worker boundary, credentials and quotas.
+		"/tmp:rw,nosuid,nodev,exec,size=134217728,nr_inodes=8192,mode=1777",
 		"--entrypoint",
 		"/usr/local/bin/latexmk-server",
 		"-i",

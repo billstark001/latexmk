@@ -119,7 +119,11 @@ limit is 16 MiB; configure `LATEXMK_MAX_COMPILE_CACHE_BYTES` for larger document
 
 Workers have no network, host bind mounts, Docker socket or controller credentials.
 They run as UID 10001 with a read-only image, dropped capabilities, no-new-privileges,
-PID/CPU/memory limits and size/inode-limited tmpfs. Shell escape is rejected in
+PID/CPU/memory limits and size/inode-limited tmpfs. `/work` is `noexec`;
+`/tmp` permits execution for Biber's bundled Perl interpreter and shared libraries,
+with an independent 128 MiB / 8192-inode bound. TeX and bibliography tools are
+treated as untrusted code inside the container boundary; `noexec` is an additional
+restriction on the source/build mount rather than the execution security boundary. Shell escape is rejected in
 isolated realtime sessions. Source copies are read-only and outputs use a separate
 build directory. Transport and checkpoint extraction reuse root-confined regular
 file validation and bounded hash verification. Cancelling an attempt kills its
@@ -146,5 +150,7 @@ and warm compilation, true no-op, same-size edits, input membership invalidation
 failure recovery, cancellation/coalescing, isolation flags and the actual CLI
 watch/publication/reconnect loop. It removes only its named controller and runner
 namespace. It never reads deployment credentials or changes production services.
-GitHub's application-image workflow runs the same checks before reporting a newly
+Add `--database-image postgres@sha256:DIGEST` to run with a disposable PostgreSQL
+database and verify terminal snapshot identity and controller crash recovery.
+GitHub's application-image workflow runs both storage modes before reporting a newly
 published image as successful. See [HTTP API](API.md) for session endpoints.

@@ -85,6 +85,9 @@ jobs:
           (cd packages/cli && GOWORK=off go build -trimpath -o dist/latexmk ./cmd/latexmk)
           docker pull "$IMAGE@$DIGEST"
           python3 scripts/realtime-e2e.py --image "$IMAGE@$DIGEST"
+          docker pull postgres:17-alpine
+          database_image=$(docker inspect --format '{{index .RepoDigests 0}}' postgres:17-alpine)
+          python3 scripts/realtime-e2e.py --image "$IMAGE@$DIGEST" --database-image "$database_image"
       - name: Record application image
         env:
           IMAGE: ${{ steps.context.outputs.image }}
