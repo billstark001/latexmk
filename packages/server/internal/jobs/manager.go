@@ -735,7 +735,7 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 
 	jobWorkspace, err := compile.NewWorkspace(m.cfg.TempDir)
 	if err != nil {
-		m.finish(ctx, rec, nil, "could not create compile workspace", false)
+		rec, _ = m.finish(ctx, rec, nil, "could not create compile workspace", false)
 		return
 	}
 	defer func() {
@@ -746,7 +746,7 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	workspace := jobWorkspace.Project
 
 	if err := m.projects.Materialize(rec.Snapshot, workspace); err != nil {
-		m.finish(ctx, rec, nil, "could not materialize project: "+err.Error(), false)
+		rec, _ = m.finish(ctx, rec, nil, "could not materialize project: "+err.Error(), false)
 		return
 	}
 
@@ -762,12 +762,14 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	output.Result.ImageProfile = m.meta.ImageProfile
 	retained := compile.RetainArtifacts(output, rec.Request, m.cfg.ResultRetention)
 	if _, err := m.projects.WriteResult(rec.OwnerID, rec.Job.ID, retained); err != nil {
-		m.finish(ctx, rec, &output.Result, "could not package compile result: "+err.Error(), false)
+		rec, _ = m.finish(ctx, rec, &output.Result, "could not package compile result: "+err.Error(), false)
 		return
 	}
 	executed.output = output
 	retained.Result.CompileCache = executed.cache
-	if completed, success := m.finish(ctx, rec, &retained.Result, retained.Result.Error, true); success {
+	completed, success := m.finish(ctx, rec, &retained.Result, retained.Result.Error, true)
+	rec = completed // Session cleanup uses the confirmed durable terminal state.
+	if success {
 		m.publishExecution(compileCtx, rec, jobWorkspace, &executed)
 		m.updatePublishedCache(ctx, completed, executed)
 	}
@@ -1063,8 +1065,6 @@ func (m *Manager) pruneLoop(ctx context.Context) {
 }
 
 func (m *Manager) pruneTerminal(ctx context.Context, cutoff time.Time) {
-	m.admissionMu.Lock()
-	defer m.admissionMu.Unlock()
 	m.mu.Lock()
 	protected := make([]string, 0, len(m.publications))
 	for id := range m.publications {
@@ -1072,7 +1072,9 @@ func (m *Manager) pruneTerminal(ctx context.Context, cutoff time.Time) {
 	}
 	m.mu.Unlock()
 	if m.db != nil {
-		removed, err := m.db.DeleteTerminalJobsBefore(ctx, cutoff, protected)
+		operation, cancel := m.persistenceContext(ctx)
+		defer cancel()
+		removed, err := m.db.DeleteTerminalJobsBefore(operation, cutoff, protected)
 		if err != nil {
 			m.logger.Error("terminal job metadata sweep failed", "error", err)
 		} else if removed > 0 {

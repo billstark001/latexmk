@@ -93,6 +93,50 @@ func TestRetentionCannotDeleteAnUnpublishedTerminalJob(t *testing.T) {
 	}
 }
 
+type pruneFaultStore struct {
+	*store.Postgres
+	started chan struct{}
+}
+
+func (s *pruneFaultStore) DeleteTerminalJobsBefore(ctx context.Context, _ time.Time, _ []string) (int64, error) {
+	close(s.started)
+	<-ctx.Done()
+	return 0, ctx.Err()
+}
+
+func TestDatabaseRetentionOutageDoesNotBlockSessions(t *testing.T) {
+	m, req := sessionManager(t)
+	m.cfg.ShutdownTimeout = 150 * time.Millisecond
+	session, err := m.CreateSession(context.Background(), "owner", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fault := &pruneFaultStore{started: make(chan struct{})}
+	m.db = fault
+	done := make(chan struct{})
+	go func() { m.pruneTerminal(context.Background(), time.Now()); close(done) }()
+	select {
+	case <-fault.started:
+	case <-time.After(time.Second):
+		t.Fatal("retention query did not start")
+	}
+	read := make(chan error, 1)
+	go func() { _, err := m.GetSession(context.Background(), "owner", session.ID); read <- err }()
+	select {
+	case err := <-read:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("retention query held global admission")
+	}
+	select {
+	case <-done:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("retention query had no bounded deadline")
+	}
+}
+
 func TestClosedSessionDiscardsLateCheckpointPublication(t *testing.T) {
 	m, req := sessionManager(t)
 	ctx := context.Background()
@@ -126,11 +170,12 @@ func TestClosedSessionDiscardsLateCheckpointPublication(t *testing.T) {
 
 type completionFaultStore struct {
 	*store.Postgres
-	mu        sync.Mutex
-	row       store.CompileJob
-	fail      bool
-	attempted chan struct{}
-	once      sync.Once
+	mu               sync.Mutex
+	row              store.CompileJob
+	fail             bool
+	failFinishedRead bool
+	attempted        chan struct{}
+	once             sync.Once
 }
 
 func (s *completionFaultStore) CountQueuedJobs(context.Context) (int64, error) {
@@ -145,7 +190,52 @@ func (s *completionFaultStore) CountQueuedJobs(context.Context) (int64, error) {
 func (s *completionFaultStore) GetJob(context.Context, string) (store.CompileJob, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failFinishedRead && s.row.FinishedAt != nil {
+		return store.CompileJob{}, errors.New("database disconnected after completion")
+	}
 	return s.row, nil
+}
+
+func TestConfirmedCompletionDoesNotNeedAnotherDatabaseRead(t *testing.T) {
+	m, req := sessionManager(t)
+	bin := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(bin, "latexmk"),
+		[]byte("#!/bin/sh\ncp main.tex main.pdf\n"),
+		0700,
+	); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ctx := context.Background()
+	session, err := m.CreateSession(ctx, "owner", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := m.SubmitRevision(ctx, "owner", session.ID, planRevision(t, m, req, "source", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := m.takeSession(<-m.queue)
+	rec, err := m.load(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _ := json.Marshal(rec.Request)
+	snapshot, _ := json.Marshal(rec.Snapshot)
+	m.db = &completionFaultStore{
+		failFinishedRead: true,
+		row: store.CompileJob{
+			ID: id, OwnerID: rec.OwnerID, ProjectID: job.ProjectID, SessionID: session.ID,
+			Revision: job.Revision, SnapshotID: rec.Snapshot.ID, Status: "queued",
+			Request: request, SnapshotManifest: snapshot,
+		},
+	}
+	m.run(ctx, 1, id)
+	state, err := m.GetSession(ctx, "owner", session.ID)
+	if err != nil || state.RunningJobID != "" || state.LastSuccessfulJobID != id {
+		t.Fatalf("confirmed durable completion left the session occupied: %+v, %v", state, err)
+	}
 }
 
 func (s *completionFaultStore) TransitionJob(
