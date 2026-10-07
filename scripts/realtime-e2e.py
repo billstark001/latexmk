@@ -170,6 +170,9 @@ def main():
         result, stdout = bundle(warm)
         assert result["success"] and result.get("workspaceReuse") and "Nothing to do" not in stdout, (result, stdout)
         print("PASS rapid same-size TeX edit rebuilds", flush=True)
+        print("TIMING execution-ms cold=" + str(first["result"]["durationMs"]) +
+              " noop=" + str(noop["result"]["durationMs"]) +
+              " tex-edit=" + str(warm["result"]["durationMs"]), flush=True)
         files["extra.sty"] = b"\\ProvidesPackage{extra}\n"
         changed = completed(submit(files))
         result, _ = bundle(changed)
@@ -241,7 +244,10 @@ def main():
         with tempfile.TemporaryDirectory(prefix="latexmk-live-cli-e2e-") as temp:
             project = Path(temp).resolve()
             entry = project / "main.tex"
-            entry.write_bytes(source("First"))
+            (project / "shared.tex").write_bytes(b"% immutable large dependency\n" * 12000)
+            def live_source(text):
+                return source(r"\input{shared.tex} " + text)
+            entry.write_bytes(live_source("First"))
             (project / ".latexmk.json").write_text(json.dumps({"server": base, "token": {"env": "LATEXMK_E2E_TOKEN"}, "engine": "xelatex"}))
             env = {key: value for key, value in os.environ.items() if not key.startswith("LATEXMK_")}
             env.update({"HOME": temp, "XDG_CONFIG_HOME": temp, "LATEXMK_E2E_TOKEN": token})
@@ -266,11 +272,11 @@ def main():
                     assert str(entry).encode() in sync, sync
                     assert b"/work/project/" not in sync, sync
             first_pointer = pointer.read_bytes()
-            entry.write_bytes(source(r"\undefinedcommand"))
+            entry.write_bytes(live_source(r"\undefinedcommand"))
             wait_for(lambda: "retaining the last successful PDF" in (project / "live-test.txt").read_text())
             assert pointer.read_bytes() == first_pointer
             replacement = project / "replacement.tex"
-            replacement.write_bytes(source("Third"))
+            replacement.write_bytes(live_source("Third"))
             replacement.replace(entry)
             current = wait_for(lambda: (value if (value := publication())["revision"] >= 3 else None))
             assert (pointer.parent / current["directory"] / "main.pdf").is_file()
@@ -281,7 +287,23 @@ def main():
             process.send_signal(signal.SIGINT)
             assert process.wait(timeout=20) == 0
             log.close()
-            print("PASS CLI watch, atomic publication, failure recovery and session reconnect", flush=True)
+            print("PASS CLI realtime, large captured inputs, atomic publication, failure recovery and reconnect", flush=True)
+            watch_log = open(project / "watch-test.txt", "w")
+            watch = subprocess.Popen([cli, "--watch", "--server-cache", "none", "--out-dir", str(project / "watch-out"), "main.tex"],
+                                     cwd=temp, env=env, stdout=watch_log, stderr=watch_log)
+            processes.append(watch)
+            watched_pdf = project / "watch-out" / "main.pdf"
+            def watched_result():
+                assert watch.poll() is None, (project / "watch-test.txt").read_text()
+                return hashlib.sha256(watched_pdf.read_bytes()).hexdigest() if watched_pdf.is_file() else None
+            first_pdf = wait_for(watched_result)
+            entry.write_bytes(live_source("Watch changed"))
+            wait_for(lambda: (digest if (digest := watched_result()) != first_pdf else None))
+            watch.send_signal(signal.SIGINT)
+            assert watch.wait(timeout=20) == 0
+            watch_log.close()
+            assert "--realtime is recommended" in (project / "watch-test.txt").read_text()
+            print("PASS existing watch still recompiles ordinary jobs and recommends realtime", flush=True)
         if args.database_image:
             session = api("POST", "/v1/sessions", {"projectId": "e2e-paper", "workspace": "reuse", "request": request, "idempotencyKey": secrets.token_hex(16)})
             sid, revision = session["id"], 0
