@@ -101,6 +101,65 @@ type pruneFaultStore struct {
 	started chan struct{}
 }
 
+type historyPublicationStore struct {
+	*store.Postgres
+	manager *Manager
+	row     store.CompileJob
+	churn   bool
+	lists   int
+	reads   int
+}
+
+func (s *historyPublicationStore) ListJobs(context.Context, string, int) ([]store.CompileJob, error) {
+	s.lists++
+	if s.lists == 1 || s.churn {
+		stale := s.row
+		stale.Result = []byte(`{"success":true,"compileCache":{"storedFiles":0}}`)
+		// Reproduce a job that starts and finishes publishing during the SQL
+		// query, after the list caller's initial publication snapshot.
+		s.manager.beginPublication(s.row.ID)
+		s.manager.endPublication(s.row.ID)
+		return []store.CompileJob{stale}, nil
+	}
+	return []store.CompileJob{s.row}, nil
+}
+
+func (s *historyPublicationStore) GetJob(context.Context, string) (store.CompileJob, error) {
+	s.reads++
+	return s.row, nil
+}
+
+func TestDatabaseListReconcilesPublicationsCompletedDuringQuery(t *testing.T) {
+	for _, churn := range []bool{false, true} {
+		t.Run(fmt.Sprintf("churn=%t", churn), func(t *testing.T) {
+			m, req := sessionManager(t)
+			request, err := json.Marshal(req.Request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			finished := time.Now().UTC()
+			fake := &historyPublicationStore{
+				manager: m, churn: churn,
+				row: store.CompileJob{ID: "job_list", OwnerID: "owner", Status: "succeeded",
+					Request: request, FinishedAt: &finished,
+					Result: []byte(`{"success":true,"compileCache":{"storedFiles":3}}`)},
+			}
+			m.db = fake
+			listed, err := m.List(context.Background(), "owner", 10)
+			if err != nil || len(listed) != 1 || listed[0].Result.CompileCache.StoredFiles != 3 {
+				t.Fatalf("list published stale cache accounting: %+v, %v", listed, err)
+			}
+			wantLists, wantReads := 2, 0
+			if churn {
+				wantLists, wantReads = 3, 1
+			}
+			if fake.lists != wantLists || fake.reads != wantReads {
+				t.Fatalf("unbounded/redundant reads: lists=%d reads=%d", fake.lists, fake.reads)
+			}
+		})
+	}
+}
+
 func (s *pruneFaultStore) DeleteTerminalJobsBefore(ctx context.Context, _ time.Time, _ []string) (int64, error) {
 	close(s.started)
 	<-ctx.Done()

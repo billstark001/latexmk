@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"slices"
 	"sort"
@@ -63,18 +64,19 @@ type Manager struct {
 	db       jobStore
 	logger   *slog.Logger
 
-	mu              sync.Mutex
-	admissionMu     sync.Mutex
-	jobs            map[string]record
-	jobHistory      map[string][]string
-	queued          int
-	completions     map[string]record
-	publications    map[string]chan struct{}
-	queue           chan string
-	workers         sync.WaitGroup
-	sessions        map[string]*liveSession
-	revisionBudgets map[string]*revisionBudget
-	active          map[string]context.CancelFunc
+	mu                 sync.Mutex
+	admissionMu        sync.Mutex
+	jobs               map[string]record
+	jobHistory         map[string][]string
+	queued             int
+	completions        map[string]record
+	publications       map[string]chan struct{}
+	publicationVersion uint64
+	queue              chan string
+	workers            sync.WaitGroup
+	sessions           map[string]*liveSession
+	revisionBudgets    map[string]*revisionBudget
+	active             map[string]context.CancelFunc
 }
 
 func New(
@@ -328,10 +330,7 @@ func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]protoc
 		limit = 50
 	}
 	m.mu.Lock()
-	publications := make(map[string]chan struct{}, len(m.publications))
-	for id, gate := range m.publications {
-		publications[id] = gate
-	}
+	publications := maps.Clone(m.publications)
 	var native []protocol.Job
 	if m.db == nil {
 		history := m.jobHistory[ownerID]
@@ -341,6 +340,7 @@ func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]protoc
 		}
 	}
 	m.mu.Unlock()
+	reloadSuccessful := false
 	reconcile := func(job protocol.Job) (protocol.Job, error) {
 		if gate := publications[job.ID]; job.Status == "succeeded" && gate != nil {
 			select {
@@ -348,6 +348,9 @@ func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]protoc
 				return protocol.Job{}, ctx.Err()
 			case <-gate:
 			}
+			return m.Get(ctx, ownerID, job.ID)
+		}
+		if reloadSuccessful && job.Status == "succeeded" {
 			return m.Get(ctx, ownerID, job.ID)
 		}
 		return withoutExpiredAuxiliary(job), nil
@@ -362,9 +365,30 @@ func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]protoc
 		}
 		return native, nil
 	}
-	rows, err := m.db.ListJobs(ctx, ownerID, limit)
-	if err != nil {
-		return nil, err
+	var rows []store.CompileJob
+	for attempt := 0; ; attempt++ {
+		m.mu.Lock()
+		version := m.publicationVersion
+		m.mu.Unlock()
+		var err error
+		rows, err = m.db.ListJobs(ctx, ownerID, limit)
+		if err != nil {
+			return nil, err
+		}
+		m.mu.Lock()
+		changed := version != m.publicationVersion
+		publications = maps.Clone(m.publications)
+		m.mu.Unlock()
+		if !changed {
+			break
+		}
+		// A publication can start and finish during the SQL query, leaving a
+		// stale row with no remaining gate. Retry the page a bounded number of
+		// times, then reload successes individually under sustained churn.
+		if attempt == 2 {
+			reloadSuccessful = true
+			break
+		}
 	}
 	out := make([]protocol.Job, 0, len(rows))
 	for _, row := range rows {
@@ -897,6 +921,7 @@ func (m *Manager) endPublication(id string) {
 	if gate := m.publications[id]; gate != nil {
 		close(gate)
 		delete(m.publications, id)
+		m.publicationVersion++
 	}
 }
 
