@@ -9,7 +9,7 @@ import (
 
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
-	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 func selectionClient(opts compileOptions) *client.Client {
@@ -60,7 +60,7 @@ func implicitTarget(cfg config.Resolved) (string, error) {
 }
 
 func runAllTargets(args []string, cfg config.Resolved) int {
-	if hasOption(args, "--watch") || hasOption(args, "--detach") {
+	if hasOption(args, "--realtime") || hasOption(args, "--watch") || hasOption(args, "--detach") {
 		return fail(errors.New("--target all does not support watch or detach"))
 	}
 	if _, ok := cfg.Targets["all"]; ok {

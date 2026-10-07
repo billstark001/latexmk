@@ -12,23 +12,29 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
+	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/project"
+	"github.com/billstark001/latexmk/packages/server/internal/sandbox"
 	"github.com/billstark001/latexmk/packages/server/internal/store"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 type record struct {
-	Job      api.Job
-	OwnerID  string
-	Request  api.CompileRequest
-	Snapshot project.Snapshot
+	InvalidateCheckpoint bool
+	CompletionFrom       string
+	Job                  protocol.Job
+	OwnerID              string
+	Request              protocol.CompileRequest
+	Snapshot             project.Snapshot
 }
 
 type cleanupResultTarget struct {
@@ -36,39 +42,83 @@ type cleanupResultTarget struct {
 	Size int64  `json:"size"`
 }
 
+// jobStore isolates durable metadata operations from queue/session coordination.
+type jobStore interface {
+	CountQueuedJobs(context.Context) (int64, error)
+	ListPendingJobs(context.Context) ([]store.CompileJob, error)
+	UpdateJob(context.Context, string, map[string]any) error
+	ListJobs(context.Context, string, int) ([]store.CompileJob, error)
+	ListProjectJobs(context.Context, string, string) ([]store.CompileJob, error)
+	DeleteTerminalProjectJobs(context.Context, string, string) error
+	TransitionJob(context.Context, string, string, map[string]any) (bool, error)
+	DeleteTerminalJobsBefore(context.Context, time.Time, []string) (int64, error)
+	GetJob(context.Context, string) (store.CompileJob, error)
+	CreateJob(context.Context, store.CompileJob) error
+}
+
 type Manager struct {
 	cfg      config.Config
-	meta     api.Metadata
+	meta     protocol.Metadata
 	runner   *compile.Runner
 	projects *project.Manager
-	db       *store.Postgres
+	db       jobStore
 	logger   *slog.Logger
 
-	mu          sync.Mutex
-	admissionMu sync.Mutex
-	jobs        map[string]record
-	queue       chan string
-	workers     sync.WaitGroup
+	mu                 sync.Mutex
+	admissionMu        sync.Mutex
+	jobs               map[string]record
+	jobHistory         map[string][]string
+	queued             int
+	completions        map[string]record
+	publications       map[string]chan struct{}
+	publicationVersion uint64
+	queue              chan string
+	workers            sync.WaitGroup
+	sessions           map[string]*liveSession
+	revisionBudgets    map[string]*revisionBudget
+	active             map[string]context.CancelFunc
 }
 
 func New(
 	cfg config.Config,
-	meta api.Metadata,
+	meta protocol.Metadata,
 	runner *compile.Runner,
 	projects *project.Manager,
 	db *store.Postgres,
 	logger *slog.Logger,
 ) *Manager {
+	var persistence jobStore
+	if db != nil {
+		persistence = db
+	}
 	return &Manager{
-		cfg: cfg, meta: meta, runner: runner, projects: projects, db: db, logger: logger,
+		cfg:      cfg,
+		meta:     meta,
+		runner:   runner,
+		projects: projects,
+		db:       persistence,
+		logger:   logger,
 		// Cancellation is cooperative: a cancelled identifier can still be in
 		// the channel until a worker observes it. Extra channel room prevents a
 		// burst of cancellations from blocking an otherwise valid replacement.
-		jobs: make(map[string]record), queue: make(chan string, cfg.MaxQueuedJobs*2),
+		revisionBudgets: make(
+			map[string]*revisionBudget,
+		),
+		sessions:     make(map[string]*liveSession),
+		active:       make(map[string]context.CancelFunc),
+		jobs:         make(map[string]record),
+		jobHistory:   make(map[string][]string),
+		completions:  make(map[string]record),
+		publications: make(map[string]chan struct{}),
+		queue:        make(chan string, cfg.MaxQueuedJobs*2),
 	}
 }
 
 func (m *Manager) Start(ctx context.Context) {
+	m.workers.Add(1)
+	go func() { defer m.workers.Done(); m.recoverCompletions(ctx) }()
+	m.workers.Add(1)
+	go func() { defer m.workers.Done(); m.maintainSessions(ctx) }()
 	recoverIDs := make([]string, 0)
 	if m.db != nil {
 		pending, err := m.db.ListPendingJobs(ctx)
@@ -76,6 +126,20 @@ func (m *Manager) Start(ctx context.Context) {
 			m.logger.Error("could not recover queued jobs", "error", err)
 		} else {
 			for _, job := range pending {
+				if job.SessionID != "" {
+					now := time.Now().UTC()
+					_ = m.db.UpdateJob(
+						ctx,
+						job.ID,
+						map[string]any{
+							"snapshot_manifest": nil,
+							"status":            "cancelled",
+							"error":             "session ended when the server restarted; submit a new session",
+							"finished_at":       &now,
+						},
+					)
+					continue
+				}
 				rec, decodeErr := recordFromRow(job)
 				if decodeErr != nil {
 					now := time.Now().UTC()
@@ -125,6 +189,7 @@ func (m *Manager) Start(ctx context.Context) {
 					}
 				}
 				recoverIDs = append(recoverIDs, job.ID)
+				m.beginPublication(job.ID)
 			}
 		}
 	}
@@ -148,16 +213,21 @@ func (m *Manager) Enqueue(
 	ctx context.Context,
 	ownerID string,
 	snapshot project.Snapshot,
-	request api.CompileRequest,
-) (api.Job, error) {
+	request protocol.CompileRequest,
+) (protocol.Job, error) {
+	if m.cfg.RunnerImage != "" {
+		if err := sandbox.ValidateSourcePaths(snapshot.Files); err != nil {
+			return protocol.Job{}, err
+		}
+	}
 	if err := m.runner.ValidateRequest(request); err != nil {
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	if snapshot.OwnerID != ownerID {
-		return api.Job{}, errors.New("snapshot owner does not match authenticated owner")
+		return protocol.Job{}, errors.New("snapshot owner does not match authenticated owner")
 	}
 	if err := m.projects.PinSnapshot(snapshot); err != nil {
-		return api.Job{}, fmt.Errorf("pin project snapshot: %w", err)
+		return protocol.Job{}, fmt.Errorf("pin project snapshot: %w", err)
 	}
 	pinned := true
 	defer func() {
@@ -172,20 +242,20 @@ func (m *Manager) Enqueue(
 	pending, err := m.pendingCount(ctx)
 	if err != nil {
 		m.admissionMu.Unlock()
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	if pending >= m.cfg.MaxQueuedJobs {
 		m.admissionMu.Unlock()
-		return api.Job{}, errors.New("compile queue is full")
+		return protocol.Job{}, errors.New("compile queue is full")
 	}
 	id, err := randomID("job")
 	if err != nil {
 		m.admissionMu.Unlock()
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	now := time.Now().UTC()
 	rec := record{
-		Job: api.Job{
+		Job: protocol.Job{
 			ID:         id,
 			ProjectID:  snapshot.ProjectID,
 			SnapshotID: snapshot.ID,
@@ -198,7 +268,7 @@ func (m *Manager) Enqueue(
 	}
 	if err := m.save(ctx, rec); err != nil {
 		m.admissionMu.Unlock()
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	select {
 	case m.queue <- id:
@@ -210,7 +280,7 @@ func (m *Manager) Enqueue(
 		// Do not retain a row which cannot ever be scheduled.
 		pinned = false
 		_ = m.cancel(ctx, id, "compile queue is full")
-		return api.Job{}, errors.New("compile queue is full")
+		return protocol.Job{}, errors.New("compile queue is full")
 	}
 }
 
@@ -218,94 +288,165 @@ func (m *Manager) pendingCount(ctx context.Context) (int, error) {
 	if m.db == nil {
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		count := 0
-		for _, rec := range m.jobs {
-			if rec.Job.Status == "queued" {
-				count++
-			}
-		}
-		return count, nil
+		return m.queued + len(m.completions), nil
 	}
-	rows, err := m.db.ListPendingJobs(ctx)
+	queued, err := m.db.CountQueuedJobs(ctx)
 	if err != nil {
 		return 0, err
 	}
-	count := 0
-	for _, row := range rows {
-		if row.Status == "queued" {
-			count++
-		}
-	}
+	m.mu.Lock()
+	count := int(queued) + len(m.completions)
+	m.mu.Unlock()
 	return count, nil
 }
 
-func (m *Manager) Get(ctx context.Context, ownerID, id string) (api.Job, error) {
+func (m *Manager) Get(ctx context.Context, ownerID, id string) (protocol.Job, error) {
+	m.mu.Lock()
+	publication := m.publications[id]
+	m.mu.Unlock()
 	rec, err := m.load(ctx, id)
 	if err != nil {
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	if rec.OwnerID != ownerID {
-		return api.Job{}, errors.New("job not found")
+		return protocol.Job{}, errors.New("job not found")
+	}
+	if rec.Job.Status == "succeeded" && publication != nil {
+		select {
+		case <-ctx.Done():
+			return protocol.Job{}, ctx.Err()
+		case <-publication:
+		}
+		rec, err = m.load(ctx, id)
+		if err != nil {
+			return protocol.Job{}, err
+		}
 	}
 	return withoutExpiredAuxiliary(rec.Job), nil
 }
 
-func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]api.Job, error) {
+func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]protocol.Job, error) {
 	if limit < 1 || limit > 200 {
 		limit = 50
 	}
+	m.mu.Lock()
+	publications := maps.Clone(m.publications)
+	var native []protocol.Job
 	if m.db == nil {
-		m.mu.Lock()
-		out := make([]api.Job, 0, len(m.jobs))
-		for _, rec := range m.jobs {
-			if rec.OwnerID == ownerID {
-				out = append(out, withoutExpiredAuxiliary(rec.Job))
+		history := m.jobHistory[ownerID]
+		native = make([]protocol.Job, 0, min(limit, len(history)))
+		for i := len(history) - 1; i >= 0 && len(native) < limit; i-- {
+			native = append(native, m.jobs[history[i]].Job)
+		}
+	}
+	m.mu.Unlock()
+	reloadSuccessful := false
+	reconcile := func(job protocol.Job) (protocol.Job, error) {
+		if gate := publications[job.ID]; job.Status == "succeeded" && gate != nil {
+			select {
+			case <-ctx.Done():
+				return protocol.Job{}, ctx.Err()
+			case <-gate:
+			}
+			return m.Get(ctx, ownerID, job.ID)
+		}
+		if reloadSuccessful && job.Status == "succeeded" {
+			return m.Get(ctx, ownerID, job.ID)
+		}
+		return withoutExpiredAuxiliary(job), nil
+	}
+	if m.db == nil {
+		for i := range native {
+			var err error
+			native[i], err = reconcile(native[i])
+			if err != nil {
+				return nil, err
 			}
 		}
+		return native, nil
+	}
+	var rows []store.CompileJob
+	for attempt := 0; ; attempt++ {
+		m.mu.Lock()
+		version := m.publicationVersion
 		m.mu.Unlock()
-		// The in-memory order is not stable, but timestamps make it deterministic
-		// after sorting in the HTTP layer unnecessary for the common small queue.
-		if len(out) > limit {
-			out = out[:limit]
+		var err error
+		rows, err = m.db.ListJobs(ctx, ownerID, limit)
+		if err != nil {
+			return nil, err
 		}
-		return out, nil
+		m.mu.Lock()
+		changed := version != m.publicationVersion
+		publications = maps.Clone(m.publications)
+		m.mu.Unlock()
+		if !changed {
+			break
+		}
+		// A publication can start and finish during the SQL query, leaving a
+		// stale row with no remaining gate. Retry the page a bounded number of
+		// times, then reload successes individually under sustained churn.
+		if attempt == 2 {
+			reloadSuccessful = true
+			break
+		}
 	}
-	rows, err := m.db.ListJobs(ctx, ownerID, limit)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]api.Job, 0, len(rows))
+	out := make([]protocol.Job, 0, len(rows))
 	for _, row := range rows {
 		rec, err := recordFromRow(row)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, withoutExpiredAuxiliary(rec.Job))
+		job, err := reconcile(rec.Job)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, job)
 	}
 	return out, nil
 }
 
-func (m *Manager) Cancel(ctx context.Context, ownerID, id string) (api.Job, error) {
+func (m *Manager) Cancel(ctx context.Context, ownerID, id string) (protocol.Job, error) {
+	m.admissionMu.Lock()
+	defer m.admissionMu.Unlock()
 	rec, err := m.load(ctx, id)
 	if err != nil {
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	if rec.OwnerID != ownerID {
-		return api.Job{}, errors.New("job not found")
+		return protocol.Job{}, errors.New("job not found")
 	}
-	if rec.Job.Status != "queued" {
-		return api.Job{}, errors.New("only queued jobs can be cancelled")
-	}
-	if err := m.cancel(ctx, id, "cancelled by user"); err != nil {
-		return api.Job{}, err
+	if rec.Job.Status == "queued" {
+		if err := m.cancel(ctx, id, "cancelled by user"); err != nil {
+			return protocol.Job{}, err
+		}
+	} else if rec.Job.Status == "running" {
+		cancel := m.active[id]
+		m.mu.Lock()
+		_, completing := m.completions[id]
+		m.mu.Unlock()
+		if cancel == nil && !completing {
+			return protocol.Job{}, errors.New("job is not running on this instance")
+		}
+		now := time.Now().UTC()
+		rec.Job.Status, rec.Job.Error, rec.Job.FinishedAt = "cancelled", "cancelled by user", &now
+		if changed, err := m.transition(ctx, rec, "running"); err != nil {
+			return protocol.Job{}, err
+		} else if !changed {
+			return protocol.Job{}, errors.New("job already finished")
+		}
+		if cancel != nil {
+			cancel()
+		}
+	} else {
+		return protocol.Job{}, errors.New("only queued or running jobs can be cancelled")
 	}
 	return m.Get(ctx, ownerID, id)
 }
 
-func (m *Manager) ResultPath(ctx context.Context, ownerID, id string) (string, api.Job, error) {
+func (m *Manager) ResultPath(ctx context.Context, ownerID, id string) (string, protocol.Job, error) {
 	job, err := m.Get(ctx, ownerID, id)
 	if err != nil {
-		return "", api.Job{}, err
+		return "", protocol.Job{}, err
 	}
 	if job.Status != "succeeded" && job.Status != "failed" {
 		return "", job, errors.New("job result is not ready")
@@ -325,16 +466,19 @@ func (m *Manager) ResultPath(ctx context.Context, ownerID, id string) (string, a
 
 // CleanupProject returns a preview. Destructive cleanup is only exposed via
 // CleanupProjectWithPlan so callers cannot bypass the preview/digest contract.
-func (m *Manager) CleanupProject(ctx context.Context, ownerID, projectID, scope string) (api.CleanupReport, error) {
+func (m *Manager) CleanupProject(
+	ctx context.Context,
+	ownerID, projectID, scope string,
+) (protocol.CleanupReport, error) {
 	return m.cleanupProject(ctx, ownerID, projectID, scope, true, "")
 }
 
 func (m *Manager) CleanupProjectWithPlan(
 	ctx context.Context,
 	ownerID, projectID, scope, expectedDigest string,
-) (api.CleanupReport, error) {
+) (protocol.CleanupReport, error) {
 	if expectedDigest == "" {
-		return api.CleanupReport{}, errors.New("cleanup plan digest is required")
+		return protocol.CleanupReport{}, errors.New("cleanup plan digest is required")
 	}
 	return m.cleanupProject(ctx, ownerID, projectID, scope, false, expectedDigest)
 }
@@ -344,8 +488,8 @@ func (m *Manager) cleanupProject(
 	ownerID, projectID, scope string,
 	dryRun bool,
 	expectedDigest string,
-) (api.CleanupReport, error) {
-	report := api.CleanupReport{ProjectID: projectID, Scope: scope, DryRun: dryRun}
+) (protocol.CleanupReport, error) {
+	report := protocol.CleanupReport{ProjectID: projectID, Scope: scope, DryRun: dryRun}
 	if !project.ValidProjectID(projectID) {
 		return report, errors.New("project ID is invalid")
 	}
@@ -354,6 +498,11 @@ func (m *Manager) cleanupProject(
 	}
 	m.admissionMu.Lock()
 	defer m.admissionMu.Unlock()
+	report.ActiveSessions = m.sessionProjectIDsLocked(ownerID, projectID)
+	sort.Strings(report.ActiveSessions)
+	if len(report.ActiveSessions) > 0 && !dryRun {
+		return report, errors.New("project has live sessions; close them before cleanup")
+	}
 	records, err := m.projectRecords(ctx, ownerID, projectID)
 	if err != nil {
 		return report, err
@@ -361,6 +510,13 @@ func (m *Manager) cleanupProject(
 	terminalIDs := make([]string, 0, len(records))
 	var resultTargets []cleanupResultTarget
 	for _, rec := range records {
+		m.mu.Lock()
+		_, completing := m.completions[rec.Job.ID]
+		m.mu.Unlock()
+		if m.active[rec.Job.ID] != nil || completing {
+			report.ActiveJobs = append(report.ActiveJobs, rec.Job.ID)
+			continue
+		}
 		switch rec.Job.Status {
 		case "queued", "running":
 			report.ActiveJobs = append(report.ActiveJobs, rec.Job.ID)
@@ -463,7 +619,7 @@ func (m *Manager) cleanupProject(
 }
 
 func cleanupReportDigest(
-	report api.CleanupReport,
+	report protocol.CleanupReport,
 	terminalIDs []string,
 	resultTargets []cleanupResultTarget,
 	snapshotID string,
@@ -474,10 +630,10 @@ func cleanupReportDigest(
 	report.ActiveJobs = append([]string(nil), report.ActiveJobs...)
 	sort.Strings(report.ActiveJobs)
 	targets := struct {
-		Report      api.CleanupReport     `json:"report"`
-		TerminalIDs []string              `json:"terminalJobIds,omitempty"`
-		Results     []cleanupResultTarget `json:"results,omitempty"`
-		SnapshotID  string                `json:"snapshotId,omitempty"`
+		Report      protocol.CleanupReport `json:"report"`
+		TerminalIDs []string               `json:"terminalJobIds,omitempty"`
+		Results     []cleanupResultTarget  `json:"results,omitempty"`
+		SnapshotID  string                 `json:"snapshotId,omitempty"`
 	}{Report: report, Results: resultTargets, SnapshotID: snapshotID}
 	if report.Scope == "project" {
 		targets.TerminalIDs = append([]string(nil), terminalIDs...)
@@ -500,7 +656,10 @@ func (m *Manager) projectRecords(ctx context.Context, ownerID, projectID string)
 		for _, row := range rows {
 			out = append(
 				out,
-				record{OwnerID: row.OwnerID, Job: api.Job{ID: row.ID, ProjectID: row.ProjectID, Status: row.Status}},
+				record{
+					OwnerID: row.OwnerID,
+					Job:     protocol.Job{ID: row.ID, ProjectID: row.ProjectID, Status: row.Status},
+				},
 			)
 		}
 		return out, nil
@@ -527,6 +686,7 @@ func (m *Manager) deleteTerminalProjectRecords(ctx context.Context, ownerID, pro
 			delete(m.jobs, id)
 		}
 	}
+	m.pruneHistoryLocked(ownerID)
 	return nil
 }
 
@@ -541,7 +701,12 @@ func (m *Manager) worker(ctx context.Context, worker int) {
 		case <-ctx.Done():
 			return
 		case id := <-m.queue:
-			m.run(ctx, worker, id)
+			if strings.HasPrefix(id, "ses_") {
+				id = m.takeSession(id)
+			}
+			if id != "" {
+				m.run(ctx, worker, id)
+			}
 		}
 	}
 }
@@ -555,14 +720,35 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 		}
 		return
 	}
+	finishSession := true
+	defer func() {
+		if finishSession {
+			m.finishSession(context.WithoutCancel(ctx), rec)
+			m.endPublication(id)
+		}
+	}()
 	if rec.Job.Status != "queued" {
+		return
+	}
+	jobCtx, cancelJob := context.WithCancel(ctx)
+	defer cancelJob()
+	m.admissionMu.Lock()
+	if err := m.validateSessionJobLocked(rec); err != nil {
+		_ = m.cancel(context.WithoutCancel(ctx), id, err.Error())
+		m.admissionMu.Unlock()
 		return
 	}
 	now := time.Now().UTC()
 	rec.Job.Status, rec.Job.StartedAt = "running", &now
 	changed, err := m.transition(ctx, rec, "queued")
+	if changed && err == nil {
+		m.active[id] = cancelJob
+	}
+	m.admissionMu.Unlock()
+	defer func() { m.admissionMu.Lock(); delete(m.active, id); m.admissionMu.Unlock() }()
 	if err != nil {
 		m.logger.Error("mark job running", "job_id", id, "error", err)
+		finishSession = false
 		m.requeue(ctx, id)
 		return
 	}
@@ -570,10 +756,25 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 		return
 	}
 	m.logger.Info("compile job started", "job_id", id, "worker", worker, "owner_id", rec.OwnerID)
+	workerStarted := time.Now()
+	var materializeTime, executionTime, archiveTime, persistenceTime, cacheTime time.Duration
+	defer func() {
+		queueTime := time.Duration(0)
+		if !rec.Job.CreatedAt.IsZero() {
+			queueTime = max(0, now.Sub(rec.Job.CreatedAt))
+		}
+		m.logger.Info("compile job stages",
+			"job_id", id, "session_id", rec.Job.SessionID, "revision", rec.Job.Revision,
+			"queue_wait_ms", queueTime.Milliseconds(), "materialize_ms", materializeTime.Milliseconds(),
+			"execution_ms", executionTime.Milliseconds(), "result_archive_ms", archiveTime.Milliseconds(),
+			"completion_persist_ms", persistenceTime.Milliseconds(), "cache_publish_ms", cacheTime.Milliseconds(),
+			"worker_total_ms", time.Since(workerStarted).Milliseconds(),
+		)
+	}()
 
 	jobWorkspace, err := compile.NewWorkspace(m.cfg.TempDir)
 	if err != nil {
-		m.finish(ctx, rec, nil, "could not create compile workspace", false)
+		rec, _ = m.finish(ctx, rec, nil, "could not create compile workspace", false)
 		return
 	}
 	defer func() {
@@ -583,83 +784,55 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	}()
 	workspace := jobWorkspace.Project
 
-	if err := m.projects.Materialize(rec.Snapshot, workspace); err != nil {
-		m.finish(ctx, rec, nil, "could not materialize project: "+err.Error(), false)
-		return
-	}
-	cacheKey := project.CompileCacheKey(rec.Request, m.meta, m.cfg.CompileCacheEpoch)
-	var cacheInfo *api.CompileCache
-	if rec.Request.Auxiliary.Server == "reuse" {
-		info := api.CompileCache{Status: "bypass", Reason: "forced clean compile"}
-		if !rec.Request.Force {
-			info = m.projects.RestoreCompileCache(rec.Snapshot, cacheKey, workspace)
-		}
-		cacheInfo = &info
-	}
-	compileCtx, cancelCompile := context.WithTimeout(ctx, m.cfg.CompileTimeout)
-	defer cancelCompile()
-	compileStarted := time.Now()
-	output := m.runner.Run(compileCtx, workspace, rec.Request, rec.Job.ID)
-	if cacheInfo != nil && cacheInfo.Status == "hit" && !output.Result.Success && !output.Result.TimedOut &&
-		compileCtx.Err() == nil {
-		// Auxiliary files can refer to macros removed by an ordinary TeX edit.
-		// Retry once from the immutable source snapshot, within the same deadline.
-		cacheInfo.ColdRetry = true
-		cacheInfo.Reason = "warm compile failed; retried with clean sources"
-		resetErr := jobWorkspace.Reset()
-		if resetErr == nil {
-			resetErr = m.projects.Materialize(rec.Snapshot, workspace)
-		}
-		if resetErr != nil {
-			m.finish(ctx, rec, nil, "could not reset warm compile workspace", false)
+	if m.cfg.RunnerImage == "" {
+		if err := m.projects.Materialize(rec.Snapshot, workspace); err != nil {
+			rec, _ = m.finish(ctx, rec, nil, "could not materialize project: "+err.Error(), false)
 			return
 		}
-		output = m.runner.Run(compileCtx, workspace, rec.Request, rec.Job.ID)
+		materializeTime = time.Since(workerStarted)
 	}
-	output.Result.DurationMS = time.Since(compileStarted).Milliseconds()
-	output.Result.CompileCache = cacheInfo
+
+	compileCtx, cancelCompile := context.WithTimeout(jobCtx, m.cfg.CompileTimeout)
+	defer cancelCompile()
+	started := time.Now()
+	executed := m.execute(compileCtx, rec, jobWorkspace)
+	rec.InvalidateCheckpoint = executed.invalidateCheckpoint
+	executionTime = time.Since(started)
+	output := executed.output
+	output.Result.SessionID, output.Result.Revision = rec.Job.SessionID, rec.Job.Revision
+	output.Result.DurationMS = executionTime.Milliseconds()
+	output.Result.CompileCache = executed.cache
 	output.Result.ServerVersion = m.meta.Version
 	output.Result.ImageProfile = m.meta.ImageProfile
 	retained := compile.RetainArtifacts(output, rec.Request, m.cfg.ResultRetention)
-	_, err = m.projects.WriteResult(rec.OwnerID, rec.Job.ID, retained)
-	if err != nil {
-		m.finish(ctx, rec, &output.Result, "could not package compile result: "+err.Error(), false)
+	archiveStarted := time.Now()
+	if _, err := m.projects.WriteResult(rec.OwnerID, rec.Job.ID, retained); err != nil {
+		rec, _ = m.finish(ctx, rec, &output.Result, "could not package compile result: "+err.Error(), false)
 		return
 	}
-	if cacheInfo != nil && output.Result.Success && ctx.Err() == nil {
-		if rec.Request.Auxiliary.ServerTTL != "" {
-			ttl, _ := time.ParseDuration(rec.Request.Auxiliary.ServerTTL)
-			if ttl > m.cfg.CompileCacheRetention {
-				ttl = m.cfg.CompileCacheRetention
-			}
-			expires := time.Now().UTC().Add(ttl)
-			output.Result.AuxiliaryExpiresAt = &expires
-		}
-		count, cacheErr := m.projects.SaveCompileCache(
-			rec.Snapshot,
-			cacheKey,
-			workspace,
-			rec.Job.ID,
-			rec.Job.CreatedAt,
-			output,
-		)
-		cacheInfo.StoredFiles = count
-		if cacheErr != nil {
-			cacheInfo.Warning = cacheErr.Error()
-			m.logger.Warn("could not publish compile cache", "job_id", id, "error", cacheErr)
-		}
+	archiveTime = time.Since(archiveStarted)
+	executed.output = output
+	retained.Result.CompileCache = executed.cache
+	persistStarted := time.Now()
+	completed, success := m.finish(ctx, rec, &retained.Result, retained.Result.Error, true)
+	persistenceTime = time.Since(persistStarted)
+	rec = completed // Session cleanup uses the confirmed durable terminal state.
+	if success {
+		cacheStarted := time.Now()
+		m.publishExecution(compileCtx, rec, jobWorkspace, &executed)
+		rec.InvalidateCheckpoint = executed.invalidateCheckpoint
+		m.updatePublishedCache(ctx, rec, executed)
+		cacheTime = time.Since(cacheStarted)
 	}
-	retained.Result.CompileCache = cacheInfo
-	m.finish(ctx, rec, &retained.Result, retained.Result.Error, true)
 }
 
 func (m *Manager) finish(
 	ctx context.Context,
 	rec record,
-	result *api.CompileResult,
+	result *protocol.CompileResult,
 	message string,
 	resultArchived bool,
-) {
+) (record, bool) {
 	now := time.Now().UTC()
 	if !resultArchived && result != nil && result.Success {
 		failed := *result
@@ -670,7 +843,16 @@ func (m *Manager) finish(
 		result = &failed
 	}
 	rec.Job.FinishedAt = &now
-	rec.Job.Result = result
+	// Cache publication fills in storage accounting after terminal persistence.
+	// Keep the durable/public result immutable while readers can observe it.
+	if result != nil {
+		copy := *result
+		if result.CompileCache != nil {
+			cache := *result.CompileCache
+			copy.CompileCache = &cache
+		}
+		rec.Job.Result = &copy
+	}
 	rec.Job.Error = message
 	if resultArchived && result != nil && result.Success {
 		rec.Job.Status = "succeeded"
@@ -682,11 +864,19 @@ func (m *Manager) finish(
 	changed, err := m.transitionWithRetry(persistCtx, rec, "running")
 	if err != nil {
 		m.logger.Error("finish compile job", "job_id", rec.Job.ID, "error", err)
-		return
+		m.deferCompletion(rec)
+		return rec, false
 	}
 	if !changed {
+		current, getErr := m.load(persistCtx, rec.Job.ID)
+		if getErr != nil || current.Job.FinishedAt == nil {
+			m.deferCompletion(rec)
+			return rec, false
+		}
+		m.projects.ReleaseSnapshot(rec.Snapshot.ID)
 		m.logger.Warn("compile job state changed before finish", "job_id", rec.Job.ID)
-		return
+		rec.Job = current.Job
+		return rec, current.Job.Status == "succeeded"
 	}
 	m.projects.ReleaseSnapshot(rec.Snapshot.ID)
 	m.logger.Info(
@@ -698,12 +888,52 @@ func (m *Manager) finish(
 		"duration_ms",
 		resultDuration(result),
 	)
+	return rec, rec.Job.Status == "succeeded"
+}
+
+func (m *Manager) deferCompletion(rec record) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.completions == nil {
+		m.completions = make(map[string]record)
+	}
+	if rec.CompletionFrom == "" {
+		rec.CompletionFrom = "running"
+	}
+	m.completions[rec.Job.ID] = rec
+}
+
+func (m *Manager) beginPublication(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.publications == nil {
+		m.publications = make(map[string]chan struct{})
+	}
+	if m.publications[id] == nil {
+		m.publications[id] = make(chan struct{})
+	}
+}
+
+func (m *Manager) endPublication(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, pending := m.completions[id]; pending {
+		return
+	}
+	if gate := m.publications[id]; gate != nil {
+		close(gate)
+		delete(m.publications, id)
+		m.publicationVersion++
+	}
 }
 
 func (m *Manager) cancel(ctx context.Context, id, message string) error {
 	rec, err := m.load(ctx, id)
 	if err != nil {
 		return err
+	}
+	if rec.Job.Status == "cancelled" {
+		return nil
 	}
 	now := time.Now().UTC()
 	rec.Job.Status, rec.Job.Error, rec.Job.FinishedAt = "cancelled", message, &now
@@ -715,6 +945,7 @@ func (m *Manager) cancel(ctx context.Context, id, message string) error {
 		return errors.New("job is no longer queued")
 	}
 	m.projects.ReleaseSnapshot(rec.Snapshot.ID)
+	m.endPublication(id)
 	return nil
 }
 
@@ -729,7 +960,16 @@ func (m *Manager) transition(ctx context.Context, rec record, expectedStatus str
 		if current.Job.Status != expectedStatus {
 			return false, nil
 		}
+		if current.Job.Status == "queued" && rec.Job.Status != "queued" {
+			m.queued--
+		}
+		if current.Job.Status != "queued" && rec.Job.Status == "queued" {
+			m.queued++
+		}
 		current.Job = rec.Job
+		if rec.Job.FinishedAt != nil {
+			current.Snapshot = project.Snapshot{}
+		}
 		m.jobs[rec.Job.ID] = current
 		return true, nil
 	}
@@ -737,10 +977,14 @@ func (m *Manager) transition(ctx context.Context, rec record, expectedStatus str
 	if err != nil {
 		return false, err
 	}
-	return m.db.TransitionJob(ctx, rec.Job.ID, expectedStatus, map[string]any{
+	updates := map[string]any{
 		"status": rec.Job.Status, "result": result, "error": rec.Job.Error,
 		"started_at": rec.Job.StartedAt, "finished_at": rec.Job.FinishedAt,
-	})
+	}
+	if rec.Job.FinishedAt != nil {
+		updates["snapshot_manifest"] = nil
+	}
+	return m.db.TransitionJob(ctx, rec.Job.ID, expectedStatus, updates)
 }
 
 func (m *Manager) transitionWithRetry(ctx context.Context, rec record, expectedStatus string) (bool, error) {
@@ -775,10 +1019,70 @@ func (m *Manager) requeue(ctx context.Context, id string) {
 }
 
 func (m *Manager) persistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	if ctx.Err() == nil {
-		return context.WithCancel(ctx)
+	deadline := 5 * time.Second
+	if m.cfg.ShutdownTimeout > 0 {
+		deadline = min(deadline, m.cfg.ShutdownTimeout)
 	}
-	return context.WithTimeout(context.Background(), m.cfg.ShutdownTimeout)
+	return context.WithTimeout(context.WithoutCancel(ctx), deadline)
+}
+
+// A persistence outage must not occupy a worker or the global admission lock
+// indefinitely. Deferred terminal transitions keep their source pin and session
+// running slot until durable metadata becomes available again. Restart recovery
+// can still safely rerun a job if the process exits before this transition commits.
+func (m *Manager) recoverCompletions(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.retryCompletions(ctx)
+		}
+	}
+}
+
+func (m *Manager) retryCompletions(ctx context.Context) {
+	m.mu.Lock()
+	pending := make([]record, 0, len(m.completions))
+	for _, rec := range m.completions {
+		pending = append(pending, rec)
+	}
+	m.mu.Unlock()
+	for _, rec := range pending {
+		if ctx.Err() != nil {
+			return
+		}
+		operation, cancel := m.persistenceContext(ctx)
+		changed, err := m.transition(operation, rec, rec.CompletionFrom)
+		if err == nil && !changed {
+			var current record
+			current, err = m.load(operation, rec.Job.ID)
+			if err == nil {
+				if current.Job.FinishedAt == nil {
+					err = errors.New("completion is not terminal")
+				} else {
+					rec.Job = current.Job
+				}
+			}
+		}
+		cancel()
+		if err != nil {
+			continue
+		}
+		m.mu.Lock()
+		delete(m.completions, rec.Job.ID)
+		m.mu.Unlock()
+		if rec.CompletionFrom == "running" {
+			m.projects.ReleaseSnapshot(rec.Snapshot.ID)
+		}
+		m.finishSession(ctx, rec)
+		m.endPublication(rec.Job.ID)
+		if ctx.Err() != nil {
+			return
+		}
+	}
 }
 
 func (m *Manager) Wait(ctx context.Context) error {
@@ -813,10 +1117,16 @@ func (m *Manager) pruneLoop(ctx context.Context) {
 }
 
 func (m *Manager) pruneTerminal(ctx context.Context, cutoff time.Time) {
-	m.admissionMu.Lock()
-	defer m.admissionMu.Unlock()
+	m.mu.Lock()
+	protected := make([]string, 0, len(m.publications))
+	for id := range m.publications {
+		protected = append(protected, id)
+	}
+	m.mu.Unlock()
 	if m.db != nil {
-		removed, err := m.db.DeleteTerminalJobsBefore(ctx, cutoff)
+		operation, cancel := m.persistenceContext(ctx)
+		defer cancel()
+		removed, err := m.db.DeleteTerminalJobsBefore(operation, cutoff, protected)
 		if err != nil {
 			m.logger.Error("terminal job metadata sweep failed", "error", err)
 		} else if removed > 0 {
@@ -826,12 +1136,17 @@ func (m *Manager) pruneTerminal(ctx context.Context, cutoff time.Time) {
 	}
 	m.mu.Lock()
 	removed := 0
+	owners := make(map[string]struct{})
 	for id, rec := range m.jobs {
 		terminal := rec.Job.Status == "succeeded" || rec.Job.Status == "failed" || rec.Job.Status == "cancelled"
-		if terminal && rec.Job.FinishedAt != nil && rec.Job.FinishedAt.Before(cutoff) {
+		if terminal && m.publications[id] == nil && rec.Job.FinishedAt != nil && rec.Job.FinishedAt.Before(cutoff) {
 			delete(m.jobs, id)
+			owners[rec.OwnerID] = struct{}{}
 			removed++
 		}
+	}
+	for ownerID := range owners {
+		m.pruneHistoryLocked(ownerID)
 	}
 	m.mu.Unlock()
 	if removed > 0 {
@@ -864,6 +1179,14 @@ func (m *Manager) save(ctx context.Context, rec record) error {
 			return errors.New("job already exists")
 		}
 		m.jobs[rec.Job.ID] = rec
+		m.indexHistoryLocked(rec)
+		if rec.Job.Status == "queued" {
+			m.queued++
+		}
+		if m.publications == nil {
+			m.publications = make(map[string]chan struct{})
+		}
+		m.publications[rec.Job.ID] = make(chan struct{})
 		return nil
 	}
 	request, err := json.Marshal(rec.Request)
@@ -878,9 +1201,10 @@ func (m *Manager) save(ctx context.Context, rec record) error {
 	if err != nil {
 		return err
 	}
-	return m.db.CreateJob(
+	err = m.db.CreateJob(
 		ctx,
 		store.CompileJob{
+			SessionID: rec.Job.SessionID, Revision: rec.Job.Revision,
 			ID:               rec.Job.ID,
 			OwnerID:          rec.OwnerID,
 			ProjectID:        rec.Job.ProjectID,
@@ -895,9 +1219,40 @@ func (m *Manager) save(ctx context.Context, rec record) error {
 			FinishedAt:       rec.Job.FinishedAt,
 		},
 	)
+	if err == nil {
+		m.beginPublication(rec.Job.ID)
+	}
+	return err
 }
 
-func marshalResult(result *api.CompileResult) ([]byte, error) {
+// Native history is ordered by immutable creation time, then identifier. Reads
+// copy only the requested page; completion transitions never rebuild the index.
+func (m *Manager) indexHistoryLocked(rec record) {
+	if m.jobHistory == nil {
+		m.jobHistory = make(map[string][]string)
+	}
+	history := m.jobHistory[rec.OwnerID]
+	position := sort.Search(len(history), func(i int) bool {
+		job := m.jobs[history[i]].Job
+		return job.CreatedAt.After(rec.Job.CreatedAt) ||
+			(job.CreatedAt.Equal(rec.Job.CreatedAt) && job.ID > rec.Job.ID)
+	})
+	m.jobHistory[rec.OwnerID] = slices.Insert(history, position, rec.Job.ID)
+}
+
+func (m *Manager) pruneHistoryLocked(ownerID string) {
+	history := slices.DeleteFunc(m.jobHistory[ownerID], func(id string) bool {
+		_, present := m.jobs[id]
+		return !present
+	})
+	if len(history) == 0 {
+		delete(m.jobHistory, ownerID)
+	} else {
+		m.jobHistory[ownerID] = history
+	}
+}
+
+func marshalResult(result *protocol.CompileResult) ([]byte, error) {
 	if result == nil {
 		return nil, nil
 	}
@@ -905,12 +1260,14 @@ func marshalResult(result *api.CompileResult) ([]byte, error) {
 }
 
 func recordFromRow(row store.CompileJob) (record, error) {
-	var request api.CompileRequest
+	var request protocol.CompileRequest
 	if err := json.Unmarshal(row.Request, &request); err != nil {
 		return record{}, fmt.Errorf("decode queued job request: %w", err)
 	}
-	job := api.Job{
+	job := protocol.Job{
+		SessionID: row.SessionID, Revision: row.Revision,
 		ID:         row.ID,
+		SnapshotID: row.SnapshotID,
 		ProjectID:  row.ProjectID,
 		Status:     row.Status,
 		CreatedAt:  row.CreatedAt,
@@ -919,7 +1276,7 @@ func recordFromRow(row store.CompileJob) (record, error) {
 		Error:      row.Error,
 	}
 	if len(row.Result) > 0 {
-		var result api.CompileResult
+		var result protocol.CompileResult
 		if err := json.Unmarshal(row.Result, &result); err != nil {
 			return record{}, fmt.Errorf("decode queued job result: %w", err)
 		}
@@ -948,7 +1305,7 @@ func recordFromRow(row store.CompileJob) (record, error) {
 	return record{Job: job, OwnerID: row.OwnerID, Request: request, Snapshot: snapshot}, nil
 }
 
-func resultDuration(result *api.CompileResult) int64 {
+func resultDuration(result *protocol.CompileResult) int64 {
 	if result == nil {
 		return 0
 	}
@@ -963,7 +1320,7 @@ func randomID(prefix string) (string, error) {
 	return prefix + "_" + hex.EncodeToString(b), nil
 }
 
-func withoutExpiredAuxiliary(job api.Job) api.Job {
+func withoutExpiredAuxiliary(job protocol.Job) protocol.Job {
 	if job.Result == nil || job.Result.AuxiliaryExpiresAt == nil || time.Now().Before(*job.Result.AuxiliaryExpiresAt) {
 		return job
 	}

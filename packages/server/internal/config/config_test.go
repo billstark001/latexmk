@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -89,5 +90,33 @@ func TestCompileCacheLimitCanDisableFeature(t *testing.T) {
 	cfg, err = Load()
 	if err != nil || cfg.MaxCompileCacheBytes != 2<<20 || cfg.CompileCacheRetention.Hours() != 2 {
 		t.Fatalf("cache limits: %+v %v", cfg, err)
+	}
+}
+
+func TestRealtimeSessionsCanBeDisabled(t *testing.T) {
+	t.Setenv("LATEXMK_AUTH_MODE", "none")
+	t.Setenv("LATEXMK_API_TOKEN", "")
+	t.Setenv("LATEXMK_API_TOKEN_FILE", "")
+	t.Setenv("LATEXMK_MAX_REALTIME_SESSIONS", "0")
+	cfg, err := Load()
+	if err != nil || cfg.MaxRealtimeSessions != 0 || cfg.MaxRealtimeSessionsPerOwner <= 0 {
+		t.Fatalf("sessions=%+v %v", cfg, err)
+	}
+}
+
+func TestRunnerRejectsNativeLegacyAndShellEscapeConfiguration(t *testing.T) {
+	t.Setenv("LATEXMK_AUTH_MODE", "none")
+	t.Setenv("LATEXMK_API_TOKEN", "")
+	t.Setenv("LATEXMK_API_TOKEN_FILE", "")
+	t.Setenv("LATEXMK_RUNNER_IMAGE", "test@sha256:"+strings.Repeat("a", 64))
+	t.Setenv("LATEXMK_RUNNER_NAMESPACE", "isolated-test")
+	t.Setenv("LATEXMK_ENABLE_LEGACY_COMPILE", "true")
+	if _, err := Load(); err == nil {
+		t.Fatal("native legacy route was accepted alongside daemon access")
+	}
+	t.Setenv("LATEXMK_ENABLE_LEGACY_COMPILE", "false")
+	t.Setenv("LATEXMK_ALLOW_SHELL_ESCAPE", "true")
+	if _, err := Load(); err == nil {
+		t.Fatal("shell escape was accepted alongside isolated runner")
 	}
 }

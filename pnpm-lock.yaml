@@ -160,6 +160,8 @@ importers:
 
   packages/server: {}
 
+  packages/shared: {}
+
 packages:
 
   '@babel/code-frame@7.29.7':

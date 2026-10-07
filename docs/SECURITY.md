@@ -75,7 +75,7 @@ at the application and deployment layers.
 
 ## Server filesystem and process primitives
 
-`internal/platform/safefs` owns normalized relative paths, `os.Root`-confined
+`packages/shared/safefs` owns normalized relative paths, `os.Root`-confined
 operations, regular-file reads, byte limits, verified copies, and staged file
 publication. Symlinks are rejected during path validation; `os.Root` independently
 prevents root escape during the actual operation, including concurrent path
@@ -123,3 +123,29 @@ retention, quotas and job transitions remain in their owning business packages.
 Do not offer this image as an anonymous public TeX compiler without additional
 microVM/container isolation, strict egress control, abuse prevention, and a
 separate threat-model review.
+
+## Realtime workers
+
+Reusable realtime sessions require the opt-in digest-pinned Docker runner.
+Its disposable workers receive verified source/checkpoint bytes over stdin and
+return bounded result archives over stdout. They receive no host mounts, network,
+controller credentials or Docker socket. CPU, memory, PIDs, writable bytes and
+inodes are limited independently of ordinary source/log/artifact quotas.
+All queued jobs execute in workers once a runner is configured; synchronous
+legacy compilation and shell escape are disallowed in that mode. The privileged
+controller never executes user TeX. Only a
+successful checkpoint can be reused; failed or cancelled attempts cannot publish
+new state. Their prior verified checkpoint keeps its original expiry and input
+compatibility checks. Corrupt state, expiration, explicit closure and restart
+invalidate it. Session owner checks apply to uploads, revision receipts, job results
+and SSE. See [configuration and trust boundaries](REALTIME.md).
+
+Docker access belongs to the trusted controller and grants administrative control
+of its daemon. Use a dedicated host/VM or broker for hostile tenants. Native fresh
+sessions retain the existing compiler trust boundary; enabling realtime alone
+without a runner does not add OS isolation.
+
+Source modes `0444/0555` protect against accidental writes. The worker and
+compiler share a UID, so a compromised compiler can change those modes; they
+are not an enforced read-only mount or ownership boundary. Controller snapshots
+remain separate verified copies, and only bounded build state is exported.

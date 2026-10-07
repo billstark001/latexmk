@@ -16,12 +16,11 @@ import (
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
 	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
-	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
-	projectwatch "github.com/billstark001/latexmk/packages/cli/internal/watch"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 var (
-	version   = "0.3.3"
+	version   = "0.4.0"
 	commit    = "unknown"
 	buildDate = "unknown"
 )
@@ -58,6 +57,8 @@ type compileOptions struct {
 	dryRun        bool
 	detach        bool
 	watch         bool
+	realtime      bool
+	controlFiles  []string
 	watchInterval time.Duration
 	watchDebounce time.Duration
 	insecure      bool
@@ -127,7 +128,12 @@ func run(args []string) int {
 	case "pdflatex", "pdflatex.exe":
 		forcedEngine = "pdflatex"
 	}
-	return runCompile(argv, forcedEngine, false)
+	for {
+		code := runCompile(argv, forcedEngine, false)
+		if code != reloadLiveSettings {
+			return code
+		}
+	}
 }
 
 func runCompile(args []string, forcedEngine string, listOnly bool) int {
@@ -241,6 +247,15 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		return fail(err)
 	}
 	opts.token = cfg.Token
+	opts.controlFiles = append(
+		[]string{
+			cfg.ConfigPath,
+			cfg.UserConfigPath,
+			cfg.EnvPath,
+			filepath.Join(opts.projectRoot, config.FileName),
+			filepath.Join(opts.projectRoot, config.EnvFileName),
+		},
+		cfg.DenyFiles...)
 	c, err := client.New(opts.server, opts.token, opts.timeout, opts.insecure)
 	if err != nil {
 		if opts.detach {
@@ -285,6 +300,9 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		Force:           opts.force,
 		Quiet:           opts.quiet,
 	}
+	if opts.realtime {
+		return runLive(c, request, opts)
+	}
 	if opts.watch {
 		return runWatch(c, request, opts)
 	}
@@ -314,7 +332,7 @@ func runDetachedCompile(c *client.Client, request protocol.CompileRequest, opts 
 		return 0
 	}
 	for _, warning := range out.Warnings {
-		fmt.Fprintln(os.Stderr, "latexmk: warning:", warning)
+		fmt.Fprintln(os.Stderr, "latexmk: warning:", terminalText(warning))
 	}
 	fmt.Printf(
 		"job ID: %s\nproject ID: %s\nsnapshot ID: %s\nstatus: %s\n",
@@ -346,16 +364,16 @@ func reportCompile(out client.CompileOutput, err error, opts compileOptions) int
 		return fail(err)
 	}
 	for _, warning := range out.Warnings {
-		fmt.Fprintln(os.Stderr, "latexmk: warning:", warning)
+		fmt.Fprintln(os.Stderr, "latexmk: warning:", terminalText(warning))
 	}
 	if opts.jsonOutput {
 		_ = json.NewEncoder(os.Stdout).Encode(out.Result)
 	} else {
 		if !opts.quiet && len(out.Stdout) > 0 {
-			_, _ = os.Stdout.Write(out.Stdout)
+			_, _ = fmt.Fprint(os.Stdout, terminalText(string(out.Stdout)))
 		}
 		if len(out.Stderr) > 0 {
-			_, _ = os.Stderr.Write(out.Stderr)
+			_, _ = fmt.Fprint(os.Stderr, terminalText(string(out.Stderr)))
 		}
 		if cache := out.Result.CompileCache; cache != nil {
 			fmt.Fprintf(
@@ -364,10 +382,10 @@ func reportCompile(out client.CompileOutput, err error, opts compileOptions) int
 				cache.Status,
 				cache.RestoredFiles,
 				cache.StoredFiles,
-				cache.Reason,
+				terminalText(cache.Reason),
 			)
 			if cache.Warning != "" {
-				fmt.Fprintln(os.Stderr, "latexmk: compile cache:", cache.Warning)
+				fmt.Fprintln(os.Stderr, "latexmk: compile cache:", terminalText(cache.Warning))
 			}
 		}
 		fmt.Fprintf(
@@ -386,7 +404,7 @@ func reportCompile(out client.CompileOutput, err error, opts compileOptions) int
 	}
 	if !out.Result.Success {
 		if out.Result.Error != "" {
-			fmt.Fprintln(os.Stderr, "latexmk:", out.Result.Error)
+			fmt.Fprintln(os.Stderr, "latexmk:", terminalText(out.Result.Error))
 		}
 		if out.Result.TimedOut {
 			return 124
@@ -400,6 +418,7 @@ func reportCompile(out client.CompileOutput, err error, opts compileOptions) int
 }
 
 func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOptions) int {
+	fmt.Fprintln(os.Stderr, "latexmk: --realtime is recommended for continuous previews and coalesced compilation")
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	files, _, err := c.Manifest(request.Entry, request.Engine)
@@ -449,16 +468,9 @@ func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOpt
 			continue
 		}
 		files = after
-		tracker, trackErr := projectwatch.New(watchTargets(opts, files), opts.watchInterval, opts.watchDebounce)
+		tracker, trackErr := newSourceTracker(c, request, opts, files, nil)
 		if trackErr != nil {
 			return fail(trackErr)
-		}
-		tracker.Refresh = func() ([]projectwatch.Target, error) {
-			selection, err := c.SelectionPaths(request.Entry, request.Engine)
-			if err != nil {
-				return nil, err
-			}
-			return watchTargets(opts, selection.Files), nil
 		}
 		changed, waitErr := tracker.Wait(ctx)
 		if waitErr != nil {
@@ -469,100 +481,6 @@ func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOpt
 			return fail(waitErr)
 		}
 		fmt.Fprintln(os.Stderr, "latexmk: change detected:", strings.Join(changed, ", "))
-	}
-}
-
-func selectedFilesChanged(before, after []projectarchive.File) bool {
-	if len(before) != len(after) {
-		return true
-	}
-	current := make(map[string]string, len(after))
-	for _, file := range after {
-		current[file.Path] = file.SHA256
-	}
-	for _, file := range before {
-		if current[file.Path] != file.SHA256 {
-			return true
-		}
-	}
-	return false
-}
-
-func watchTargets(opts compileOptions, files []projectarchive.File) []projectwatch.Target {
-	targets := make([]projectwatch.Target, 0, len(files)+8)
-	for _, file := range files {
-		targets = append(targets, projectwatch.Target{Name: file.Path, Path: file.Source})
-	}
-	if opts.manifestFile != "" {
-		if clean, err := dependency.NormalizeExplicitManifestPath(opts.manifestFile); err == nil {
-			targets = append(
-				targets,
-				projectwatch.Target{
-					Name: "dependency manifest " + clean,
-					Path: filepath.Join(opts.projectRoot, filepath.FromSlash(clean)),
-				},
-			)
-		}
-	}
-	if opts.manifestFile == "" && opts.uploadMode == "manifest" && len(opts.includeFiles) == 0 {
-		for _, name := range []string{".latexmk-manifest", ".latexmk-files"} {
-			targets = append(
-				targets,
-				projectwatch.Target{Name: "dependency manifest " + name, Path: filepath.Join(opts.projectRoot, name)},
-			)
-		}
-	}
-	names := opts.ignoreFiles
-	if names == nil {
-		names = []string{".latexmkignore"}
-	}
-	for _, name := range names {
-		targets = append(
-			targets,
-			projectwatch.Target{Name: "ignore policy " + name, Path: filepath.Join(opts.projectRoot, name)},
-		)
-	}
-	if !opts.gitIgnore {
-		return targets
-	}
-	repoRoot, err := config.FindGitRoot(opts.projectRoot)
-	if err != nil {
-		return targets
-	}
-	policyPaths := make(map[string]struct{})
-	for _, file := range files {
-		for dir := filepath.Dir(file.Source); ; dir = filepath.Dir(dir) {
-			policyPaths[filepath.Join(dir, ".gitignore")] = struct{}{}
-			if dir == repoRoot || filepath.Dir(dir) == dir {
-				break
-			}
-		}
-	}
-	policyPaths[filepath.Join(repoRoot, ".git", "info", "exclude")] = struct{}{}
-	if globalExcludes, ok := effectiveGitExcludesFile(repoRoot); ok {
-		policyPaths[globalExcludes] = struct{}{}
-	}
-	for policyPath := range policyPaths {
-		label, relErr := filepath.Rel(opts.projectRoot, policyPath)
-		if relErr != nil {
-			label = policyPath
-		}
-		targets = append(targets, projectwatch.Target{Name: "Git policy " + filepath.ToSlash(label), Path: policyPath})
-	}
-	return targets
-}
-
-func waitForContext(ctx context.Context, duration time.Duration) bool {
-	if duration <= 0 {
-		return ctx.Err() == nil
-	}
-	timer := time.NewTimer(duration)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
 	}
 }
 
@@ -769,6 +687,8 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 			opts.dryRun = true
 		case a == "--detach":
 			opts.detach = true
+		case a == "--realtime":
+			opts.realtime, opts.watch = true, true
 		case a == "--watch":
 			opts.watch = true
 		case a == "--watch-interval" || strings.HasPrefix(a, "--watch-interval="):
@@ -1470,7 +1390,8 @@ Compile options:
   --json                       Print machine-readable result
   --dry-run                    Print the upload manifest without contacting the server
   --detach                     Return after creating an immutable queued job
-  --watch                      Recompile after selected dependency changes
+  --realtime                   Watch with revisioned sessions and atomic PDF bundles
+  --watch                      Ordinary jobs after changes; prefer --realtime
   --watch-interval 500ms       Refresh selection and poll selected files
   --watch-debounce 500ms       Wait for rapid edits to settle before compiling
 

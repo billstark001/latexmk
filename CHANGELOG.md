@@ -43,6 +43,44 @@ numbers.
   its first commit's date. These historical version entries do not assert that
   an untagged version was published.
 
+## [0.4.0] - 2026-10-07
+
+### Added
+
+- Add revisioned realtime sessions with coalesced pending work, idempotent
+  creation/submission, replayable SSE and verified PDF/SyncTeX preview generations.
+- Add optional successful build checkpoints restored in disposable, resource-limited
+  workers from digest-pinned application images.
+- Record compilation stage timings and verify slim/full images with real TeX,
+  Biber, CLI preview/watch flows, PostgreSQL outages and crash recovery.
+
+### Fixed
+
+- Bound completion, closure and expiry persistence; recover deferred terminal
+  transitions without holding global admission or occupying compiler workers.
+- Retry diagnostic/publication retrieval, expose final cache accounting consistently,
+  and keep result expiry independent of mutable session state.
+- Cancel realtime operations when configuration, credentials or upload policies change.
+- Account for staged storage correctly and return native job history in creation order.
+
+### Changed
+
+- Recommend realtime for continuous previews while retaining watch.
+- Consolidate protocol and filesystem primitives in the shared Go module, along with
+  captured sources, observation, missing-file recovery and storage publication.
+- Reduce save discovery, source copying and transport compression costs while retaining
+  complete content verification, source quotas and disposable execution boundaries.
+- Preserve the prior verified checkpoint after compiler errors/cancellation under its
+  original expiry and compatibility rules; discard invalid state with bounded cold retry.
+- Coordinate all workspace packages and executable defaults at `0.4.0`.
+  The private worker protocol is version 2 and requires a matching controller/worker image.
+
+### Security
+
+- Document the broader full-checkpoint and Docker-controller trust boundaries.
+  Same-UID source permissions protect against accidental writes rather than enforcing
+  a read-only ownership or mount boundary.
+
 ## @latexmk/cli [0.3.3] - 2026-10-03
 
 ### Added

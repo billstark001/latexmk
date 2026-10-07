@@ -38,7 +38,7 @@ func New(cfg config.Config, db *store.Postgres) *Manager {
 // same typed accessor without exposing a raw bearer token.
 func (m *Manager) Middleware(admin bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		principal, err := m.authenticate(c.Request)
+		principal, err := m.Authenticate(c.Request)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			return
@@ -54,7 +54,7 @@ func (m *Manager) Middleware(admin bool) gin.HandlerFunc {
 
 func (m *Manager) Require(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		principal, err := m.authenticate(r)
+		principal, err := m.Authenticate(r)
 		if err != nil {
 			writeAuthError(w, http.StatusUnauthorized, err.Error())
 			return
@@ -74,7 +74,7 @@ func (m *Manager) RequireAdmin(next http.Handler) http.Handler {
 	}))
 }
 
-func (m *Manager) authenticate(r *http.Request) (Principal, error) {
+func (m *Manager) Authenticate(r *http.Request) (Principal, error) {
 	if m.cfg.AuthMode == "none" {
 		return Principal{ID: "local", Name: "local", Role: "admin"}, nil
 	}

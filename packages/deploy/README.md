@@ -31,7 +31,8 @@ docker compose up -d
 
 Use `--force` to regenerate a non-empty bundle. Application and runtime contexts
 are separate: regenerating the application does not rebuild the runtime.
-`--server-source DIR` is supported for the application bundle. Runtime bundling
+`--server-source DIR` and `--shared-source DIR` select application sources and
+their shared Go module. Both are included in the standalone build context. Runtime bundling
 requires no server source or Go toolchain.
 
 ## Publishing and PaaS deployment

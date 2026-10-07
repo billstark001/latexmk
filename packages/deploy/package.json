@@ -1,6 +1,6 @@
 {
   "name": "@latexmk/deploy",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "private": true,
   "bin": {
     "latexmk-deploy": "dist/index.js"

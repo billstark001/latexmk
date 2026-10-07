@@ -46,5 +46,5 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
-      - run: pnpm --filter @latexmk/cli --filter @latexmk/server test:race
+      - run: pnpm --filter @latexmk/cli --filter @latexmk/server --filter @latexmk/shared test:race
       - run: pnpm build

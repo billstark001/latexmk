@@ -2,9 +2,11 @@ package watch
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -100,5 +102,181 @@ func TestRefreshDetectsNewMatchingFile(t *testing.T) {
 	changed, err := tracker.Wait(ctx)
 	if err != nil || len(changed) != 1 || changed[0] != "new.tex" {
 		t.Fatalf("new member: %v %v", changed, err)
+	}
+}
+
+func TestNativeWatchDetectsAtomicReplacementWithUnchangedMetadata(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "main.tex")
+	if err := os.WriteFile(file, []byte("one"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(file)
+	tracker, err := New([]Target{{Name: "main.tex", Path: file}}, time.Hour, 10*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := tracker.Wait(ctx); done <- err }()
+	// Let Wait register its directory watch; hourly polling cannot satisfy this test.
+	time.Sleep(50 * time.Millisecond)
+	replacement := filepath.Join(root, "save.tmp")
+	if err := os.WriteFile(replacement, []byte("two"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(replacement, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, file); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	// A second replacement must also be observed, despite the original inode disappearing.
+	go func() { _, err := tracker.Wait(ctx); done <- err }()
+	time.Sleep(50 * time.Millisecond)
+	if err := os.WriteFile(replacement, []byte("new"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, file); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMaximumWaitBoundsContinuousEdits(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "main.tex")
+	if err := os.WriteFile(file, []byte("one"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tracker, err := New([]Target{{Name: "main.tex", Path: file}}, 5*time.Millisecond, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker.MaxWait = 70 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	go func() {
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_ = os.WriteFile(file, []byte(time.Now().String()), 0600)
+			}
+		}
+	}()
+	if _, err := tracker.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRefreshFailureStopsInsteadOfUsingStalePolicy(t *testing.T) {
+	tracker, err := New(nil, time.Millisecond, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker.Refresh = func() ([]Target, error) { return nil, os.ErrPermission }
+	if _, err := tracker.Wait(context.Background()); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestBatchedEventsRefreshOnceAfterSaveBurst(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "main.tex")
+	if err := os.WriteFile(file, []byte("source"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	targets := []Target{{Name: "main.tex", Path: file}}
+	tracker, err := New(targets, 5*time.Millisecond, 80*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker.RefreshInterval = time.Hour
+	var refreshes atomic.Int32
+	ready := make(chan struct{})
+	tracker.Refresh = func() ([]Target, error) {
+		if refreshes.Add(1) == 1 {
+			close(ready)
+		}
+		return targets, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		changed, err := tracker.Wait(ctx)
+		if err == nil && !reflect.DeepEqual(changed, []string{"main.tex"}) {
+			err = errors.New("save burst did not retain the selected source")
+		}
+		done <- err
+	}()
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	for range 10 {
+		if err := os.WriteFile(file, []byte(time.Now().String()), 0600); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if refreshes.Load() != 2 {
+		t.Fatalf("save burst repeated full discovery: refreshes=%d", refreshes.Load())
+	}
+}
+
+func TestBatchedReconciliationDiscoversNewMembers(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "main.tex")
+	if err := os.WriteFile(file, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	targets := []Target{{Name: "main.tex", Path: file}}
+	tracker, err := New(targets, 10*time.Millisecond, 20*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker.RefreshInterval = 50 * time.Millisecond
+	ready := make(chan struct{})
+	tracker.Refresh = func() ([]Target, error) {
+		select {
+		case <-ready:
+		default:
+			close(ready)
+		}
+		next := append([]Target(nil), targets...)
+		added := filepath.Join(root, "new.tex")
+		if statFile(added).exists {
+			next = append(next, Target{Name: "new.tex", Path: added})
+		}
+		return next, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	done := make(chan []string, 1)
+	go func() { changed, _ := tracker.Wait(ctx); done <- changed }()
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if err := os.WriteFile(filepath.Join(root, "new.tex"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if changed := <-done; !reflect.DeepEqual(changed, []string{"new.tex"}) {
+		t.Fatalf("new member lost: %v", changed)
 	}
 }

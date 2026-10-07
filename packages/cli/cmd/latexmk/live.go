@@ -1,0 +1,351 @@
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
+	"github.com/billstark001/latexmk/packages/cli/internal/client"
+	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
+)
+
+const reloadLiveSettings = -20
+
+var errLiveSettingsChanged = errors.New("realtime settings changed")
+
+func runLive(c *client.Client, request protocol.CompileRequest, opts compileOptions) (code int) {
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithCancelCause(signalCtx)
+	defer cancel(nil)
+	defer func() {
+		if errors.Is(context.Cause(ctx), errLiveSettingsChanged) {
+			code = reloadLiveSettings
+		}
+	}()
+	operation, finish := context.WithTimeout(ctx, opts.timeout)
+	meta, err := c.Metadata(operation)
+	finish()
+	if err != nil {
+		return fail(err)
+	}
+	if !meta.Capabilities.RealtimeSessions {
+		return fail(&client.CapabilityError{Capability: "realtime sessions"})
+	}
+	if err := client.ValidateRealtimeRequest(request, meta); err != nil {
+		return fail(err)
+	}
+	request.RecordInputs = meta.Capabilities.DependencyInputs
+	request.DetectMissingFiles = meta.Capabilities.NeedsFiles && (c.UploadMode == "" || c.UploadMode == "auto")
+	mode := "fresh"
+	if request.Auxiliary.Server == "reuse" {
+		mode = "reuse"
+	}
+	observation := observeLive(ctx, c, request, opts, cancel)
+	creationKey, err := liveIdempotencyKey()
+	if err != nil {
+		return fail(err)
+	}
+	for ctx.Err() == nil {
+		operation, finish := context.WithTimeout(ctx, opts.timeout)
+		session, err := c.CreateSession(
+			operation,
+			protocol.SessionRequest{
+				ProjectID:      c.ProjectID,
+				Request:        request,
+				Workspace:      mode,
+				IdempotencyKey: creationKey,
+			},
+		)
+		finish()
+		if err != nil {
+			if permanentLiveError(err) {
+				return fail(err)
+			}
+			fmt.Fprintln(os.Stderr, "latexmk: session connection failed; retrying:", err)
+			if !waitForContext(ctx, 2*time.Second) {
+				return 0
+			}
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "latexmk: realtime session %s (%s workspace)\n", session.ID, mode)
+		code := runLiveSession(ctx, c, request, opts, meta, session, observation)
+		cleanup, finish := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = c.CloseSession(cleanup, session.ID)
+		finish()
+		if code != -1 {
+			return code
+		}
+		fmt.Fprintln(os.Stderr, "latexmk: session ended; reconnecting with a fresh source snapshot")
+		creationKey, err = liveIdempotencyKey()
+		if err != nil {
+			return fail(err)
+		}
+	}
+	return 0
+}
+
+func runLiveSession(
+	parent context.Context,
+	c *client.Client,
+	request protocol.CompileRequest,
+	opts compileOptions,
+	meta protocol.Metadata,
+	session protocol.Session,
+	observation liveObservation,
+) int {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	events := observeSession(ctx, c, session.ID)
+	pollInterval := 5 * time.Second
+	if ttl := meta.Capabilities.SessionTTLMS; ttl > 0 && ttl < 15_000 {
+		pollInterval = max(time.Millisecond, time.Duration(ttl)*time.Millisecond/3)
+	}
+	poll := time.NewTicker(pollInterval)
+	defer poll.Stop()
+	verify := time.NewTicker(30 * time.Second)
+	defer verify.Stop()
+	// A buffered signal coalesces changes while snapshot capture/upload is active.
+	trigger := make(chan struct{}, 1)
+	trigger <- struct{}{}
+	var lastFiles []projectarchive.File
+	var pending *client.PreparedRevision
+	var pendingFiles []projectarchive.File
+	var captured *client.CapturedSnapshot
+	defer func() {
+		if captured != nil {
+			_ = captured.Close()
+		}
+	}()
+	dirty := true
+	recovery := client.MissingFileRecovery{}
+	publishedJobID, diagnosticJobID := "", ""
+	displayed := uint64(0)
+	submit := func() error {
+		operation, finish := context.WithTimeout(ctx, opts.timeout)
+		defer finish()
+		acceptPending := func() error {
+			job, err := c.CommitRevision(operation, *pending)
+			if err != nil {
+				var failure *client.HTTPError
+				if errors.As(err, &failure) && failure.StatusCode == http.StatusConflict {
+					pending = nil
+				}
+				return err
+			}
+			session.Revision, session.LatestJobID = job.Revision, job.ID
+			lastFiles = pendingFiles
+			pending, pendingFiles = nil, nil
+			fmt.Fprintf(os.Stderr, "latexmk: submitted revision %d (%s)\n", job.Revision, job.ID)
+			return nil
+		}
+		if pending != nil {
+			if err := acceptPending(); err != nil {
+				return err
+			}
+		}
+		dirty = true
+		var previous *projectarchive.Frozen
+		if captured != nil {
+			previous = captured.Frozen
+		}
+		frozen, err := c.FreezeSnapshot(operation, request, recovery.Additional, meta, previous)
+		if err != nil {
+			return err
+		}
+		if err := recovery.ValidateCaptured(frozen.Files); err != nil {
+			_ = frozen.Close()
+			return err
+		}
+		if captured != nil {
+			_ = captured.Close()
+		}
+		captured = frozen
+		if lastFiles != nil && !selectedFilesChanged(lastFiles, frozen.Files) {
+			dirty = false
+			return nil
+		}
+		state, err := c.GetSession(operation, session.ID)
+		if err != nil {
+			return err
+		}
+		session = state
+		key, err := liveIdempotencyKey()
+		if err != nil {
+			return err
+		}
+		prepared, err := c.PrepareRevision(operation, session, request, frozen.Frozen, key)
+		if err != nil {
+			return err
+		}
+		pending = &prepared
+		pendingFiles = append([]projectarchive.File(nil), frozen.Files...)
+		if err := acceptPending(); err != nil {
+			return err
+		}
+		dirty = false
+		return nil
+	}
+	report := func() error {
+		operation, finish := context.WithTimeout(ctx, opts.timeout)
+		defer finish()
+		state, err := c.GetSession(operation, session.ID)
+		if err != nil {
+			return err
+		}
+		session = state
+		// Deliver a completed success even if newer input is pending, but never move
+		// backwards. Consumers can compare its revision with the session's wanted one.
+		if state.LastSuccessfulJobID != "" && state.LastSuccessfulJobID != publishedJobID {
+			job, err := c.GetJob(operation, state.LastSuccessfulJobID)
+			if err != nil {
+				return err
+			}
+			if job.Revision > displayed {
+				out, root, err := c.DownloadLiveResult(operation, job, request, opts.outDir)
+				if err != nil {
+					return err
+				}
+				if out.Result.Success {
+					publishedOptions := opts
+					publishedOptions.outDir = root
+					if err := exportPDF(publishedOptions, out); err != nil {
+						return err
+					}
+					if len(out.Result.InputFiles) > 0 {
+						if err := dependency.SaveCachedInputs(
+							c.ProjectRoot,
+							request.Entry,
+							request.Engine,
+							out.Result.InputFiles,
+						); err != nil {
+							fmt.Fprintln(os.Stderr, "latexmk: dependency cache:", err)
+						}
+					}
+					fmt.Fprintf(
+						os.Stderr,
+						"latexmk: published revision %d (wanted %d), bundle: %s\n",
+						job.Revision,
+						state.Revision,
+						root,
+					)
+					reportCompile(out, nil, opts)
+					displayed = job.Revision
+					publishedJobID = job.ID
+				}
+			}
+		}
+		if state.LatestJobID == "" || state.LatestJobID == publishedJobID || state.LatestJobID == diagnosticJobID {
+			return nil
+		}
+		job, err := c.GetJob(operation, state.LatestJobID)
+		if err != nil {
+			return err
+		}
+		if job.Status != "failed" {
+			return nil
+		}
+		fmt.Fprintf(os.Stderr, "latexmk: revision %d failed; retaining the last successful PDF\n", job.Revision)
+		if job.Result == nil {
+			fmt.Fprintln(os.Stderr, "latexmk:", job.Error)
+			diagnosticJobID = job.ID
+			return nil
+		}
+		out, _, err := c.DownloadLiveResult(operation, job, request, opts.outDir)
+		if err != nil {
+			return err
+		}
+		reportCompile(out, nil, opts)
+		diagnosticJobID = job.ID
+		if request.DetectMissingFiles && len(out.Result.NeedsFiles) > 0 {
+			allowed, err := c.ResolveMissingFiles(out.Result.NeedsFiles, lastFiles, &recovery)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "latexmk: missing-file recovery refused:", err)
+				return nil
+			}
+			if len(allowed) > 0 {
+				lastFiles = nil
+				select {
+				case trigger <- struct{}{}:
+				default:
+				}
+			}
+		}
+		return nil
+	}
+	handle := func(err error) int {
+		if err == nil {
+			return -2
+		}
+		var failure *client.HTTPError
+		if errors.As(err, &failure) && failure.StatusCode == http.StatusNotFound {
+			return -1
+		}
+		if permanentLiveError(err) {
+			return fail(err)
+		}
+		fmt.Fprintln(os.Stderr, "latexmk: realtime operation deferred:", err)
+		return -2
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return 0
+		case <-observation.reload:
+			fmt.Fprintln(os.Stderr, "latexmk: settings changed; rebuilding the session")
+			return reloadLiveSettings
+		case err := <-observation.errors:
+			return fail(err)
+		case <-observation.changed:
+			recovery.Rounds = 0
+			if code := handle(submit()); code != -2 {
+				return code
+			}
+		case <-trigger:
+			if code := handle(submit()); code != -2 {
+				return code
+			}
+		case <-verify.C:
+			if code := handle(submit()); code != -2 {
+				return code
+			}
+		case <-poll.C:
+			if code := handle(report()); code != -2 {
+				return code
+			}
+			// Retry disconnected uploads even when no further editor event occurs.
+			if dirty {
+				if code := handle(submit()); code != -2 {
+					return code
+				}
+			}
+		case <-events:
+			if code := handle(report()); code != -2 {
+				return code
+			}
+		}
+	}
+}
+
+func liveIdempotencyKey() (string, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(nonce[:]), nil
+}
+
+func permanentLiveError(err error) bool {
+	var failure *client.HTTPError
+	return errors.As(err, &failure) &&
+		(failure.StatusCode == http.StatusUnauthorized || failure.StatusCode == http.StatusForbidden || failure.StatusCode == http.StatusBadRequest)
+}

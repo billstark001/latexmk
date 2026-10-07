@@ -40,9 +40,9 @@ node packages/deploy/dist/index.js bundle \
   --profile slim \
   --auth token \
   --out dist/paas-slim \
-  --tag registry.example.edu/latexmk:0.3.0 \
+  --tag registry.example.edu/latexmk:0.4.0 \
   --build \
-  --save dist/latexmk-0.3.0.tar
+  --save dist/latexmk-0.4.0.tar
 ```
 
 For production, publish the runtime and pass its immutable reference

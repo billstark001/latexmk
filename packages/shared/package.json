@@ -1,0 +1,12 @@
+{
+  "name": "@latexmk/shared",
+  "version": "0.4.0",
+  "private": true,
+  "scripts": {
+    "test": "cross-env GOWORK=off go test ./...",
+    "lint": "cross-env GOWORK=off go tool -modfile=../../tools/go.mod golangci-lint run --config ../../.golangci.yml ./...",
+    "format": "cross-env GOWORK=off go tool -modfile=../../tools/go.mod golangci-lint fmt --config ../../.golangci.yml ./...",
+    "format:check": "cross-env GOWORK=off go tool -modfile=../../tools/go.mod golangci-lint fmt --config ../../.golangci.yml --diff ./...",
+    "test:race": "cross-env GOWORK=off go test -race ./..."
+  }
+}

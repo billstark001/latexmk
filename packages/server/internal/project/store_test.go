@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 func TestPlanOnlyRequestsMissingContentAndMaterializesSnapshot(t *testing.T) {
@@ -24,10 +24,10 @@ func TestPlanOnlyRequestsMissingContentAndMaterializesSnapshot(t *testing.T) {
 	content := []byte("\\documentclass{article}")
 	digest := sha256.Sum256(content)
 	sha := hex.EncodeToString(digest[:])
-	request := api.UploadPlanRequest{
+	request := protocol.UploadPlanRequest{
 		ProjectID: "paper",
-		Request:   api.CompileRequest{ProtocolVersion: api.ProtocolVersion, Entry: "main.tex"},
-		Files:     []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
+		Request:   protocol.CompileRequest{ProtocolVersion: protocol.Version, Entry: "main.tex"},
+		Files:     []protocol.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
 	}
 	plan, err := m.Plan("member", request)
 	if err != nil {
@@ -67,13 +67,13 @@ func TestPlanOnlyRequestsMissingContentAndMaterializesSnapshot(t *testing.T) {
 }
 
 func TestSnapshotIDUsesCanonicalManifestOrder(t *testing.T) {
-	a := api.ProjectFile{Path: "a.tex", SHA256: strings.Repeat("a", 64), Size: 1}
-	b := api.ProjectFile{Path: "b.tex", SHA256: strings.Repeat("b", 64), Size: 2}
-	first, err := NewSnapshot("member", "paper", []api.ProjectFile{b, a})
+	a := protocol.ProjectFile{Path: "a.tex", SHA256: strings.Repeat("a", 64), Size: 1}
+	b := protocol.ProjectFile{Path: "b.tex", SHA256: strings.Repeat("b", 64), Size: 2}
+	first, err := NewSnapshot("member", "paper", []protocol.ProjectFile{b, a})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := NewSnapshot("member", "paper", []api.ProjectFile{a, b})
+	second, err := NewSnapshot("member", "paper", []protocol.ProjectFile{a, b})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,10 @@ func TestPutBlobRejectsExtraData(t *testing.T) {
 	sha := hex.EncodeToString(digest[:])
 	plan, err := m.Plan(
 		"member",
-		api.UploadPlanRequest{ProjectID: "paper", Files: []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: 1}}},
+		protocol.UploadPlanRequest{
+			ProjectID: "paper",
+			Files:     []protocol.ProjectFile{{Path: "main.tex", SHA256: sha, Size: 1}},
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -115,9 +118,9 @@ func TestPutBlobEnforcesStateStorageLimit(t *testing.T) {
 	sha := hex.EncodeToString(digest[:])
 	plan, err := m.Plan(
 		"member",
-		api.UploadPlanRequest{
+		protocol.UploadPlanRequest{
 			ProjectID: "paper",
-			Files:     []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
+			Files:     []protocol.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
 		},
 	)
 	if err != nil {
@@ -146,9 +149,9 @@ func TestPlanEnforcesBlobAndSessionLimits(t *testing.T) {
 	content := []byte("ab")
 	digest := sha256.Sum256(content)
 	sha := hex.EncodeToString(digest[:])
-	request := api.UploadPlanRequest{
+	request := protocol.UploadPlanRequest{
 		ProjectID: "paper",
-		Files:     []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
+		Files:     []protocol.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
 	}
 	if _, err := m.Plan("member", request); err == nil {
 		t.Fatal("expected per-blob upload limit to reject manifest")
@@ -181,9 +184,9 @@ func TestPruneKeepsReferencedBlobsAndRemovesExpiredCache(t *testing.T) {
 	content := []byte("source")
 	digest := sha256.Sum256(content)
 	sha := hex.EncodeToString(digest[:])
-	request := api.UploadPlanRequest{
+	request := protocol.UploadPlanRequest{
 		ProjectID: "paper",
-		Files:     []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
+		Files:     []protocol.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
 	}
 	plan, err := m.Plan("member", request)
 	if err != nil {
@@ -245,9 +248,9 @@ func TestPruneKeepsBlobPinnedByOlderQueuedSnapshot(t *testing.T) {
 		sha := hex.EncodeToString(digest[:])
 		plan, err := m.Plan(
 			"member",
-			api.UploadPlanRequest{
+			protocol.UploadPlanRequest{
 				ProjectID: "paper",
-				Files:     []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
+				Files:     []protocol.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
 			},
 		)
 		if err != nil {

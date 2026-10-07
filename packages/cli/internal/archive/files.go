@@ -1,11 +1,13 @@
 package archive
 
 import (
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 // OpenFile revalidates a selected member at use time. Root-relative opens keep
@@ -22,35 +24,12 @@ func OpenFile(file File) (*os.File, error) {
 	if filepath.Clean(filepath.Join(root, name)) != filepath.Clean(file.Source) {
 		return nil, fmt.Errorf("selected source does not match path %q", file.Path)
 	}
-	fs, err := os.OpenRoot(root)
+	fs, err := safefs.Open(root)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = fs.Close() }()
-	current := ""
-	for _, part := range strings.Split(filepath.Clean(name), string(filepath.Separator)) {
-		current = filepath.Join(current, part)
-		info, err := fs.Lstat(current)
-		if err != nil {
-			return nil, err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return nil, fmt.Errorf("symlinks are not supported: %s", file.Path)
-		}
-		if current == filepath.Clean(name) && !info.Mode().IsRegular() {
-			return nil, fmt.Errorf("selected file is not regular: %s", file.Path)
-		}
-	}
-	f, err := fs.Open(name)
-	if err != nil {
-		return nil, err
-	}
-	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		_ = f.Close()
-		return nil, fmt.Errorf("selected file is not regular: %s", file.Path)
-	}
-	return f, nil
+	return fs.OpenRegular(file.Path)
 }
 
 func ReadFile(file File, limit int64) ([]byte, error) {
@@ -58,9 +37,9 @@ func ReadFile(file File, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
-	data, err := io.ReadAll(io.LimitReader(f, limit+1))
-	if err == nil && int64(len(data)) > limit {
+	data, err := safefs.ReadLimited(f, limit)
+	err = errors.Join(err, f.Close())
+	if errors.Is(err, safefs.ErrLimit) {
 		return nil, fmt.Errorf("file exceeds %d bytes: %s", limit, file.Path)
 	}
 	return data, err

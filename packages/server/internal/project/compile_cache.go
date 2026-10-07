@@ -14,9 +14,9 @@ import (
 	"sort"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
-	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 // Only portable TeX state is restored. In particular, .fls, .fdb_latexmk,
@@ -37,23 +37,23 @@ type auxiliaryFile struct {
 }
 
 type compileCacheRecord struct {
-	ExpiresAt *time.Time        `json:"expiresAt,omitempty"`
-	Version   int               `json:"version"`
-	Submitted time.Time         `json:"submitted"`
-	JobID     string            `json:"jobId"`
-	Inputs    []api.ProjectFile `json:"inputs"`
-	Files     []auxiliaryFile   `json:"files"`
+	ExpiresAt *time.Time             `json:"expiresAt,omitempty"`
+	Version   int                    `json:"version"`
+	Submitted time.Time              `json:"submitted"`
+	JobID     string                 `json:"jobId"`
+	Inputs    []protocol.ProjectFile `json:"inputs"`
+	Files     []auxiliaryFile        `json:"files"`
 }
 
 // CompileCacheKey deliberately excludes input hashes: ordinary edits to TeX
 // should benefit from the previous auxiliary state. Input compatibility is
 // checked separately before restoring anything.
-func CompileCacheKey(req api.CompileRequest, meta api.Metadata, epoch string) string {
-	req.Auxiliary = api.AuxiliaryOptions{}
+func CompileCacheKey(req protocol.CompileRequest, meta protocol.Metadata, epoch string) string {
+	req.Auxiliary = protocol.AuxiliaryOptions{}
 	req.Force, req.Quiet, req.RecordInputs, req.DetectMissingFiles = false, false, false, false
 	payload, _ := json.Marshal(struct {
 		Format    int
-		Request   api.CompileRequest
+		Request   protocol.CompileRequest
 		Version   string
 		Commit    string
 		BuildDate string
@@ -142,11 +142,11 @@ func (m *Manager) readCompileCache(path string) (compileCacheRecord, error) {
 	return record, nil
 }
 
-func compatibleCacheInputs(previous, current []api.ProjectFile) bool {
+func CompatibleCacheInputs(previous, current []protocol.ProjectFile) bool {
 	if len(previous) != len(current) {
 		return false
 	}
-	old := make(map[string]api.ProjectFile, len(previous))
+	old := make(map[string]protocol.ProjectFile, len(previous))
 	for _, file := range previous {
 		old[file.Path] = file
 	}
@@ -169,8 +169,8 @@ func compatibleCacheInputs(previous, current []api.ProjectFile) bool {
 
 // RestoreCompileCache is best effort: corrupt or incompatible state produces
 // a cold build, never a partial warm start or overwritten source file.
-func (m *Manager) RestoreCompileCache(snapshot Snapshot, key, workspace string) api.CompileCache {
-	info := api.CompileCache{Status: "miss", Reason: "no compatible cache"}
+func (m *Manager) RestoreCompileCache(snapshot Snapshot, key, workspace string) protocol.CompileCache {
+	info := protocol.CompileCache{Status: "miss", Reason: "no compatible cache"}
 	path, err := m.compileCachePath(snapshot, key)
 	if err != nil {
 		info.Warning = err.Error()
@@ -190,7 +190,7 @@ func (m *Manager) RestoreCompileCache(snapshot Snapshot, key, workspace string) 
 		info.Reason = "auxiliary cache expired"
 		return info
 	}
-	if !compatibleCacheInputs(record.Inputs, snapshot.Files) {
+	if !CompatibleCacheInputs(record.Inputs, snapshot.Files) {
 		info.Reason = "input set or non-TeX input changed"
 		return info
 	}
@@ -256,11 +256,6 @@ func (m *Manager) SaveCompileCache(
 	for _, file := range snapshot.Files {
 		sources[filepath.ToSlash(filepath.Clean(file.Path))] = true
 	}
-	fs, err := safefs.Open(workspace)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = fs.Close() }()
 	var total int64
 	for _, file := range output.Files {
 		if !reusableAuxiliary(file.RelativePath) || sources[file.RelativePath] {
@@ -269,7 +264,12 @@ func (m *Manager) SaveCompileCache(
 		if file.Size < 0 || file.Size > m.cfg.MaxCompileCacheBytes-total {
 			return 0, errors.New("auxiliary cache exceeds size limit")
 		}
-		data, err := fs.ReadLimited(file.RelativePath, file.Size)
+		input, err := file.Open()
+		if err != nil {
+			return 0, err
+		}
+		data, readErr := io.ReadAll(io.LimitReader(input, file.Size+1))
+		err = errors.Join(readErr, input.Close())
 		if err != nil {
 			return 0, err
 		}
@@ -277,7 +277,8 @@ func (m *Manager) SaveCompileCache(
 		if int64(len(data)) != file.Size {
 			return 0, errors.New("auxiliary changed after collection")
 		}
-		if bytes.Contains(data, []byte(workspace)) {
+		if bytes.Contains(data, []byte(workspace)) ||
+			(output.Result.SourceRoot != "" && bytes.Contains(data, []byte(output.Result.SourceRoot))) {
 			return 0, errors.New("auxiliary contains a nonportable workspace path")
 		}
 		digest := sha256.Sum256(data)
@@ -301,6 +302,14 @@ func (m *Manager) SaveCompileCache(
 	if err := gz.Close(); err != nil {
 		return 0, err
 	}
+	publication, err := m.stageState(path, int64(buffer.Len()), func(writer io.Writer) error {
+		_, err := writer.Write(buffer.Bytes())
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = publication.Close() }()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if prior, err := m.readCompileCache(
@@ -309,35 +318,9 @@ func (m *Manager) SaveCompileCache(
 		(prior.Submitted.After(submitted) || (prior.Submitted.Equal(submitted) && prior.JobID > jobID)) {
 		return 0, nil
 	}
-	var replaced int64
-	if stat, err := os.Lstat(path); err == nil {
-		if !stat.Mode().IsRegular() {
-			return 0, errors.New("cache destination is not regular")
-		}
-		replaced = stat.Size()
-	} else if !os.IsNotExist(err) {
+	if err := publication.commitLocked(); err != nil {
 		return 0, err
 	}
-	// Include both the old and temporary new generation in the hard quota.
-	if m.stateBytes+m.pendingBytes+int64(buffer.Len()) > m.cfg.MaxStateBytes {
-		return 0, errors.New("state storage limit prevents caching auxiliary files")
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return 0, err
-	}
-	cacheRoot, err := safefs.Open(filepath.Dir(path))
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = cacheRoot.Close() }()
-	if _, err := cacheRoot.WriteAtomic(filepath.Base(path), int64(buffer.Len()), func(w io.Writer) error {
-		_, err := w.Write(buffer.Bytes())
-		return err
-	}); err != nil {
-		return 0, err
-	}
-
-	m.stateBytes += int64(buffer.Len()) - replaced
 	return len(record.Files), nil
 }
 

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 const FileName = ".latexmk.json"
@@ -111,7 +111,7 @@ func DefaultDeny() []string {
 		FileName,
 		EnvFileName, TokenFileName, ".latexmk.env", ".latexmk-manifest", ".latexmk-cache/",
 		".latexmkignore",
-		".latexmk-files",
+		".latexmk-files", ".latexmk-live/",
 		".env",
 		".env.*",
 		"*.key",

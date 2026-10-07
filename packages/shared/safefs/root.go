@@ -118,6 +118,20 @@ func ReadLimited(reader io.Reader, max int64) ([]byte, error) {
 	return data, nil
 }
 
+// Digest hashes a bounded stream and rejects an extra byte, including when the
+// caller's stat metadata no longer matches the opened file.
+func Digest(reader io.Reader, max int64) (string, int64, error) {
+	if max < 0 || max == int64(^uint64(0)>>1) {
+		return "", 0, ErrLimit
+	}
+	hash := sha256.New()
+	size, err := io.Copy(hash, io.LimitReader(reader, max+1))
+	if err == nil && size > max {
+		err = ErrLimit
+	}
+	return hex.EncodeToString(hash.Sum(nil)), size, err
+}
+
 // CopyVerified detects truncation, extra bytes and content changes in one pass.
 func CopyVerified(dst io.Writer, src io.Reader, size int64, digest string) error {
 	if size < 0 || size == int64(^uint64(0)>>1) {
@@ -209,6 +223,18 @@ type Pending struct {
 	Size         int64
 }
 
+const stagedPrefix = ".latexmk-"
+
+// IsStagedName identifies private sibling files created by Stage. State-volume
+// collectors skip them while reservations are active and remove them at startup.
+func IsStagedName(name string) bool {
+	if !strings.HasPrefix(name, stagedPrefix) || len(name) != len(stagedPrefix)+32 {
+		return false
+	}
+	_, err := hex.DecodeString(strings.TrimPrefix(name, stagedPrefix))
+	return err == nil
+}
+
 func (r *Root) Stage(name string, max int64, write func(io.Writer) error) (_ *Pending, err error) {
 	if max < 0 {
 		return nil, errors.New("negative write limit")
@@ -224,7 +250,7 @@ func (r *Root) Stage(name string, max int64, write func(io.Writer) error) (_ *Pe
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, err
 	}
-	temp := filepath.Join(filepath.Dir(local), ".latexmk-"+hex.EncodeToString(nonce[:]))
+	temp := filepath.Join(filepath.Dir(local), stagedPrefix+hex.EncodeToString(nonce[:]))
 	f, err := r.Root.OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, err

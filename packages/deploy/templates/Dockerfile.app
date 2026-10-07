@@ -2,16 +2,19 @@
 ARG GO_IMAGE=__GO_IMAGE__
 ARG RUNTIME_IMAGE=__RUNTIME_IMAGE__
 
+FROM __DOCKER_CLI_IMAGE__ AS docker-cli
+
 FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS builder
-WORKDIR /src
+WORKDIR /src/server
 ENV GOWORK=off CGO_ENABLED=0
 COPY server/go.mod server/go.sum ./
+COPY shared/ ../shared/
 # Keep modules in an exportable layer: cache mounts alone do not survive ephemeral CI builders.
 RUN go mod download
 COPY server/ ./
 ARG TARGETOS
 ARG TARGETARCH
-ARG VERSION=0.3.0
+ARG VERSION=0.4.0
 ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
 RUN __GO_CACHE_MOUNT__ \
@@ -21,6 +24,7 @@ RUN __GO_CACHE_MOUNT__ \
 
 FROM ${RUNTIME_IMAGE}
 RUN test "$LATEXMK_IMAGE_PROFILE" = "__IMAGE_PROFILE__"
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=builder --chmod=0755 /out/latexmk-server /usr/local/bin/latexmk-server
 EXPOSE 8080
 STOPSIGNAL SIGTERM

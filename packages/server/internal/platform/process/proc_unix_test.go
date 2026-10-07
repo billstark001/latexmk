@@ -97,3 +97,21 @@ func TestRunTerminatesDescendantsAfterSuccessfulParentExit(t *testing.T) {
 		t.Fatalf("descendant survived: %v", err)
 	}
 }
+
+func TestRunCancelsUnboundedStreamBeforeDiskGrowth(t *testing.T) {
+	var stream bytes.Buffer
+	started := time.Now()
+	result := Run(
+		context.Background(),
+		Spec{
+			Name:           "sh",
+			Args:           []string{"-c", "while :; do printf 1234567890; done"},
+			Stdout:         &stream,
+			MaxStreamBytes: 64,
+			MaxOutputBytes: 64,
+		},
+	)
+	if !errors.Is(result.Err, ErrStreamLimit) || stream.Len() > 64 || time.Since(started) > 3*time.Second {
+		t.Fatalf("stream bytes=%d result=%+v", stream.Len(), result)
+	}
+}

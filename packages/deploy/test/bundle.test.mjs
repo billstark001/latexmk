@@ -20,6 +20,8 @@ test('bundle creates a standalone slim context', async () => {
     assert.equal(result.status, 0, result.stderr);
     assert.equal((await stat(path.join(out, 'Dockerfile'))).isFile(), true);
     assert.equal((await stat(path.join(out, 'server', 'go.mod'))).isFile(), true);
+    assert.equal((await stat(path.join(out, 'shared', 'go.mod'))).isFile(), true);
+    assert.equal((await stat(path.join(out, 'shared', 'protocol', 'protocol.go'))).isFile(), true);
     const manifest = JSON.parse(await readFile(path.join(out, 'latexmk-deploy.json'), 'utf8'));
     assert.equal(manifest.profile, 'slim');
     assert.deepEqual(manifest.engines, ['xelatex']);

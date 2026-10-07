@@ -7,15 +7,20 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 func TestValidateRejectsTraversal(t *testing.T) {
 	r := NewRunner(config.Config{Engines: []string{"xelatex"}})
 	err := r.Validate(
 		t.TempDir(),
-		api.CompileRequest{ProtocolVersion: 1, Entry: "../main.tex", Engine: "xelatex", Interaction: "nonstopmode"},
+		protocol.CompileRequest{
+			ProtocolVersion: 1,
+			Entry:           "../main.tex",
+			Engine:          "xelatex",
+			Interaction:     "nonstopmode",
+		},
 	)
 	if err == nil {
 		t.Fatal("expected traversal error")
@@ -45,7 +50,7 @@ func TestValidateAcceptsEntry(t *testing.T) {
 	r := NewRunner(config.Config{Engines: []string{"xelatex"}})
 	err := r.Validate(
 		root,
-		api.CompileRequest{ProtocolVersion: 1, Entry: "main.tex", Engine: "xelatex", Interaction: "nonstopmode"},
+		protocol.CompileRequest{ProtocolVersion: 1, Entry: "main.tex", Engine: "xelatex", Interaction: "nonstopmode"},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +64,7 @@ func TestValidJobName(t *testing.T) {
 }
 
 func TestCommandArgsHardensLuaLaTeX(t *testing.T) {
-	args := commandArgs(api.CompileRequest{
+	args := commandArgs(protocol.CompileRequest{
 		Entry:       "main.tex",
 		Engine:      "lualatex",
 		Interaction: "nonstopmode",
@@ -78,7 +83,7 @@ func TestCommandArgsHardensLuaLaTeX(t *testing.T) {
 
 func TestCommandArgsDoesNotAddLuaOptionsToOtherEngines(t *testing.T) {
 	for _, engine := range []string{"xelatex", "pdflatex"} {
-		args := commandArgs(api.CompileRequest{
+		args := commandArgs(protocol.CompileRequest{
 			Entry:       "main.tex",
 			Engine:      engine,
 			Interaction: "nonstopmode",
@@ -102,7 +107,7 @@ func TestCollectArtifactsIncludesXdvipdfmxPDF(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	artifacts, err := collectArtifacts(root, api.CompileRequest{Entry: "main.tex", Engine: "xelatex"}, 1<<20)
+	artifacts, err := collectArtifacts(root, protocol.CompileRequest{Entry: "main.tex", Engine: "xelatex"}, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +167,7 @@ func TestCompilerFilesystemRejectsSymlinkArtifactsAndHome(t *testing.T) {
 	if err := os.Symlink(filepath.Join(outside, "secret"), filepath.Join(root, "main.pdf")); err != nil {
 		t.Skip(err)
 	}
-	if _, err := collectArtifacts(root, api.CompileRequest{Entry: "main.tex"}, 1<<20); err == nil {
+	if _, err := collectArtifacts(root, protocol.CompileRequest{Entry: "main.tex"}, 1<<20); err == nil {
 		t.Fatal("collected external artifact")
 	}
 	if err := os.Symlink(outside, filepath.Join(root, ".latexmk-home")); err != nil {
@@ -189,7 +194,7 @@ func TestRecorderUsesPWDForInputsAndOutputs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	files, err := collectArtifacts(root, api.CompileRequest{Entry: "main.tex"}, 1<<20)
+	files, err := collectArtifacts(root, protocol.CompileRequest{Entry: "main.tex"}, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}

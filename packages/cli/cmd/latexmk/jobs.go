@@ -12,7 +12,7 @@ import (
 
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
-	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 var jobIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)

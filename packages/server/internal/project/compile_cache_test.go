@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 func cacheFixture(t *testing.T) (*Manager, Snapshot, string) {
@@ -37,18 +37,18 @@ func cacheFixture(t *testing.T) (*Manager, Snapshot, string) {
 	s := Snapshot{
 		OwnerID:   "alice",
 		ProjectID: "paper",
-		Files: []api.ProjectFile{
+		Files: []protocol.ProjectFile{
 			{Path: "main.tex", SHA256: strings.Repeat("a", 64), Size: 1},
 			{Path: "refs.bib", SHA256: strings.Repeat("b", 64), Size: 1},
 		},
 	}
-	key := CompileCacheKey(api.CompileRequest{Entry: "main.tex", Engine: "xelatex"}, api.Metadata{}, "")
+	key := CompileCacheKey(protocol.CompileRequest{Entry: "main.tex", Engine: "xelatex"}, protocol.Metadata{}, "")
 	return m, s, key
 }
 
 func cacheOutput(t *testing.T, root string, data map[string]string) compile.Output {
 	t.Helper()
-	out := compile.Output{Result: api.CompileResult{Success: true}}
+	out := compile.Output{Result: protocol.CompileResult{Success: true}}
 	for name, content := range data {
 		path := filepath.Join(root, name)
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
@@ -99,7 +99,7 @@ func TestCompileCacheWarmStartAndInvalidation(t *testing.T) {
 		t.Fatal("wrong aux")
 	}
 	changed := s
-	changed.Files = append([]api.ProjectFile(nil), s.Files...)
+	changed.Files = append([]protocol.ProjectFile(nil), s.Files...)
 	changed.Files[0].SHA256 = strings.Repeat("c", 64)
 	if info := m.RestoreCompileCache(changed, key, t.TempDir()); info.Status != "hit" {
 		t.Fatalf("TeX edits should reuse: %+v", info)
@@ -120,10 +120,10 @@ func TestCompileCacheWarmStartAndInvalidation(t *testing.T) {
 }
 
 func TestCompileCacheKeyIsolation(t *testing.T) {
-	req := api.CompileRequest{Entry: "main.tex", Engine: "xelatex", Synctex: true}
-	meta := api.Metadata{Toolchain: map[string]string{"xelatex": "v1"}}
+	req := protocol.CompileRequest{Entry: "main.tex", Engine: "xelatex", Synctex: true}
+	meta := protocol.Metadata{Toolchain: map[string]string{"xelatex": "v1"}}
 	key := CompileCacheKey(req, meta, "")
-	for _, edit := range []func(*api.CompileRequest){func(r *api.CompileRequest) { r.Entry = "other.tex" }, func(r *api.CompileRequest) { r.Engine = "pdflatex" }, func(r *api.CompileRequest) { r.JobName = "other" }, func(r *api.CompileRequest) { r.ShellEscape = true }, func(r *api.CompileRequest) { r.Synctex = false }} {
+	for _, edit := range []func(*protocol.CompileRequest){func(r *protocol.CompileRequest) { r.Entry = "other.tex" }, func(r *protocol.CompileRequest) { r.Engine = "pdflatex" }, func(r *protocol.CompileRequest) { r.JobName = "other" }, func(r *protocol.CompileRequest) { r.ShellEscape = true }, func(r *protocol.CompileRequest) { r.Synctex = false }} {
 		other := req
 		edit(&other)
 		if CompileCacheKey(other, meta, "") == key {
