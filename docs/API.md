@@ -223,7 +223,7 @@ All session endpoints use the existing compile authentication and owner boundary
 Session availability is advertised by `realtimeSessions`, `isolatedWorkspaces`,
 `maxRealtimeSessions` and `sessionTTLMS` in metadata. See [realtime behavior](REALTIME.md).
 
-- `POST /v1/sessions`: strict JSON `{ "projectId": "paper", "workspace": "fresh|reuse", "request": COMPILE_REQUEST, "idempotencyKey": "16-to-64-characters" }`.
+- `POST /v1/sessions`: strict JSON `{ "projectId": "paper", "workspace": "fresh|reuse", "request": COMPILE_REQUEST, "idempotencyKey": "16-to-64-byte-key" }`.
   Returns 201 and `Location`. Compile options are immutable for its lifetime.
   Replaying the same key and payload returns the same live session, including
   when the first response was lost. Keys are scoped to the owner and retained
@@ -232,7 +232,7 @@ Session availability is advertised by `realtimeSessions`, `isolatedWorkspaces`,
   pending job IDs, last successful job ID, event sequence and expiration.
 - `DELETE /v1/sessions/:id`: cancels pending/running work and releases checkpoint
   and source pins. Closed/expired/foreign sessions return 404.
-- `POST /v1/sessions/:id/revisions`: strict JSON `{ "uploadId": "upl_...", "baseRevision": 0, "idempotencyKey": "16-to-64-characters" }`.
+- `POST /v1/sessions/:id/revisions`: strict JSON `{ "uploadId": "upl_...", "baseRevision": 0, "idempotencyKey": "16-to-64-byte-key" }`.
   Upload its exact manifest through existing upload-plan/blob endpoints first.
   Returns 202 with an immutable job tagged by `sessionId` and monotonic `revision`.
   It does not modify the ordinary project's current snapshot. A stale base returns

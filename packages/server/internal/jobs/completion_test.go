@@ -101,9 +101,14 @@ type pruneFaultStore struct {
 	started chan struct{}
 }
 
-type closeFaultStore struct{ *store.Postgres }
+type closeFaultStore struct {
+	*store.Postgres
+	deadlines []time.Time
+}
 
 func (s *closeFaultStore) GetJob(ctx context.Context, _ string) (store.CompileJob, error) {
+	deadline, _ := ctx.Deadline()
+	s.deadlines = append(s.deadlines, deadline)
 	<-ctx.Done()
 	return store.CompileJob{}, ctx.Err()
 }
@@ -127,15 +132,20 @@ func TestExpiredLeasePersistenceHasOneBoundedSweepBudget(t *testing.T) {
 		live.state.RunningJobID = "job_" + id
 		m.active[live.state.RunningJobID] = func() {}
 	}
-	m.db = &closeFaultStore{}
+	fault := &closeFaultStore{}
+	m.db = fault
 	request, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	started := time.Now()
 	m.admissionMu.Lock()
 	m.expireSessionsLocked(request)
 	m.admissionMu.Unlock()
-	if elapsed := time.Since(started); elapsed >= 100*time.Millisecond {
+	if elapsed := time.Since(started); elapsed >= 200*time.Millisecond {
 		t.Fatalf("expired leases monopolized admission: %v", elapsed)
+	}
+	if len(fault.deadlines) != 2 || !fault.deadlines[0].Equal(fault.deadlines[1]) ||
+		!fault.deadlines[0].Before(started.Add(100*time.Millisecond)) {
+		t.Fatalf("expiry sweep did not share one short deadline: %v", fault.deadlines)
 	}
 	// Cleanup failure retains the lease/job for a later durable retry.
 	if len(m.sessions) != 2 {
