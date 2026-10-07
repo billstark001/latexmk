@@ -293,10 +293,15 @@ explicit manifest or reviewed `all` mode for that first compile.
 
 ## Dependency watcher
 
+Prefer `latexmk --realtime main.tex` for continuous editing and previews; see
+[realtime compilation](REALTIME.md). The existing `watch` mode remains available
+and submits ordinary independent jobs.
+
 `latexmk watch main.tex` performs one compile immediately, then polls only the
 selected dependency set. The default interval and debounce are both 500 ms and
-can be changed with `--watch-interval` and `--watch-debounce`. Polling is used so
-the same implementation works for native paths and Docker bind mounts.
+can be changed with `--watch-interval` and `--watch-debounce`. Native notification
+hints are backed by polling for paths and Docker bind mounts that do not deliver
+reliable events.
 
 The watch set contains:
 

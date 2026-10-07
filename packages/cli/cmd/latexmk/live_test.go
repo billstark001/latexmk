@@ -67,13 +67,17 @@ func TestRealtimeRetriesTransientDiagnosticDownload(t *testing.T) {
 		t.Fatal(err)
 	}
 	var downloads atomic.Int32
+	var jobReads atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/uploads/plans":
 			_ = json.NewEncoder(w).Encode(protocol.UploadPlan{UploadID: "upl_test"})
 		case "/v1/sessions/ses_test":
 			_ = json.NewEncoder(w).Encode(session)
-		case "/v1/sessions/ses_test/revisions", "/v1/jobs/job_failed":
+		case "/v1/sessions/ses_test/revisions":
+			_ = json.NewEncoder(w).Encode(job)
+		case "/v1/jobs/job_failed":
+			jobReads.Add(1)
 			_ = json.NewEncoder(w).Encode(job)
 		case "/v1/jobs/job_failed/result":
 			if downloads.Add(1) == 1 {
@@ -124,6 +128,9 @@ func TestRealtimeRetriesTransientDiagnosticDownload(t *testing.T) {
 	})
 	if downloads.Load() != 2 || !strings.Contains(stderr, result.Error) {
 		t.Fatalf("diagnostics were not recovered exactly once: downloads=%d, stderr=%s", downloads.Load(), stderr)
+	}
+	if jobReads.Load() != 2 {
+		t.Fatalf("already processed failure was fetched again: reads=%d", jobReads.Load())
 	}
 }
 

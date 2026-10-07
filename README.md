@@ -115,3 +115,5 @@ Persistent state depends on the deployment's configured storage volume.
 
 Realtime remote compilation is available with `--realtime`, optionally using isolated
 workspace checkpoints with `--server-cache reuse`. See [realtime compilation](docs/REALTIME.md).
+Use realtime in preference to `watch` for continuous editing and previews;
+`watch` remains available for ordinary independent jobs and older servers.

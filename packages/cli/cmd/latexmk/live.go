@@ -9,125 +9,18 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
-	projectwatch "github.com/billstark001/latexmk/packages/cli/internal/watch"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 const reloadLiveSettings = -20
 
 var errLiveSettingsChanged = errors.New("realtime settings changed")
-
-type liveObservation struct {
-	changed chan struct{}
-	reload  chan struct{}
-	errors  chan error
-}
-
-func observeLive(
-	ctx context.Context,
-	c *client.Client,
-	request protocol.CompileRequest,
-	opts compileOptions,
-	invalidate context.CancelCauseFunc,
-) liveObservation {
-	observation := liveObservation{
-		changed: make(chan struct{}, 1),
-		reload:  make(chan struct{}, 1),
-		errors:  make(chan error, 1),
-	}
-	{
-		selection, err := c.SelectionPaths(request.Entry, request.Engine)
-		if err != nil {
-			observation.errors <- err
-			return observation
-		}
-		targets := watchTargets(opts, selection.Files)
-		for _, file := range opts.controlFiles {
-			if file == "" {
-				continue
-			}
-			if !filepath.IsAbs(file) {
-				file = filepath.Join(opts.projectRoot, file)
-			}
-			targets = append(targets, projectwatch.Target{Name: "settings: " + file, Path: file})
-		}
-		tracker, err := projectwatch.New(targets, opts.watchInterval, opts.watchDebounce)
-		if err != nil {
-			observation.errors <- err
-			return observation
-		}
-		tracker.Refresh = func() ([]projectwatch.Target, error) {
-			next, err := c.SelectionPaths(request.Entry, request.Engine)
-			if err != nil {
-				return targets, nil
-			} // Never upload from this fallback; Freeze rechecks policy.
-			refreshed := watchTargets(opts, next.Files)
-			for _, target := range targets {
-				if strings.HasPrefix(target.Name, "settings: ") {
-					refreshed = append(refreshed, target)
-				}
-			}
-			targets = refreshed
-			return targets, nil
-		}
-		go func() {
-			for {
-				names, err := tracker.Wait(ctx)
-				if err != nil {
-					if ctx.Err() == nil {
-						observation.errors <- err
-					}
-					return
-				}
-				for _, name := range names {
-					if strings.HasPrefix(name, "settings: ") {
-						invalidate(errLiveSettingsChanged)
-						select {
-						case observation.reload <- struct{}{}:
-						default:
-						}
-						return
-					}
-				}
-				select {
-				case observation.changed <- struct{}{}:
-				default:
-				}
-			}
-		}()
-	}
-	return observation
-}
-
-func observeSession(ctx context.Context, c *client.Client, id string) <-chan struct{} {
-	changed := make(chan struct{}, 1)
-	go func() {
-		after := uint64(0)
-		for ctx.Err() == nil {
-			streamCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
-			_ = c.StreamSessionEvents(streamCtx, id, after, func(event protocol.SessionEvent) {
-				after = event.Sequence
-				select {
-				case changed <- struct{}{}:
-				default:
-				}
-			})
-			cancel()
-			if !waitForContext(ctx, time.Second) {
-				return
-			}
-		}
-	}()
-	return changed
-}
 
 func runLive(c *client.Client, request protocol.CompileRequest, opts compileOptions) (code int) {
 	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -225,7 +118,7 @@ func runLiveSession(
 	var pendingFiles []projectarchive.File
 	dirty := true
 	recovery := client.MissingFileRecovery{}
-	lastReported := ""
+	publishedJobID, diagnosticJobID := "", ""
 	displayed := uint64(0)
 	submit := func() error {
 		operation, finish := context.WithTimeout(ctx, opts.timeout)
@@ -294,7 +187,7 @@ func runLiveSession(
 		session = state
 		// Deliver a completed success even if newer input is pending, but never move
 		// backwards. Consumers can compare its revision with the session's wanted one.
-		if state.LastSuccessfulJobID != "" && state.LastSuccessfulJobID != lastReported {
+		if state.LastSuccessfulJobID != "" && state.LastSuccessfulJobID != publishedJobID {
 			job, err := c.GetJob(operation, state.LastSuccessfulJobID)
 			if err != nil {
 				return err
@@ -329,24 +222,24 @@ func runLiveSession(
 					)
 					reportCompile(out, nil, opts)
 					displayed = job.Revision
-					lastReported = job.ID
+					publishedJobID = job.ID
 				}
 			}
 		}
-		if state.LatestJobID == "" {
+		if state.LatestJobID == "" || state.LatestJobID == publishedJobID || state.LatestJobID == diagnosticJobID {
 			return nil
 		}
 		job, err := c.GetJob(operation, state.LatestJobID)
 		if err != nil {
 			return err
 		}
-		if job.ID == lastReported || job.Status != "failed" {
+		if job.Status != "failed" {
 			return nil
 		}
 		fmt.Fprintf(os.Stderr, "latexmk: revision %d failed; retaining the last successful PDF\n", job.Revision)
 		if job.Result == nil {
 			fmt.Fprintln(os.Stderr, "latexmk:", job.Error)
-			lastReported = job.ID
+			diagnosticJobID = job.ID
 			return nil
 		}
 		out, _, err := c.DownloadLiveResult(operation, job, request, opts.outDir)
@@ -354,7 +247,7 @@ func runLiveSession(
 			return err
 		}
 		reportCompile(out, nil, opts)
-		lastReported = job.ID
+		diagnosticJobID = job.ID
 		if request.DetectMissingFiles && len(out.Result.NeedsFiles) > 0 {
 			allowed, err := c.ResolveMissingFiles(out.Result.NeedsFiles, lastFiles, &recovery)
 			if err != nil {

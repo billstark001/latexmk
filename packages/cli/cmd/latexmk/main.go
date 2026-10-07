@@ -16,7 +16,6 @@ import (
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
 	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
-	projectwatch "github.com/billstark001/latexmk/packages/cli/internal/watch"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
@@ -419,6 +418,7 @@ func reportCompile(out client.CompileOutput, err error, opts compileOptions) int
 }
 
 func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOptions) int {
+	fmt.Fprintln(os.Stderr, "latexmk: --realtime is recommended for continuous previews and coalesced compilation")
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	files, _, err := c.Manifest(request.Entry, request.Engine)
@@ -468,16 +468,9 @@ func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOpt
 			continue
 		}
 		files = after
-		tracker, trackErr := projectwatch.New(watchTargets(opts, files), opts.watchInterval, opts.watchDebounce)
+		tracker, trackErr := newSourceTracker(c, request, opts, files, nil)
 		if trackErr != nil {
 			return fail(trackErr)
-		}
-		tracker.Refresh = func() ([]projectwatch.Target, error) {
-			selection, err := c.SelectionPaths(request.Entry, request.Engine)
-			if err != nil {
-				return nil, err
-			}
-			return watchTargets(opts, selection.Files), nil
 		}
 		changed, waitErr := tracker.Wait(ctx)
 		if waitErr != nil {
@@ -488,100 +481,6 @@ func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOpt
 			return fail(waitErr)
 		}
 		fmt.Fprintln(os.Stderr, "latexmk: change detected:", strings.Join(changed, ", "))
-	}
-}
-
-func selectedFilesChanged(before, after []projectarchive.File) bool {
-	if len(before) != len(after) {
-		return true
-	}
-	current := make(map[string]string, len(after))
-	for _, file := range after {
-		current[file.Path] = file.SHA256
-	}
-	for _, file := range before {
-		if current[file.Path] != file.SHA256 {
-			return true
-		}
-	}
-	return false
-}
-
-func watchTargets(opts compileOptions, files []projectarchive.File) []projectwatch.Target {
-	targets := make([]projectwatch.Target, 0, len(files)+8)
-	for _, file := range files {
-		targets = append(targets, projectwatch.Target{Name: file.Path, Path: file.Source})
-	}
-	if opts.manifestFile != "" {
-		if clean, err := dependency.NormalizeExplicitManifestPath(opts.manifestFile); err == nil {
-			targets = append(
-				targets,
-				projectwatch.Target{
-					Name: "dependency manifest " + clean,
-					Path: filepath.Join(opts.projectRoot, filepath.FromSlash(clean)),
-				},
-			)
-		}
-	}
-	if opts.manifestFile == "" && opts.uploadMode == "manifest" && len(opts.includeFiles) == 0 {
-		for _, name := range []string{".latexmk-manifest", ".latexmk-files"} {
-			targets = append(
-				targets,
-				projectwatch.Target{Name: "dependency manifest " + name, Path: filepath.Join(opts.projectRoot, name)},
-			)
-		}
-	}
-	names := opts.ignoreFiles
-	if names == nil {
-		names = []string{".latexmkignore"}
-	}
-	for _, name := range names {
-		targets = append(
-			targets,
-			projectwatch.Target{Name: "ignore policy " + name, Path: filepath.Join(opts.projectRoot, name)},
-		)
-	}
-	if !opts.gitIgnore {
-		return targets
-	}
-	repoRoot, err := config.FindGitRoot(opts.projectRoot)
-	if err != nil {
-		return targets
-	}
-	policyPaths := make(map[string]struct{})
-	for _, file := range files {
-		for dir := filepath.Dir(file.Source); ; dir = filepath.Dir(dir) {
-			policyPaths[filepath.Join(dir, ".gitignore")] = struct{}{}
-			if dir == repoRoot || filepath.Dir(dir) == dir {
-				break
-			}
-		}
-	}
-	policyPaths[filepath.Join(repoRoot, ".git", "info", "exclude")] = struct{}{}
-	if globalExcludes, ok := effectiveGitExcludesFile(repoRoot); ok {
-		policyPaths[globalExcludes] = struct{}{}
-	}
-	for policyPath := range policyPaths {
-		label, relErr := filepath.Rel(opts.projectRoot, policyPath)
-		if relErr != nil {
-			label = policyPath
-		}
-		targets = append(targets, projectwatch.Target{Name: "Git policy " + filepath.ToSlash(label), Path: policyPath})
-	}
-	return targets
-}
-
-func waitForContext(ctx context.Context, duration time.Duration) bool {
-	if duration <= 0 {
-		return ctx.Err() == nil
-	}
-	timer := time.NewTimer(duration)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
 	}
 }
 
@@ -1492,7 +1391,7 @@ Compile options:
   --dry-run                    Print the upload manifest without contacting the server
   --detach                     Return after creating an immutable queued job
   --realtime                   Watch with revisioned sessions and atomic PDF bundles
-  --watch                      Recompile after selected dependency changes
+  --watch                      Ordinary jobs after changes; prefer --realtime
   --watch-interval 500ms       Refresh selection and poll selected files
   --watch-debounce 500ms       Wait for rapid edits to settle before compiling
 

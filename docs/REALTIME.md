@@ -1,5 +1,9 @@
 # Realtime compilation
 
+Use `--realtime` for continuous editing and previews. It is the recommended
+replacement for `watch` / `--watch`, with coalesced revisions and consistent PDF
+bundles. `watch` remains available for ordinary independent jobs and older servers.
+
 Build the CLI and start a session using the same project, credentials, dependency
 selection and output policies as an ordinary compile:
 
@@ -98,6 +102,9 @@ corrupt state gets one cold retry within the original compile deadline. Failed,
 cancelled or expired attempts do not publish reusable state. `serverTTL` caps the
 checkpoint lifetime, further bounded by server cache retention. Checkpoints over
 the size/file limit are discarded while a successful PDF can still be published.
+Full checkpoints are exported only for reusable sessions. Fresh sessions and
+ordinary jobs avoid that collection and transport cost; ordinary cache reuse
+continues to retain its separate portable auxiliary format.
 
 Sessions and checkpoints are process-local. Server restart cancels persisted
 queued/running session jobs, removes orphan checkpoints and containers belonging
