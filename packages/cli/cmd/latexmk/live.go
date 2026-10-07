@@ -106,7 +106,11 @@ func runLiveSession(
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	events := observeSession(ctx, c, session.ID)
-	poll := time.NewTicker(5 * time.Second)
+	pollInterval := 5 * time.Second
+	if ttl := meta.Capabilities.SessionTTLMS; ttl > 0 && ttl < 15_000 {
+		pollInterval = max(time.Millisecond, time.Duration(ttl)*time.Millisecond/3)
+	}
+	poll := time.NewTicker(pollInterval)
 	defer poll.Stop()
 	verify := time.NewTicker(30 * time.Second)
 	defer verify.Stop()

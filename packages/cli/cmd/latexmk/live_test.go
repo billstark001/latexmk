@@ -247,3 +247,43 @@ func TestRealtimeUploadPolicyChangesCancelInFlightOperations(t *testing.T) {
 		})
 	}
 }
+
+func TestRealtimeShortLeaseRenewsWhenEventStreamingIsUnavailable(t *testing.T) {
+	var reads atomic.Int64
+	var renewed atomic.Int64
+	renewed.Store(time.Now().UnixNano())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/sessions/ses_short" {
+			http.Error(w, "event streaming unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if time.Since(time.Unix(0, renewed.Load())) >= 450*time.Millisecond {
+			http.NotFound(w, r)
+			return
+		}
+		renewed.Store(time.Now().UnixNano())
+		reads.Add(1)
+		_ = json.NewEncoder(w).Encode(protocol.Session{ID: "ses_short"})
+	}))
+	defer server.Close()
+	c, err := client.New(server.URL, "", time.Second, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Missing local input keeps this fixture focused on lease recovery instead
+	// of upload/admission. The disconnected observation still must renew.
+	c.ProjectRoot, c.UploadMode = t.TempDir(), "all"
+	ctx, cancel := context.WithTimeout(context.Background(), 850*time.Millisecond)
+	defer cancel()
+	var code int
+	_, _, _ = captureCommandOutput(t, func() int {
+		code = runLiveSession(ctx, c, protocol.CompileRequest{Entry: "missing.tex", Engine: "xelatex"},
+			compileOptions{timeout: time.Second},
+			protocol.Metadata{Capabilities: protocol.Capabilities{SessionTTLMS: 450}},
+			protocol.Session{ID: "ses_short"}, liveObservation{})
+		return code
+	})
+	if code != 0 || reads.Load() < 3 {
+		t.Fatalf("short lease expired without fallback renewal: code=%d, renewals=%d", code, reads.Load())
+	}
+}
