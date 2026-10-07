@@ -1,19 +1,21 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 
-	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 type LivePublication struct {
@@ -51,6 +53,11 @@ func (c *Client) DownloadLiveResult(
 	if err != nil {
 		return out, "", err
 	}
+	fs, err := safefs.Open(root)
+	if err != nil {
+		return out, "", err
+	}
+	defer func() { _ = fs.Close() }()
 	generation, err := os.MkdirTemp(root, "generation-")
 	if err != nil {
 		return out, "", err
@@ -111,19 +118,25 @@ func (c *Client) DownloadLiveResult(
 	if err != nil {
 		return out, "", err
 	}
-	if err := os.WriteFile(filepath.Join(generation, "publication.json"), raw, 0600); err != nil {
+	writeManifest := func(writer io.Writer) error {
+		_, err := io.Copy(writer, bytes.NewReader(raw))
+		return err
+	}
+	if err := fs.WriteExclusive(
+		filepath.Base(generation)+"/publication.json",
+		int64(len(raw)),
+		writeManifest,
+	); err != nil {
 		return out, "", err
 	}
 	previous := LivePublication{}
-	if data, err := projectarchive.ReadFile(
-		projectarchive.File{Path: "current.json", Source: filepath.Join(root, "current.json")},
-		1<<20,
-	); err == nil {
+	if data, err := fs.ReadLimited("current.json", 1<<20); err == nil {
 		if err := json.Unmarshal(data, &previous); err != nil {
 			return out, "", err
 		}
-		if previous.SessionID == job.SessionID && previous.Revision >= job.Revision {
-			return out, "", errors.New("refusing to publish an older session revision")
+		if previous.SessionID == job.SessionID && (previous.Revision > job.Revision ||
+			(previous.Revision == job.Revision && previous.JobID != job.ID)) {
+			return out, "", errors.New("refusing to publish an older or conflicting session revision")
 		}
 	} else if !errors.Is(
 		err,
@@ -132,36 +145,17 @@ func (c *Client) DownloadLiveResult(
 		return out, "", err
 	}
 	if runtime.GOOS != "windows" {
-		if info, err := os.Lstat(filepath.Join(root, "current")); err == nil && info.Mode()&os.ModeSymlink == 0 {
+		if info, err := fs.Lstat("current"); err == nil && info.Mode()&os.ModeSymlink == 0 {
 			return out, "", errors.New("live current pointer is not a managed symlink")
 		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return out, "", err
 		}
 	}
-	temp, err := os.CreateTemp(root, ".publication-")
-	if err != nil {
-		return out, "", err
-	}
-	tempName := temp.Name()
-	defer func() { _ = os.Remove(tempName) }()
-	_, writeErr := temp.Write(raw)
-	if writeErr == nil {
-		writeErr = temp.Sync()
-	}
-	err = errors.Join(writeErr, temp.Close())
-	if err != nil {
-		return out, "", err
-	}
-	if err := os.Rename(tempName, filepath.Join(root, "current.json")); err != nil {
+	if _, err := fs.WriteAtomic("current.json", int64(len(raw)), writeManifest); err != nil {
 		return out, "", err
 	}
 	published = true
 	if runtime.GOOS != "windows" {
-		fs, err := os.OpenRoot(root)
-		if err != nil {
-			return out, generation, err
-		}
-		defer func() { _ = fs.Close() }()
 		if info, err := fs.Lstat("current"); err == nil && info.Mode()&os.ModeSymlink == 0 {
 			return out, generation, errors.New("live current pointer is not a managed symlink")
 		}
@@ -174,7 +168,12 @@ func (c *Client) DownloadLiveResult(
 			return out, generation, err
 		}
 	}
-	entries, err := os.ReadDir(root)
+	dir, err := fs.Open(".")
+	if err != nil {
+		return out, generation, err
+	}
+	entries, readErr := dir.ReadDir(-1)
+	err = errors.Join(readErr, dir.Close())
 	if err != nil {
 		return out, generation, err
 	}
@@ -185,13 +184,7 @@ func (c *Client) DownloadLiveResult(
 			continue
 		}
 		// Generation names came from MkdirTemp; no user or server path is traversed.
-		fs, err := os.OpenRoot(root)
-		if err != nil {
-			return out, generation, err
-		}
-		removeErr := fs.RemoveAll(entry.Name())
-		closeErr := fs.Close()
-		if err := errors.Join(removeErr, closeErr); err != nil {
+		if err := fs.RemoveAll(entry.Name()); err != nil {
 			return out, generation, fmt.Errorf("remove old live generation: %w", err)
 		}
 	}

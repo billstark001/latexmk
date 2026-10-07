@@ -142,6 +142,18 @@ func TestLivePublicationKeepsLastGoodAndRejectsOlderOrTamperedBundle(t *testing.
 	if publication.SourceRoot != c.ProjectRoot || publication.RemoteSourceRoot != result.SourceRoot {
 		t.Fatalf("source mapping lost in publication: %+v", publication)
 	}
+	// A retry can follow authoritative publication but failed symlink/export work.
+	if _, err := download(); err != nil {
+		t.Fatalf("exact successful revision could not be retried: %v", err)
+	}
+	good, err = os.ReadFile(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result.RequestID = "conflicting-job"
+	if _, err := download(); err == nil {
+		t.Fatal("different job replaced the same session revision")
+	}
 	result.RequestID, result.Revision, result.Success = "job_3", 3, false
 	if root, err := download(); err != nil || root != "" {
 		t.Fatalf("failure replaced preview: %s %v", root, err)
