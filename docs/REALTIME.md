@@ -8,6 +8,11 @@ Native save events are coalesced before dependency discovery. Selected files
 still use the configured polling interval, with full membership reconciliation
 every two seconds and after each settled burst. Upload policy and captured
 content are fully checked for every submitted snapshot.
+The CLI retains one private captured snapshot during a live session. Unchanged
+files of at least 256 KiB are linked into the next spool only after their current
+source content hashes match. Changed files and filesystems without hard links
+use normal verified capture. Logical file/byte limits still apply to every
+snapshot; source metadata never substitutes for content verification.
 
 Build the CLI and start a session using the same project, credentials, dependency
 selection and output policies as an ordinary compile:
@@ -113,6 +118,9 @@ continues to retain its separate portable auxiliary format.
 Checkpoint verification and copying happen outside the global session lock.
 The final rename rechecks the live session and storage quota. Staged bytes have
 a separate quota reservation, and abandoned staged files are removed at startup.
+Worker source/checkpoint archives use fast gzip compression. The response's gzip
+envelope stores its already compressed members without recompressing them. The
+same archive validation, expanded limits and per-attempt container boundary apply.
 
 Sessions and checkpoints are process-local. Server restart cancels persisted
 queued/running session jobs, removes orphan checkpoints and containers belonging

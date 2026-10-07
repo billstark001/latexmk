@@ -116,6 +116,12 @@ func runLiveSession(
 	var lastFiles []projectarchive.File
 	var pending *client.PreparedRevision
 	var pendingFiles []projectarchive.File
+	var captured *client.CapturedSnapshot
+	defer func() {
+		if captured != nil {
+			_ = captured.Close()
+		}
+	}()
 	dirty := true
 	recovery := client.MissingFileRecovery{}
 	publishedJobID, diagnosticJobID := "", ""
@@ -144,14 +150,22 @@ func runLiveSession(
 			}
 		}
 		dirty = true
-		frozen, err := c.FreezeSnapshot(operation, request, recovery.Additional, meta)
+		var previous *projectarchive.Frozen
+		if captured != nil {
+			previous = captured.Frozen
+		}
+		frozen, err := c.FreezeSnapshot(operation, request, recovery.Additional, meta, previous)
 		if err != nil {
 			return err
 		}
-		defer func() { _ = frozen.Close() }()
 		if err := recovery.ValidateCaptured(frozen.Files); err != nil {
+			_ = frozen.Close()
 			return err
 		}
+		if captured != nil {
+			_ = captured.Close()
+		}
+		captured = frozen
 		if lastFiles != nil && !selectedFilesChanged(lastFiles, frozen.Files) {
 			dirty = false
 			return nil

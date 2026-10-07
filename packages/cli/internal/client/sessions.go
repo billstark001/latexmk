@@ -44,12 +44,13 @@ func (c *Client) FreezeSnapshot(
 	request protocol.CompileRequest,
 	additional []string,
 	meta protocol.Metadata,
+	previous *projectarchive.Frozen,
 ) (*CapturedSnapshot, error) {
 	selection, err := c.selectFiles(request.Entry, request.Engine, additional, false)
 	if err != nil {
 		return nil, err
 	}
-	return c.freezeSelection(ctx, request, additional, selection, meta)
+	return c.freezeSelection(ctx, request, additional, selection, meta, previous)
 }
 
 func (c *Client) freezeSelection(
@@ -58,6 +59,7 @@ func (c *Client) freezeSelection(
 	additional []string,
 	selection dependency.Result,
 	meta protocol.Metadata,
+	previous *projectarchive.Frozen,
 ) (*CapturedSnapshot, error) {
 	_, warnings, err := describeSelection(selection)
 	if err != nil {
@@ -75,6 +77,7 @@ func (c *Client) freezeSelection(
 		selection.Files,
 		maxFiles,
 		maxBytes,
+		previous,
 	)
 	if err != nil {
 		return nil, err

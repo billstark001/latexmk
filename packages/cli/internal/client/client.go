@@ -263,7 +263,7 @@ func (c *Client) Compile(
 		return CompileOutput{}, err
 	}
 	request.DetectMissingFiles = meta.Capabilities.NeedsFiles && (c.UploadMode == "" || c.UploadMode == "auto")
-	captured, err := c.freezeSelection(ctx, request, nil, selection, meta)
+	captured, err := c.freezeSelection(ctx, request, nil, selection, meta, nil)
 	if err != nil {
 		return CompileOutput{}, err
 	}
@@ -286,7 +286,7 @@ func (c *Client) Compile(
 			warnings = append(warnings, "missing-file retry refused: "+resolveErr.Error())
 			break
 		}
-		retry, captureErr := c.FreezeSnapshot(ctx, request, recovery.Additional, meta)
+		retry, captureErr := c.FreezeSnapshot(ctx, request, recovery.Additional, meta, nil)
 		if captureErr == nil {
 			captureErr = recovery.ValidateCaptured(retry.Files)
 		}
@@ -350,7 +350,7 @@ func (c *Client) StartCompile(ctx context.Context, request protocol.CompileReque
 		return StartCompileOutput{}, err
 	}
 	request.DetectMissingFiles = meta.Capabilities.NeedsFiles && (c.UploadMode == "" || c.UploadMode == "auto")
-	captured, err := c.freezeSelection(ctx, request, nil, selection, meta)
+	captured, err := c.freezeSelection(ctx, request, nil, selection, meta, nil)
 	if err != nil {
 		return StartCompileOutput{Warnings: warnings}, err
 	}
