@@ -194,16 +194,15 @@ func (m *Manager) updatePublishedCache(ctx context.Context, rec record, e execut
 	}
 	operation, cancel := m.persistenceContext(ctx)
 	defer cancel()
-	current, err := m.load(operation, rec.Job.ID)
-	if err == nil && current.Job.Status == "succeeded" && current.Job.Result != nil {
-		result := *current.Job.Result
-		cache := *e.cache
-		result.CompileCache = &cache
-		result.AuxiliaryExpiresAt = e.output.Result.AuxiliaryExpiresAt
-		current.Job.Result = &result
-		_, err = m.transition(operation, current, "succeeded")
-	}
+	result := *rec.Job.Result
+	cache := *e.cache
+	result.CompileCache = &cache
+	result.AuxiliaryExpiresAt = e.output.Result.AuxiliaryExpiresAt
+	rec.Job.Result = &result
+	rec.CompletionFrom = "succeeded"
+	_, err := m.transition(operation, rec, "succeeded")
 	if err != nil {
+		m.deferCompletion(rec)
 		m.logger.Warn("update completed cache accounting", "job_id", rec.Job.ID, "error", err)
 	}
 }

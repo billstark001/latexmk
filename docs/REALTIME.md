@@ -73,6 +73,9 @@ affected session keeps its running slot until completion is durably recorded.
 Deferred completions count against queue capacity. After recovery, immutable
 results can still be published, but a discarded attempt's checkpoint is not saved.
 Running cancellation remains available for a deferred completion.
+Successful job reads and idempotent revision replays wait for cache publication
+and its final accounting, respecting the request context. This wait does not hold
+the global admission lock; other sessions remain available during recovery.
 
 ## Fresh and reusable workspaces
 

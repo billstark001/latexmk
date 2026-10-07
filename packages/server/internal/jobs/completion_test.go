@@ -11,7 +11,69 @@ import (
 	"time"
 
 	"github.com/billstark001/latexmk/packages/server/internal/store"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
+
+func TestSuccessfulReadsAndReceiptReplayWaitForCachePublication(t *testing.T) {
+	m, req := sessionManager(t)
+	ctx := context.Background()
+	session, err := m.CreateSession(ctx, "owner", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := planRevision(t, m, req, "source", 0)
+	job, err := m.SubmitRevision(ctx, "owner", session.ID, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := m.load(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := time.Now().UTC()
+	rec.Job.Status, rec.Job.FinishedAt = "succeeded", &finished
+	rec.Job.Result = &protocol.CompileResult{Success: true, CompileCache: &protocol.CompileCache{StoredFiles: 0}}
+	if _, err := m.transition(ctx, rec, "queued"); err != nil {
+		t.Fatal(err)
+	}
+	deadline, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
+	defer cancel()
+	if _, err := m.Get(deadline, "owner", job.ID); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("incomplete cache accounting escaped publication gate: %v", err)
+	}
+	replayed := make(chan protocol.Job, 1)
+	replayErrors := make(chan error, 1)
+	go func() {
+		operation, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		job, err := m.SubmitRevision(operation, "owner", session.ID, payload)
+		replayed <- job
+		replayErrors <- err
+	}()
+	read := make(chan error, 1)
+	go func() { _, err := m.GetSession(ctx, "owner", session.ID); read <- err }()
+	select {
+	case err := <-read:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("receipt replay waited while holding global admission")
+	}
+	rec.Job.Result = &protocol.CompileResult{Success: true, CompileCache: &protocol.CompileCache{StoredFiles: 3}}
+	if _, err := m.transition(ctx, rec, "succeeded"); err != nil {
+		t.Fatal(err)
+	}
+	m.endPublication(job.ID)
+	got := <-replayed
+	if err := <-replayErrors; err != nil || got.Result == nil || got.Result.CompileCache.StoredFiles != 3 {
+		t.Fatalf("replay observed incomplete cache publication: %+v, %v", got, err)
+	}
+	listed, err := m.List(ctx, "owner", 10)
+	if err != nil || len(listed) != 1 || listed[0].Result.CompileCache.StoredFiles != 3 {
+		t.Fatalf("list observed incomplete cache publication: %+v, %v", listed, err)
+	}
+}
 
 type completionFaultStore struct {
 	*store.Postgres

@@ -155,17 +155,19 @@ func (m *Manager) SubmitRevision(
 		return protocol.Job{}, err
 	}
 	m.admissionMu.Lock()
-	defer m.admissionMu.Unlock()
 	s, err := m.sessionLocked(ownerID, id)
 	if err != nil {
+		m.admissionMu.Unlock()
 		return protocol.Job{}, err
 	}
 	if receipt, ok := s.receipts[req.IdempotencyKey]; ok {
+		m.admissionMu.Unlock()
 		if receipt.request != req {
 			return protocol.Job{}, errors.New("idempotency key was used for a different revision")
 		}
 		return m.Get(ctx, ownerID, receipt.jobID)
 	}
+	defer m.admissionMu.Unlock()
 	if req.BaseRevision != s.state.Revision || s.state.Revision >= 1<<31 {
 		return protocol.Job{}, ErrRevisionConflict
 	}
@@ -302,11 +304,19 @@ func (m *Manager) finishSession(ctx context.Context, rec record) {
 	if rec.Job.SessionID == "" {
 		return
 	}
+	m.mu.Lock()
+	_, pending := m.completions[rec.Job.ID]
+	m.mu.Unlock()
+	if pending {
+		return
+	}
 	job := rec.Job
 	if job.FinishedAt == nil {
 		operation, cancel := m.persistenceContext(ctx)
 		var err error
-		job, err = m.Get(operation, rec.OwnerID, rec.Job.ID)
+		var completed record
+		completed, err = m.load(operation, rec.Job.ID)
+		job = completed.Job
 		cancel()
 		if err != nil {
 			m.logger.Error("read session completion", "error", err)

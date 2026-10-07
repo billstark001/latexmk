@@ -27,10 +27,11 @@ import (
 )
 
 type record struct {
-	Job      protocol.Job
-	OwnerID  string
-	Request  protocol.CompileRequest
-	Snapshot project.Snapshot
+	CompletionFrom string
+	Job            protocol.Job
+	OwnerID        string
+	Request        protocol.CompileRequest
+	Snapshot       project.Snapshot
 }
 
 type cleanupResultTarget struct {
@@ -63,6 +64,7 @@ type Manager struct {
 	admissionMu     sync.Mutex
 	jobs            map[string]record
 	completions     map[string]record
+	publications    map[string]chan struct{}
 	queue           chan string
 	workers         sync.WaitGroup
 	sessions        map[string]*liveSession
@@ -95,11 +97,12 @@ func New(
 		revisionBudgets: make(
 			map[string]*revisionBudget,
 		),
-		sessions:    make(map[string]*liveSession),
-		active:      make(map[string]context.CancelFunc),
-		jobs:        make(map[string]record),
-		completions: make(map[string]record),
-		queue:       make(chan string, cfg.MaxQueuedJobs*2),
+		sessions:     make(map[string]*liveSession),
+		active:       make(map[string]context.CancelFunc),
+		jobs:         make(map[string]record),
+		completions:  make(map[string]record),
+		publications: make(map[string]chan struct{}),
+		queue:        make(chan string, cfg.MaxQueuedJobs*2),
 	}
 }
 
@@ -178,6 +181,7 @@ func (m *Manager) Start(ctx context.Context) {
 					}
 				}
 				recoverIDs = append(recoverIDs, job.ID)
+				m.beginPublication(job.ID)
 			}
 		}
 	}
@@ -300,6 +304,9 @@ func (m *Manager) pendingCount(ctx context.Context) (int, error) {
 }
 
 func (m *Manager) Get(ctx context.Context, ownerID, id string) (protocol.Job, error) {
+	m.mu.Lock()
+	publication := m.publications[id]
+	m.mu.Unlock()
 	rec, err := m.load(ctx, id)
 	if err != nil {
 		return protocol.Job{}, err
@@ -307,12 +314,40 @@ func (m *Manager) Get(ctx context.Context, ownerID, id string) (protocol.Job, er
 	if rec.OwnerID != ownerID {
 		return protocol.Job{}, errors.New("job not found")
 	}
+	if rec.Job.Status == "succeeded" && publication != nil {
+		select {
+		case <-ctx.Done():
+			return protocol.Job{}, ctx.Err()
+		case <-publication:
+		}
+		rec, err = m.load(ctx, id)
+		if err != nil {
+			return protocol.Job{}, err
+		}
+	}
 	return withoutExpiredAuxiliary(rec.Job), nil
 }
 
 func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]protocol.Job, error) {
 	if limit < 1 || limit > 200 {
 		limit = 50
+	}
+	m.mu.Lock()
+	publications := make(map[string]chan struct{}, len(m.publications))
+	for id, gate := range m.publications {
+		publications[id] = gate
+	}
+	m.mu.Unlock()
+	reconcile := func(job protocol.Job) (protocol.Job, error) {
+		if gate := publications[job.ID]; job.Status == "succeeded" && gate != nil {
+			select {
+			case <-ctx.Done():
+				return protocol.Job{}, ctx.Err()
+			case <-gate:
+			}
+			return m.Get(ctx, ownerID, job.ID)
+		}
+		return withoutExpiredAuxiliary(job), nil
 	}
 	if m.db == nil {
 		m.mu.Lock()
@@ -328,6 +363,13 @@ func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]protoc
 		if len(out) > limit {
 			out = out[:limit]
 		}
+		for i := range out {
+			var err error
+			out[i], err = reconcile(out[i])
+			if err != nil {
+				return nil, err
+			}
+		}
 		return out, nil
 	}
 	rows, err := m.db.ListJobs(ctx, ownerID, limit)
@@ -340,7 +382,11 @@ func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]protoc
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, withoutExpiredAuxiliary(rec.Job))
+		job, err := reconcile(rec.Job)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, job)
 	}
 	return out, nil
 }
@@ -450,7 +496,10 @@ func (m *Manager) cleanupProject(
 	terminalIDs := make([]string, 0, len(records))
 	var resultTargets []cleanupResultTarget
 	for _, rec := range records {
-		if m.active[rec.Job.ID] != nil {
+		m.mu.Lock()
+		_, completing := m.completions[rec.Job.ID]
+		m.mu.Unlock()
+		if m.active[rec.Job.ID] != nil || completing {
 			report.ActiveJobs = append(report.ActiveJobs, rec.Job.ID)
 			continue
 		}
@@ -660,6 +709,7 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	defer func() {
 		if finishSession {
 			m.finishSession(context.WithoutCancel(ctx), rec)
+			m.endPublication(id)
 		}
 	}()
 	if rec.Job.Status != "queued" {
@@ -726,11 +776,11 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	}
 	executed.output = output
 	retained.Result.CompileCache = executed.cache
-	if m.finish(ctx, rec, &retained.Result, retained.Result.Error, true) {
+	if completed, success := m.finish(ctx, rec, &retained.Result, retained.Result.Error, true); success {
 		m.admissionMu.Lock()
 		m.publishExecution(compileCtx, rec, jobWorkspace, &executed)
 		m.admissionMu.Unlock()
-		m.updatePublishedCache(ctx, rec, executed)
+		m.updatePublishedCache(ctx, completed, executed)
 	}
 }
 
@@ -740,7 +790,7 @@ func (m *Manager) finish(
 	result *protocol.CompileResult,
 	message string,
 	resultArchived bool,
-) bool {
+) (record, bool) {
 	now := time.Now().UTC()
 	if !resultArchived && result != nil && result.Success {
 		failed := *result
@@ -773,21 +823,18 @@ func (m *Manager) finish(
 	if err != nil {
 		m.logger.Error("finish compile job", "job_id", rec.Job.ID, "error", err)
 		m.deferCompletion(rec)
-		return false
+		return rec, false
 	}
 	if !changed {
-		current, getErr := m.Get(
-			persistCtx,
-			rec.OwnerID,
-			rec.Job.ID,
-		)
-		if getErr != nil || current.FinishedAt == nil {
+		current, getErr := m.load(persistCtx, rec.Job.ID)
+		if getErr != nil || current.Job.FinishedAt == nil {
 			m.deferCompletion(rec)
-			return false
+			return rec, false
 		}
 		m.projects.ReleaseSnapshot(rec.Snapshot.ID)
 		m.logger.Warn("compile job state changed before finish", "job_id", rec.Job.ID)
-		return current.Status == "succeeded"
+		rec.Job = current.Job
+		return rec, current.Job.Status == "succeeded"
 	}
 	m.projects.ReleaseSnapshot(rec.Snapshot.ID)
 	m.logger.Info(
@@ -799,7 +846,7 @@ func (m *Manager) finish(
 		"duration_ms",
 		resultDuration(result),
 	)
-	return rec.Job.Status == "succeeded"
+	return rec, rec.Job.Status == "succeeded"
 }
 
 func (m *Manager) deferCompletion(rec record) {
@@ -808,7 +855,33 @@ func (m *Manager) deferCompletion(rec record) {
 	if m.completions == nil {
 		m.completions = make(map[string]record)
 	}
+	if rec.CompletionFrom == "" {
+		rec.CompletionFrom = "running"
+	}
 	m.completions[rec.Job.ID] = rec
+}
+
+func (m *Manager) beginPublication(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.publications == nil {
+		m.publications = make(map[string]chan struct{})
+	}
+	if m.publications[id] == nil {
+		m.publications[id] = make(chan struct{})
+	}
+}
+
+func (m *Manager) endPublication(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, pending := m.completions[id]; pending {
+		return
+	}
+	if gate := m.publications[id]; gate != nil {
+		close(gate)
+		delete(m.publications, id)
+	}
 }
 
 func (m *Manager) cancel(ctx context.Context, id, message string) error {
@@ -829,6 +902,7 @@ func (m *Manager) cancel(ctx context.Context, id, message string) error {
 		return errors.New("job is no longer queued")
 	}
 	m.projects.ReleaseSnapshot(rec.Snapshot.ID)
+	m.endPublication(id)
 	return nil
 }
 
@@ -932,7 +1006,7 @@ func (m *Manager) retryCompletions(ctx context.Context) {
 			return
 		}
 		operation, cancel := m.persistenceContext(ctx)
-		changed, err := m.transition(operation, rec, "running")
+		changed, err := m.transition(operation, rec, rec.CompletionFrom)
 		if err == nil && !changed {
 			var current record
 			current, err = m.load(operation, rec.Job.ID)
@@ -951,8 +1025,11 @@ func (m *Manager) retryCompletions(ctx context.Context) {
 		m.mu.Lock()
 		delete(m.completions, rec.Job.ID)
 		m.mu.Unlock()
-		m.projects.ReleaseSnapshot(rec.Snapshot.ID)
+		if rec.CompletionFrom == "running" {
+			m.projects.ReleaseSnapshot(rec.Snapshot.ID)
+		}
 		m.finishSession(ctx, rec)
+		m.endPublication(rec.Job.ID)
 		if ctx.Err() != nil {
 			return
 		}
@@ -1042,6 +1119,10 @@ func (m *Manager) save(ctx context.Context, rec record) error {
 			return errors.New("job already exists")
 		}
 		m.jobs[rec.Job.ID] = rec
+		if m.publications == nil {
+			m.publications = make(map[string]chan struct{})
+		}
+		m.publications[rec.Job.ID] = make(chan struct{})
 		return nil
 	}
 	request, err := json.Marshal(rec.Request)
@@ -1056,7 +1137,7 @@ func (m *Manager) save(ctx context.Context, rec record) error {
 	if err != nil {
 		return err
 	}
-	return m.db.CreateJob(
+	err = m.db.CreateJob(
 		ctx,
 		store.CompileJob{
 			SessionID: rec.Job.SessionID, Revision: rec.Job.Revision,
@@ -1074,6 +1155,10 @@ func (m *Manager) save(ctx context.Context, rec record) error {
 			FinishedAt:       rec.Job.FinishedAt,
 		},
 	)
+	if err == nil {
+		m.beginPublication(rec.Job.ID)
+	}
+	return err
 }
 
 func marshalResult(result *protocol.CompileResult) ([]byte, error) {
