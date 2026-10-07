@@ -25,12 +25,16 @@ type fileState struct {
 }
 
 type Tracker struct {
-	Refresh  func() ([]Target, error)
-	MaxWait  time.Duration
-	targets  []Target
-	states   map[string]fileState
-	interval time.Duration
-	debounce time.Duration
+	Refresh func() ([]Target, error)
+	MaxWait time.Duration
+	// RefreshInterval batches native event hints before rediscovering membership.
+	// Zero refreshes selection for every event and poll.
+	RefreshInterval time.Duration
+	targets         []Target
+	states          map[string]fileState
+	refreshed       time.Time
+	interval        time.Duration
+	debounce        time.Duration
 }
 
 func New(targets []Target, interval, debounce time.Duration) (*Tracker, error) {
@@ -109,13 +113,31 @@ func (t *Tracker) Wait(ctx context.Context) ([]string, error) {
 	settle.Stop()
 	pending := make(map[string]struct{})
 	var firstChange time.Time
-	reconcile := func(eventPath string) error {
+	byPath := make(map[string]Target, len(t.targets))
+	indexTargets := func() {
+		clear(byPath)
+		for _, target := range t.targets {
+			byPath[filepath.Clean(target.Path)] = target
+		}
+	}
+	indexTargets()
+	arm := func() {
 		now := time.Now()
+		if firstChange.IsZero() {
+			firstChange = now
+		}
+		delay := t.debounce
+		if t.MaxWait > 0 {
+			delay = min(delay, max(0, t.MaxWait-now.Sub(firstChange)))
+		}
+		settle.Reset(delay)
+	}
+	reconcile := func(eventPath string, refresh bool) (bool, error) {
 		changed := false
-		if t.Refresh != nil {
+		if t.Refresh != nil && refresh {
 			targets, err := t.Refresh()
 			if err != nil {
-				return err
+				return false, err
 			}
 			{
 				next := make(map[string]bool, len(targets))
@@ -135,6 +157,9 @@ func (t *Tracker) Wait(ctx context.Context) ([]string, error) {
 				}
 				t.targets = targets
 			}
+			t.refreshed = time.Now()
+			indexTargets()
+			addWatches()
 		}
 		for _, target := range t.targets {
 			current := statFile(target.Path)
@@ -145,21 +170,16 @@ func (t *Tracker) Wait(ctx context.Context) ([]string, error) {
 			pending[target.Name] = struct{}{}
 			changed = true
 		}
-		if changed {
-			if firstChange.IsZero() {
-				firstChange = now
-			}
-			delay := t.debounce
-			if t.MaxWait > 0 {
-				delay = min(delay, max(0, t.MaxWait-now.Sub(firstChange)))
-			}
-			settle.Reset(delay)
-		}
-		addWatches()
-		return nil
+		return changed, nil
 	}
-	if err := reconcile(""); err != nil {
+	refreshDue := func() bool {
+		return t.RefreshInterval <= 0 || time.Since(t.refreshed) >= t.RefreshInterval || events == nil ||
+			len(watched) == 0
+	}
+	if changed, err := reconcile("", refreshDue()); err != nil {
 		return nil, err
+	} else if changed {
+		arm()
 	}
 	for {
 		select {
@@ -172,9 +192,22 @@ func (t *Tracker) Wait(ctx context.Context) ([]string, error) {
 			}
 			if event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) {
 				delete(watched, event.Name)
+				addWatches()
 			}
-			if err := reconcile(event.Name); err != nil {
+			if t.RefreshInterval > 0 {
+				if target, known := byPath[filepath.Clean(event.Name)]; known {
+					t.states[target.Path] = statFile(target.Path)
+					pending[target.Name] = struct{}{}
+					arm()
+				} else if len(pending) == 0 {
+					// New members are discovered once after the burst. Unrelated
+					// output writes never delay an already pending source change.
+					arm()
+				}
+			} else if changed, err := reconcile(event.Name, true); err != nil {
 				return nil, err
+			} else if changed {
+				arm()
 			}
 		case _, ok := <-watcherErrors:
 			if !ok {
@@ -182,20 +215,31 @@ func (t *Tracker) Wait(ctx context.Context) ([]string, error) {
 				continue
 			}
 			// Overflow and backend failures invalidate every event assumption.
-			if err := reconcile(""); err != nil {
+			if _, err := reconcile("", true); err != nil {
 				return nil, err
 			}
 			for _, target := range t.targets {
 				pending[target.Name] = struct{}{}
 			}
 			if len(pending) > 0 {
-				settle.Reset(t.debounce)
+				arm()
 			}
 		case <-ticker.C:
-			if err := reconcile(""); err != nil {
+			if changed, err := reconcile("", refreshDue()); err != nil {
 				return nil, err
+			} else if changed {
+				arm()
 			}
 		case <-settle.C:
+			if t.RefreshInterval > 0 {
+				if _, err := reconcile("", true); err != nil {
+					return nil, err
+				}
+			}
+			if len(pending) == 0 {
+				firstChange = time.Time{}
+				continue
+			}
 			result := make([]string, 0, len(pending))
 			for name := range pending {
 				result = append(result, name)

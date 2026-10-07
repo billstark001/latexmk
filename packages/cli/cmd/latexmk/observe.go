@@ -84,6 +84,7 @@ func observeLive(
 			observation.errors <- err
 			return observation
 		}
+		tracker.RefreshInterval = 2 * time.Second
 		refresh := tracker.Refresh
 		tracker.Refresh = func() ([]projectwatch.Target, error) {
 			targets, err := refresh()

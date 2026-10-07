@@ -4,6 +4,11 @@ Use `--realtime` for continuous editing and previews. It is the recommended
 replacement for `watch` / `--watch`, with coalesced revisions and consistent PDF
 bundles. `watch` remains available for ordinary independent jobs and older servers.
 
+Native save events are coalesced before dependency discovery. Selected files
+still use the configured polling interval, with full membership reconciliation
+every two seconds and after each settled burst. Upload policy and captured
+content are fully checked for every submitted snapshot.
+
 Build the CLI and start a session using the same project, credentials, dependency
 selection and output policies as an ordinary compile:
 
