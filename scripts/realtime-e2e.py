@@ -86,11 +86,11 @@ def main():
         port = docker("port", name, "8080/tcp").split(":")[-1]
         base = "http://127.0.0.1:" + port
 
-        def api(method, path, body=None):
+        def api(method, path, body=None, timeout=30):
             raw = json.dumps(body).encode() if isinstance(body, dict) else body
             req = urllib.request.Request(base + path, raw, {"Authorization": "Bearer " + token,
                   "Content-Type": "application/json" if isinstance(body, dict) else "application/octet-stream"}, method=method)
-            with urllib.request.urlopen(req, timeout=30) as response:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
                 data = response.read()
                 if response.headers.get("Content-Type", "").startswith("application/json"):
                     return json.loads(data)
@@ -106,7 +106,10 @@ def main():
                    "interaction": "nonstopmode", "synctex": True, "haltOnError": True,
                    "fileLineError": True, "recordInputs": True,
                    "auxiliary": {"local": "none", "server": "reuse", "serverTTL": "5m"}}
-        session = api("POST", "/v1/sessions", {"projectId": "e2e-paper", "workspace": "reuse", "request": request, "idempotencyKey": secrets.token_hex(16)})
+        creation = {"projectId": "e2e-paper", "workspace": "reuse", "request": request, "idempotencyKey": secrets.token_hex(16)}
+        session = api("POST", "/v1/sessions", creation)
+        assert api("POST", "/v1/sessions", creation)["id"] == session["id"]
+        print("PASS session creation replays without consuming another slot", flush=True)
         sid = session["id"]
         revision = 0
 
@@ -280,6 +283,29 @@ def main():
             log.close()
             print("PASS CLI watch, atomic publication, failure recovery and session reconnect", flush=True)
         if args.database_image:
+            session = api("POST", "/v1/sessions", {"projectId": "e2e-paper", "workspace": "reuse", "request": request, "idempotencyKey": secrets.token_hex(16)})
+            sid, revision = session["id"], 0
+            blocked = submit({"main.tex": source(r"\newcount\counter\counter=0\loop\ifnum\counter<2000000\advance\counter by1\repeat Outage")})
+            wait_for(lambda: api("GET", "/v1/jobs/" + blocked["id"])["status"] == "running")
+            worker = wait_for(running_container, timeout=15)["Id"]
+            docker("pause", worker)
+            docker("stop", "--time", "1", database)
+            docker("unpause", worker)
+            wait_for(lambda: not docker("ps", "-q", "--filter", "name=latexmk-attempt-" + blocked["id"]), timeout=45)
+            for _ in range(3):
+                started = time.monotonic()
+                state = api("GET", "/v1/sessions/" + sid, timeout=2)
+                assert time.monotonic() - started < 1.5 and state["runningJobId"] == blocked["id"], state
+            wait_for(lambda: '"msg":"finish compile job"' in docker("logs", "--tail", "100", name), timeout=15)
+            assert api("GET", "/v1/sessions/" + sid, timeout=2)["runningJobId"] == blocked["id"]
+            docker("start", database)
+            wait_for(lambda: subprocess.run(["docker", "exec", database, "pg_isready", "-h", "127.0.0.1", "-d", "latexmk", "-U", "latexmk"], capture_output=True).returncode == 0, timeout=30)
+            recovered = completed(blocked)
+            assert recovered["status"] == "succeeded", recovered
+            bundle(recovered)
+            assert api("GET", "/v1/sessions/" + sid)["lastSuccessfulJobId"] == blocked["id"]
+            api("DELETE", "/v1/sessions/" + sid)
+            print("PASS PostgreSQL completion outage keeps sessions responsive and recovers", flush=True)
             session = api("POST", "/v1/sessions", {"projectId": "e2e-paper", "workspace": "reuse", "request": request, "idempotencyKey": secrets.token_hex(16)})
             sid, revision = session["id"], 0
             blocked = submit({"main.tex": source(r"\loop\iftrue\repeat")})
