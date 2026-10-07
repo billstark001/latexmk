@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -191,5 +192,58 @@ func TestCompilerReportDoesNotExecuteTerminalControls(t *testing.T) {
 	})
 	if strings.ContainsAny(stdout+stderr, "\x1b\a\r\u009b") || !strings.Contains(stdout, "中文\n") {
 		t.Fatalf("unsafe terminal text: %q %q", stdout, stderr)
+	}
+}
+
+func TestRealtimeUploadPolicyChangesCancelInFlightOperations(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		manifest string
+		git      bool
+	}{
+		{name: ".latexmkignore"},
+		{name: ".latexmk-manifest", manifest: ".latexmk-manifest"},
+		{name: ".gitignore", git: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if tc.git {
+				command := exec.Command("git", "init", "--quiet")
+				command.Dir = root
+				if output, err := command.CombinedOutput(); err != nil {
+					t.Fatalf("initialize Git policy fixture: %v: %s", err, output)
+				}
+			}
+			policy := filepath.Join(root, tc.name)
+			if err := os.WriteFile(policy, []byte("\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte("source"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := client.New("http://127.0.0.1:8080", "", time.Second, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.ProjectRoot, c.UploadMode, c.RespectGitIgnore = root, "all", tc.git
+			ctx, cancel := context.WithCancelCause(context.Background())
+			defer cancel(nil)
+			observation := observeLive(ctx, c, protocol.CompileRequest{Entry: "main.tex", Engine: "xelatex"},
+				compileOptions{projectRoot: root, manifestFile: tc.manifest, gitIgnore: tc.git,
+					watchInterval: 20 * time.Millisecond, watchDebounce: 10 * time.Millisecond}, cancel)
+			if err := os.WriteFile(policy, []byte("# changed policy\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-ctx.Done():
+				if !errors.Is(context.Cause(ctx), errLiveSettingsChanged) {
+					t.Fatal(context.Cause(ctx))
+				}
+			case err := <-observation.errors:
+				t.Fatal(err)
+			case <-time.After(3 * time.Second):
+				t.Fatal("upload-policy change left the current operation active")
+			}
+		})
 	}
 }

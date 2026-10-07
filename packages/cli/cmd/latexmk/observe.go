@@ -103,7 +103,8 @@ func observeLive(
 					return
 				}
 				for _, name := range names {
-					if strings.HasPrefix(name, "settings: ") {
+					if strings.HasPrefix(name, "settings: ") || strings.HasPrefix(name, "ignore policy ") ||
+						strings.HasPrefix(name, "Git policy ") || strings.HasPrefix(name, "dependency manifest ") {
 						invalidate(errLiveSettingsChanged)
 						select {
 						case observation.reload <- struct{}{}:

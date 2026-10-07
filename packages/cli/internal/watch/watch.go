@@ -44,18 +44,10 @@ func New(targets []Target, interval, debounce time.Duration) (*Tracker, error) {
 	if debounce < 0 {
 		return nil, errors.New("watch debounce cannot be negative")
 	}
-	unique := make(map[string]Target)
-	for _, target := range targets {
-		if target.Name == "" || target.Path == "" {
-			return nil, errors.New("watch target must have a name and path")
-		}
-		unique[target.Path] = target
+	ordered, err := normalizeTargets(targets)
+	if err != nil {
+		return nil, err
 	}
-	ordered := make([]Target, 0, len(unique))
-	for _, target := range unique {
-		ordered = append(ordered, target)
-	}
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Name < ordered[j].Name })
 	tracker := &Tracker{
 		targets:  ordered,
 		states:   make(map[string]fileState, len(ordered)),
@@ -67,6 +59,22 @@ func New(targets []Target, interval, debounce time.Duration) (*Tracker, error) {
 		tracker.states[target.Path] = statFile(target.Path)
 	}
 	return tracker, nil
+}
+
+func normalizeTargets(targets []Target) ([]Target, error) {
+	unique := make(map[string]Target, len(targets))
+	for _, target := range targets {
+		if target.Name == "" || target.Path == "" {
+			return nil, errors.New("watch target must have a name and path")
+		}
+		unique[target.Path] = target
+	}
+	ordered := make([]Target, 0, len(unique))
+	for _, target := range unique {
+		ordered = append(ordered, target)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Name < ordered[j].Name })
+	return ordered, nil
 }
 
 // Wait returns after one or more target changes have remained quiet for the
@@ -136,6 +144,10 @@ func (t *Tracker) Wait(ctx context.Context) ([]string, error) {
 		changed := false
 		if t.Refresh != nil && refresh {
 			targets, err := t.Refresh()
+			if err != nil {
+				return false, err
+			}
+			targets, err = normalizeTargets(targets)
 			if err != nil {
 				return false, err
 			}
