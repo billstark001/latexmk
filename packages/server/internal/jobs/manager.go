@@ -41,6 +41,7 @@ type cleanupResultTarget struct {
 
 // jobStore isolates durable metadata operations from queue/session coordination.
 type jobStore interface {
+	CountQueuedJobs(context.Context) (int64, error)
 	ListPendingJobs(context.Context) ([]store.CompileJob, error)
 	UpdateJob(context.Context, string, map[string]any) error
 	ListJobs(context.Context, string, int) ([]store.CompileJob, error)
@@ -63,6 +64,7 @@ type Manager struct {
 	mu              sync.Mutex
 	admissionMu     sync.Mutex
 	jobs            map[string]record
+	queued          int
 	completions     map[string]record
 	publications    map[string]chan struct{}
 	queue           chan string
@@ -280,26 +282,15 @@ func (m *Manager) pendingCount(ctx context.Context) (int, error) {
 	if m.db == nil {
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		count := len(m.completions)
-		for _, rec := range m.jobs {
-			if rec.Job.Status == "queued" {
-				count++
-			}
-		}
-		return count, nil
+		return m.queued + len(m.completions), nil
 	}
-	rows, err := m.db.ListPendingJobs(ctx)
+	queued, err := m.db.CountQueuedJobs(ctx)
 	if err != nil {
 		return 0, err
 	}
 	m.mu.Lock()
-	count := len(m.completions)
+	count := int(queued) + len(m.completions)
 	m.mu.Unlock()
-	for _, row := range rows {
-		if row.Status == "queued" {
-			count++
-		}
-	}
 	return count, nil
 }
 
@@ -917,6 +908,12 @@ func (m *Manager) transition(ctx context.Context, rec record, expectedStatus str
 		if current.Job.Status != expectedStatus {
 			return false, nil
 		}
+		if current.Job.Status == "queued" && rec.Job.Status != "queued" {
+			m.queued--
+		}
+		if current.Job.Status != "queued" && rec.Job.Status == "queued" {
+			m.queued++
+		}
 		current.Job = rec.Job
 		if rec.Job.FinishedAt != nil {
 			current.Snapshot = project.Snapshot{}
@@ -1119,6 +1116,9 @@ func (m *Manager) save(ctx context.Context, rec record) error {
 			return errors.New("job already exists")
 		}
 		m.jobs[rec.Job.ID] = rec
+		if rec.Job.Status == "queued" {
+			m.queued++
+		}
 		if m.publications == nil {
 			m.publications = make(map[string]chan struct{})
 		}

@@ -96,7 +96,9 @@ func TestQueuedTransitionCannotOverwriteCancellation(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	original := record{OwnerID: "member", Job: protocol.Job{ID: "job_race", Status: "queued", CreatedAt: now}}
-	manager.jobs[original.Job.ID] = original
+	if err := manager.save(context.Background(), original); err != nil {
+		t.Fatal(err)
+	}
 
 	staleWorkerCopy := original
 	cancelledCopy := original

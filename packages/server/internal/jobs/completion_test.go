@@ -84,6 +84,15 @@ type completionFaultStore struct {
 	once      sync.Once
 }
 
+func (s *completionFaultStore) CountQueuedJobs(context.Context) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.row.Status == "queued" {
+		return 1, nil
+	}
+	return 0, nil
+}
+
 func (s *completionFaultStore) GetJob(context.Context, string) (store.CompileJob, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

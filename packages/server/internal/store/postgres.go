@@ -371,6 +371,13 @@ func (p *Postgres) ListPendingJobs(ctx context.Context) ([]CompileJob, error) {
 	return jobs, nil
 }
 
+// CountQueuedJobs uses the status index without loading retained manifests.
+func (p *Postgres) CountQueuedJobs(ctx context.Context) (int64, error) {
+	var count int64
+	err := p.db.WithContext(ctx).Model(&CompileJob{}).Where("status = ?", "queued").Count(&count).Error
+	return count, err
+}
+
 func (p *Postgres) ListProjectJobs(ctx context.Context, ownerID, projectID string) ([]CompileJob, error) {
 	var jobs []CompileJob
 	if err := p.db.WithContext(
