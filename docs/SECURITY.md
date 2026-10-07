@@ -75,7 +75,7 @@ at the application and deployment layers.
 
 ## Server filesystem and process primitives
 
-`internal/platform/safefs` owns normalized relative paths, `os.Root`-confined
+`packages/shared/safefs` owns normalized relative paths, `os.Root`-confined
 operations, regular-file reads, byte limits, verified copies, and staged file
 publication. Symlinks are rejected during path validation; `os.Root` independently
 prevents root escape during the actual operation, including concurrent path
@@ -134,7 +134,9 @@ inodes are limited independently of ordinary source/log/artifact quotas.
 All queued jobs execute in workers once a runner is configured; synchronous
 legacy compilation and shell escape are disallowed in that mode. The privileged
 controller never executes user TeX. Only a
-successful checkpoint can be reused; failure, cancellation, expiration and restart
+successful checkpoint can be reused; failed or cancelled attempts cannot publish
+new state. Their prior verified checkpoint keeps its original expiry and input
+compatibility checks. Corrupt state, expiration, explicit closure and restart
 invalidate it. Session owner checks apply to uploads, revision receipts, job results
 and SSE. See [configuration and trust boundaries](REALTIME.md).
 

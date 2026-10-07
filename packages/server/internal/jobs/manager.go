@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -65,6 +66,7 @@ type Manager struct {
 	mu              sync.Mutex
 	admissionMu     sync.Mutex
 	jobs            map[string]record
+	jobHistory      map[string][]string
 	queued          int
 	completions     map[string]record
 	publications    map[string]chan struct{}
@@ -103,6 +105,7 @@ func New(
 		sessions:     make(map[string]*liveSession),
 		active:       make(map[string]context.CancelFunc),
 		jobs:         make(map[string]record),
+		jobHistory:   make(map[string][]string),
 		completions:  make(map[string]record),
 		publications: make(map[string]chan struct{}),
 		queue:        make(chan string, cfg.MaxQueuedJobs*2),
@@ -329,6 +332,14 @@ func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]protoc
 	for id, gate := range m.publications {
 		publications[id] = gate
 	}
+	var native []protocol.Job
+	if m.db == nil {
+		history := m.jobHistory[ownerID]
+		native = make([]protocol.Job, 0, min(limit, len(history)))
+		for i := len(history) - 1; i >= 0 && len(native) < limit; i-- {
+			native = append(native, m.jobs[history[i]].Job)
+		}
+	}
 	m.mu.Unlock()
 	reconcile := func(job protocol.Job) (protocol.Job, error) {
 		if gate := publications[job.ID]; job.Status == "succeeded" && gate != nil {
@@ -342,27 +353,14 @@ func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]protoc
 		return withoutExpiredAuxiliary(job), nil
 	}
 	if m.db == nil {
-		m.mu.Lock()
-		out := make([]protocol.Job, 0, len(m.jobs))
-		for _, rec := range m.jobs {
-			if rec.OwnerID == ownerID {
-				out = append(out, withoutExpiredAuxiliary(rec.Job))
-			}
-		}
-		m.mu.Unlock()
-		// The in-memory order is not stable, but timestamps make it deterministic
-		// after sorting in the HTTP layer unnecessary for the common small queue.
-		if len(out) > limit {
-			out = out[:limit]
-		}
-		for i := range out {
+		for i := range native {
 			var err error
-			out[i], err = reconcile(out[i])
+			native[i], err = reconcile(native[i])
 			if err != nil {
 				return nil, err
 			}
 		}
-		return out, nil
+		return native, nil
 	}
 	rows, err := m.db.ListJobs(ctx, ownerID, limit)
 	if err != nil {
@@ -664,6 +662,7 @@ func (m *Manager) deleteTerminalProjectRecords(ctx context.Context, ownerID, pro
 			delete(m.jobs, id)
 		}
 	}
+	m.pruneHistoryLocked(ownerID)
 	return nil
 }
 
@@ -1110,12 +1109,17 @@ func (m *Manager) pruneTerminal(ctx context.Context, cutoff time.Time) {
 	}
 	m.mu.Lock()
 	removed := 0
+	owners := make(map[string]struct{})
 	for id, rec := range m.jobs {
 		terminal := rec.Job.Status == "succeeded" || rec.Job.Status == "failed" || rec.Job.Status == "cancelled"
 		if terminal && m.publications[id] == nil && rec.Job.FinishedAt != nil && rec.Job.FinishedAt.Before(cutoff) {
 			delete(m.jobs, id)
+			owners[rec.OwnerID] = struct{}{}
 			removed++
 		}
+	}
+	for ownerID := range owners {
+		m.pruneHistoryLocked(ownerID)
 	}
 	m.mu.Unlock()
 	if removed > 0 {
@@ -1148,6 +1152,7 @@ func (m *Manager) save(ctx context.Context, rec record) error {
 			return errors.New("job already exists")
 		}
 		m.jobs[rec.Job.ID] = rec
+		m.indexHistoryLocked(rec)
 		if rec.Job.Status == "queued" {
 			m.queued++
 		}
@@ -1191,6 +1196,33 @@ func (m *Manager) save(ctx context.Context, rec record) error {
 		m.beginPublication(rec.Job.ID)
 	}
 	return err
+}
+
+// Native history is ordered by immutable creation time, then identifier. Reads
+// copy only the requested page; completion transitions never rebuild the index.
+func (m *Manager) indexHistoryLocked(rec record) {
+	if m.jobHistory == nil {
+		m.jobHistory = make(map[string][]string)
+	}
+	history := m.jobHistory[rec.OwnerID]
+	position := sort.Search(len(history), func(i int) bool {
+		job := m.jobs[history[i]].Job
+		return job.CreatedAt.After(rec.Job.CreatedAt) ||
+			(job.CreatedAt.Equal(rec.Job.CreatedAt) && job.ID > rec.Job.ID)
+	})
+	m.jobHistory[rec.OwnerID] = slices.Insert(history, position, rec.Job.ID)
+}
+
+func (m *Manager) pruneHistoryLocked(ownerID string) {
+	history := slices.DeleteFunc(m.jobHistory[ownerID], func(id string) bool {
+		_, present := m.jobs[id]
+		return !present
+	})
+	if len(history) == 0 {
+		delete(m.jobHistory, ownerID)
+	} else {
+		m.jobHistory[ownerID] = history
+	}
 }
 
 func marshalResult(result *protocol.CompileResult) ([]byte, error) {
