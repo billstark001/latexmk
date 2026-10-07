@@ -11,8 +11,8 @@
     "bundle:runtime:full": "pnpm --filter @latexmk/deploy build && node packages/deploy/dist/index.js runtime-bundle --profile full --out dist/runtime-full",
     "bundle:slim": "pnpm --filter @latexmk/deploy build && node packages/deploy/dist/index.js bundle --profile slim --out dist/paas-slim",
     "bundle:full": "pnpm --filter @latexmk/deploy build && node packages/deploy/dist/index.js bundle --profile full --out dist/paas-full",
-    "format": "oxfmt --write . && pnpm --filter @latexmk/cli --filter @latexmk/server format",
-    "format:check": "oxfmt --check . && pnpm --filter @latexmk/cli --filter @latexmk/server format:check",
+    "format": "oxfmt --write . && pnpm --filter @latexmk/cli --filter @latexmk/server --filter @latexmk/shared format",
+    "format:check": "oxfmt --check . && pnpm --filter @latexmk/cli --filter @latexmk/server --filter @latexmk/shared format:check",
     "typecheck": "pnpm -r --if-present typecheck",
     "deps:update": "ncu --packageFile '{package.json,packages/*/package.json}' --upgrade && pnpm install"
   },
