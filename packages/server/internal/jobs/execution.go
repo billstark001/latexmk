@@ -160,8 +160,9 @@ func (m *Manager) publishExecution(ctx context.Context, rec record, workspace *c
 			requested, _ := time.ParseDuration(rec.Request.Auxiliary.ServerTTL)
 			ttl = min(ttl, requested)
 		}
-		s.cacheExpires = time.Now().UTC().Add(ttl)
-		e.output.Result.AuxiliaryExpiresAt = &s.cacheExpires
+		expires := time.Now().UTC().Add(ttl)
+		s.cacheExpires = expires
+		e.output.Result.AuxiliaryExpiresAt = &expires
 		s.cachePath = publication.Path()
 		s.cacheInputs = append([]protocol.ProjectFile(nil), rec.Snapshot.Files...)
 		s.cacheStamps = e.stamps

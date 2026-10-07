@@ -168,6 +168,47 @@ func TestClosedSessionDiscardsLateCheckpointPublication(t *testing.T) {
 	}
 }
 
+func TestPublishedExpiryDoesNotAliasMutableSessionCache(t *testing.T) {
+	m, req := sessionManager(t)
+	m.cfg.CompileCacheRetention = time.Hour
+	ctx := context.Background()
+	session, err := m.CreateSession(ctx, "owner", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := time.Now().UTC()
+	rec := record{
+		OwnerID: "owner", Request: req.Request,
+		Job: protocol.Job{ID: "job_expiry", SessionID: session.ID, Status: "succeeded", FinishedAt: &finished,
+			Result: &protocol.CompileResult{Success: true}},
+	}
+	if err := m.save(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	live := m.sessions[session.ID]
+	live.state.Workspace, live.state.RunningJobID = "reuse", rec.Job.ID
+	checkpoint := filepath.Join(t.TempDir(), "checkpoint.tar.gz")
+	if err := os.WriteFile(checkpoint, []byte("bounded checkpoint"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	executed := execution{sessionCheckpoint: true, checkpoint: checkpoint, cache: &protocol.CompileCache{}}
+	executed.output.Result.Success = true
+	m.publishExecution(ctx, rec, nil, &executed)
+	if executed.output.Result.AuxiliaryExpiresAt == nil {
+		t.Fatal("checkpoint expiry was not published")
+	}
+	expected := *executed.output.Result.AuxiliaryExpiresAt
+	m.updatePublishedCache(ctx, rec, executed)
+	m.endPublication(rec.Job.ID)
+	m.admissionMu.Lock()
+	m.clearSessionCacheLocked(live)
+	m.admissionMu.Unlock()
+	job, err := m.Get(ctx, "owner", rec.Job.ID)
+	if err != nil || job.Result.AuxiliaryExpiresAt == nil || !job.Result.AuxiliaryExpiresAt.Equal(expected) {
+		t.Fatalf("clearing checkpoint changed the immutable result expiry: %+v, %v", job, err)
+	}
+}
+
 type completionFaultStore struct {
 	*store.Postgres
 	mu               sync.Mutex
