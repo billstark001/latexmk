@@ -107,7 +107,7 @@ func failedOutput(rec record, err error) compile.Output {
 	}
 }
 
-// publishExecution runs under admissionMu after the terminal success commits.
+// publishExecution prepares state outside admissionMu after terminal success.
 // Cancellation cannot overwrite that conditional transition; session closure
 // can still prevent checkpoint publication by removing the session.
 func (m *Manager) publishExecution(ctx context.Context, rec record, workspace *compile.Workspace, e *execution) {
@@ -115,8 +115,7 @@ func (m *Manager) publishExecution(ctx context.Context, rec record, workspace *c
 		return
 	}
 	if e.sessionCheckpoint {
-		s := m.sessions[rec.Job.SessionID]
-		if s == nil || s.state.Workspace != "reuse" || s.state.RunningJobID != rec.Job.ID || e.checkpoint == "" {
+		if e.checkpoint == "" {
 			return
 		}
 		root, err := safefs.Open(filepath.Dir(e.checkpoint))
@@ -136,8 +135,23 @@ func (m *Manager) publishExecution(ctx context.Context, rec record, workspace *c
 			e.cache.Warning = err.Error()
 			return
 		}
-		path, err := m.projects.SaveLiveCache(rec.OwnerID, rec.Job.SessionID, e.checkpoint, size, hash)
+		publication, err := m.projects.StageLiveCache(rec.OwnerID, rec.Job.SessionID, e.checkpoint, size, hash)
 		if err != nil {
+			e.cache.Warning = err.Error()
+			return
+		}
+		defer func() {
+			if err := publication.Close(); err != nil {
+				m.logger.Warn("discard staged checkpoint", "error", err)
+			}
+		}()
+		m.admissionMu.Lock()
+		defer m.admissionMu.Unlock()
+		s := m.sessions[rec.Job.SessionID]
+		if s == nil || s.state.Workspace != "reuse" || s.state.RunningJobID != rec.Job.ID || ctx.Err() != nil {
+			return
+		}
+		if err := publication.Commit(); err != nil {
 			e.cache.Warning = err.Error()
 			return
 		}
@@ -148,7 +162,7 @@ func (m *Manager) publishExecution(ctx context.Context, rec record, workspace *c
 		}
 		s.cacheExpires = time.Now().UTC().Add(ttl)
 		e.output.Result.AuxiliaryExpiresAt = &s.cacheExpires
-		s.cachePath = path
+		s.cachePath = publication.Path()
 		s.cacheInputs = append([]protocol.ProjectFile(nil), rec.Snapshot.Files...)
 		s.cacheStamps = e.stamps
 		s.cacheHashes = make(map[string]string, len(rec.Snapshot.Files))

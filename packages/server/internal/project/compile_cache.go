@@ -302,6 +302,14 @@ func (m *Manager) SaveCompileCache(
 	if err := gz.Close(); err != nil {
 		return 0, err
 	}
+	publication, err := m.stageState(path, int64(buffer.Len()), func(writer io.Writer) error {
+		_, err := writer.Write(buffer.Bytes())
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = publication.Close() }()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if prior, err := m.readCompileCache(
@@ -310,35 +318,9 @@ func (m *Manager) SaveCompileCache(
 		(prior.Submitted.After(submitted) || (prior.Submitted.Equal(submitted) && prior.JobID > jobID)) {
 		return 0, nil
 	}
-	var replaced int64
-	if stat, err := os.Lstat(path); err == nil {
-		if !stat.Mode().IsRegular() {
-			return 0, errors.New("cache destination is not regular")
-		}
-		replaced = stat.Size()
-	} else if !os.IsNotExist(err) {
+	if err := publication.commitLocked(); err != nil {
 		return 0, err
 	}
-	// Include both the old and temporary new generation in the hard quota.
-	if m.stateBytes+m.pendingBytes+int64(buffer.Len()) > m.cfg.MaxStateBytes {
-		return 0, errors.New("state storage limit prevents caching auxiliary files")
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return 0, err
-	}
-	cacheRoot, err := safefs.Open(filepath.Dir(path))
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = cacheRoot.Close() }()
-	if _, err := cacheRoot.WriteAtomic(filepath.Base(path), int64(buffer.Len()), func(w io.Writer) error {
-		_, err := w.Write(buffer.Bytes())
-		return err
-	}); err != nil {
-		return 0, err
-	}
-
-	m.stateBytes += int64(buffer.Len()) - replaced
 	return len(record.Files), nil
 }
 

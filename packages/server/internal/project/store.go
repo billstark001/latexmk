@@ -92,6 +92,9 @@ func New(cfg config.Config, db *store.Postgres) (*Manager, error) {
 		return nil, err
 	}
 	cleanupErr := stateRoot.RemoveAll("live-cache")
+	if cleanupErr == nil {
+		cleanupErr = removeOrphanPublications(stateRoot)
+	}
 	closeErr := stateRoot.Close()
 	if err := errors.Join(cleanupErr, closeErr); err != nil {
 		return nil, err
@@ -217,57 +220,19 @@ func (m *Manager) PutBlob(ownerID, uploadID, digest string, body io.Reader) (err
 	if m.hasBlob(ownerID, digest, size) {
 		return nil
 	}
-	m.mu.Lock()
-	if m.hasBlob(ownerID, digest, size) {
-		m.mu.Unlock()
-		return nil
-	}
-	if m.stateBytes+m.pendingBytes+size > m.cfg.MaxStateBytes {
-		m.mu.Unlock()
-		return fmt.Errorf("state storage limit of %d bytes would be exceeded", m.cfg.MaxStateBytes)
-	}
-	m.pendingBytes += size
-	m.mu.Unlock()
-	reserved := true
-	defer func() {
-		if reserved {
-			m.mu.Lock()
-			m.pendingBytes -= size
-			m.mu.Unlock()
-		}
-	}()
-	dir := filepath.Dir(m.blobPath(ownerID, digest))
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	fs, err := safefs.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = fs.Close() }()
-	pending, err := fs.Stage(digest, size, func(w io.Writer) error {
-		return safefs.CopyVerified(w, body, size, digest)
+	publication, err := m.stageState(m.blobPath(ownerID, digest), size, func(writer io.Writer) error {
+		return safefs.CopyVerified(writer, body, size, digest)
 	})
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, pending.Close()) }()
-
+	defer func() { err = errors.Join(err, publication.Close()) }()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.hasBlob(ownerID, digest, size) {
 		return nil
 	}
-	if m.stateBytes+m.pendingBytes > m.cfg.MaxStateBytes {
-		return fmt.Errorf("state storage limit of %d bytes would be exceeded", m.cfg.MaxStateBytes)
-	}
-	if err := pending.Commit(); err != nil {
-		return err
-	}
-	m.stateBytes += size
-	m.pendingBytes -= size
-	reserved = false
-	return nil
+	return publication.commitLocked()
 }
 
 func (m *Manager) Commit(ctx context.Context, ownerID, uploadID string) (Snapshot, protocol.CompileRequest, error) {
@@ -933,7 +898,7 @@ func removeExpiredRegularFiles(root string, cutoff time.Time, references map[str
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() {
+		if entry.IsDir() || safefs.IsStagedName(entry.Name()) {
 			return nil
 		}
 		info, err := entry.Info()
@@ -973,7 +938,7 @@ func removeUnreferencedRegularFiles(root string, references map[string]struct{})
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() {
+		if entry.IsDir() || safefs.IsStagedName(entry.Name()) {
 			return nil
 		}
 		info, err := entry.Info()
@@ -1009,7 +974,7 @@ func directorySize(root string) (int64, error) {
 		if err != nil {
 			return err
 		}
-		if entry.IsDir() {
+		if entry.IsDir() || safefs.IsStagedName(entry.Name()) {
 			return nil
 		}
 		info, err := entry.Info()

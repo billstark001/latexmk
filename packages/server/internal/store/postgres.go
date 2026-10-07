@@ -449,14 +449,17 @@ func (p *Postgres) TransitionJob(ctx context.Context, id, expectedStatus string,
 	return result.RowsAffected == 1, nil
 }
 
-func (p *Postgres) DeleteTerminalJobsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
-	result := p.db.WithContext(ctx).
+func (p *Postgres) DeleteTerminalJobsBefore(ctx context.Context, cutoff time.Time, protected []string) (int64, error) {
+	query := p.db.WithContext(ctx).
 		Where(
 			"status IN ? AND finished_at IS NOT NULL AND finished_at < ?",
 			[]string{"succeeded", "failed", "cancelled"},
 			cutoff,
-		).
-		Delete(&CompileJob{})
+		)
+	if len(protected) > 0 {
+		query = query.Where("id NOT IN ?", protected)
+	}
+	result := query.Delete(&CompileJob{})
 	return result.RowsAffected, result.Error
 }
 

@@ -48,7 +48,7 @@ type jobStore interface {
 	ListProjectJobs(context.Context, string, string) ([]store.CompileJob, error)
 	DeleteTerminalProjectJobs(context.Context, string, string) error
 	TransitionJob(context.Context, string, string, map[string]any) (bool, error)
-	DeleteTerminalJobsBefore(context.Context, time.Time) (int64, error)
+	DeleteTerminalJobsBefore(context.Context, time.Time, []string) (int64, error)
 	GetJob(context.Context, string) (store.CompileJob, error)
 	CreateJob(context.Context, store.CompileJob) error
 }
@@ -768,9 +768,7 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	executed.output = output
 	retained.Result.CompileCache = executed.cache
 	if completed, success := m.finish(ctx, rec, &retained.Result, retained.Result.Error, true); success {
-		m.admissionMu.Lock()
 		m.publishExecution(compileCtx, rec, jobWorkspace, &executed)
-		m.admissionMu.Unlock()
 		m.updatePublishedCache(ctx, completed, executed)
 	}
 }
@@ -1067,8 +1065,14 @@ func (m *Manager) pruneLoop(ctx context.Context) {
 func (m *Manager) pruneTerminal(ctx context.Context, cutoff time.Time) {
 	m.admissionMu.Lock()
 	defer m.admissionMu.Unlock()
+	m.mu.Lock()
+	protected := make([]string, 0, len(m.publications))
+	for id := range m.publications {
+		protected = append(protected, id)
+	}
+	m.mu.Unlock()
 	if m.db != nil {
-		removed, err := m.db.DeleteTerminalJobsBefore(ctx, cutoff)
+		removed, err := m.db.DeleteTerminalJobsBefore(ctx, cutoff, protected)
 		if err != nil {
 			m.logger.Error("terminal job metadata sweep failed", "error", err)
 		} else if removed > 0 {
@@ -1080,7 +1084,7 @@ func (m *Manager) pruneTerminal(ctx context.Context, cutoff time.Time) {
 	removed := 0
 	for id, rec := range m.jobs {
 		terminal := rec.Job.Status == "succeeded" || rec.Job.Status == "failed" || rec.Job.Status == "cancelled"
-		if terminal && rec.Job.FinishedAt != nil && rec.Job.FinishedAt.Before(cutoff) {
+		if terminal && m.publications[id] == nil && rec.Job.FinishedAt != nil && rec.Job.FinishedAt.Before(cutoff) {
 			delete(m.jobs, id)
 			removed++
 		}

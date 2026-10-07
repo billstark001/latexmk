@@ -110,6 +110,9 @@ the size/file limit are discarded while a successful PDF can still be published.
 Full checkpoints are exported only for reusable sessions. Fresh sessions and
 ordinary jobs avoid that collection and transport cost; ordinary cache reuse
 continues to retain its separate portable auxiliary format.
+Checkpoint verification and copying happen outside the global session lock.
+The final rename rechecks the live session and storage quota. Staged bytes have
+a separate quota reservation, and abandoned staged files are removed at startup.
 
 Sessions and checkpoints are process-local. Server restart cancels persisted
 queued/running session jobs, removes orphan checkpoints and containers belonging

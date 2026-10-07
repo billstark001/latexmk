@@ -75,6 +75,55 @@ func TestSuccessfulReadsAndReceiptReplayWaitForCachePublication(t *testing.T) {
 	}
 }
 
+func TestRetentionCannotDeleteAnUnpublishedTerminalJob(t *testing.T) {
+	m, _ := sessionManager(t)
+	finished := time.Now().UTC().Add(-time.Hour)
+	rec := record{OwnerID: "owner", Job: protocol.Job{ID: "job_publishing", Status: "succeeded", FinishedAt: &finished}}
+	if err := m.save(context.Background(), rec); err != nil {
+		t.Fatal(err)
+	}
+	m.pruneTerminal(context.Background(), time.Now())
+	if _, err := m.load(context.Background(), rec.Job.ID); err != nil {
+		t.Fatal("retention deleted a result before cache accounting published")
+	}
+	m.endPublication(rec.Job.ID)
+	m.pruneTerminal(context.Background(), time.Now())
+	if _, err := m.load(context.Background(), rec.Job.ID); err == nil {
+		t.Fatal("completed publication was protected forever")
+	}
+}
+
+func TestClosedSessionDiscardsLateCheckpointPublication(t *testing.T) {
+	m, req := sessionManager(t)
+	ctx := context.Background()
+	session, err := m.CreateSession(ctx, "owner", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CloseSession(ctx, "owner", session.ID); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := filepath.Join(t.TempDir(), "checkpoint.tar.gz")
+	if err := os.WriteFile(checkpoint, []byte("verified checkpoint transport"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	executed := execution{sessionCheckpoint: true, checkpoint: checkpoint, cache: &protocol.CompileCache{}}
+	executed.output.Result.Success = true
+	rec := record{OwnerID: "owner", Job: protocol.Job{ID: "job_late", SessionID: session.ID}}
+	m.publishExecution(ctx, rec, nil, &executed)
+	path, err := m.projects.LiveCachePath("owner", session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("closed session acquired a new checkpoint: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("discarded checkpoint staging leaked: %v %v", entries, err)
+	}
+}
+
 type completionFaultStore struct {
 	*store.Postgres
 	mu        sync.Mutex
