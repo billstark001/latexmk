@@ -335,7 +335,8 @@ func (m *Manager) finishSession(ctx context.Context, rec record) {
 	s.state.RunningJobID = ""
 	if job.Status == "succeeded" {
 		s.state.LastSuccessfulJobID = job.ID
-	} else {
+	}
+	if rec.InvalidateCheckpoint {
 		m.clearSessionCacheLocked(s)
 	}
 	m.publishSessionLocked(s, "finished", job)

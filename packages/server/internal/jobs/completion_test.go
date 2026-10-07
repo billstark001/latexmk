@@ -2,8 +2,11 @@ package jobs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -206,6 +209,64 @@ func TestPublishedExpiryDoesNotAliasMutableSessionCache(t *testing.T) {
 	job, err := m.Get(ctx, "owner", rec.Job.ID)
 	if err != nil || job.Result.AuxiliaryExpiresAt == nil || !job.Result.AuxiliaryExpiresAt.Equal(expected) {
 		t.Fatalf("clearing checkpoint changed the immutable result expiry: %+v, %v", job, err)
+	}
+}
+
+func TestOnlyInvalidStateDiscardsPreviousCheckpoint(t *testing.T) {
+	for _, status := range []string{"failed", "cancelled"} {
+		for _, invalid := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/invalid=%t", status, invalid), func(t *testing.T) {
+				m, req := sessionManager(t)
+				ctx := context.Background()
+				session, err := m.CreateSession(ctx, "owner", req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				data := []byte("previous verified checkpoint")
+				source := filepath.Join(t.TempDir(), "checkpoint.tar.gz")
+				if err := os.WriteFile(source, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+				digest := sha256.Sum256(data)
+				publication, err := m.projects.StageLiveCache(
+					"owner",
+					session.ID,
+					source,
+					int64(len(data)),
+					hex.EncodeToString(digest[:]),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = publication.Close() }()
+				if err := publication.Commit(); err != nil {
+					t.Fatal(err)
+				}
+				live := m.sessions[session.ID]
+				live.cachePath, live.cacheExpires = publication.Path(), time.Now().Add(time.Hour)
+				live.state.LastSuccessfulJobID, live.state.RunningJobID = "job_good", "job_attempt"
+				finished := time.Now().UTC()
+				m.finishSession(ctx, record{
+					InvalidateCheckpoint: invalid,
+					Job: protocol.Job{
+						ID:         "job_attempt",
+						SessionID:  session.ID,
+						Status:     status,
+						FinishedAt: &finished,
+					},
+				})
+				_, statErr := os.Stat(publication.Path())
+				if invalid != errors.Is(statErr, os.ErrNotExist) || live.state.LastSuccessfulJobID != "job_good" ||
+					live.state.RunningJobID != "" {
+					t.Fatalf(
+						"previous state was incorrectly discarded/preserved: invalid=%t, stat=%v, session=%+v",
+						invalid,
+						statErr,
+						live.state,
+					)
+				}
+			})
+		}
 	}
 }
 

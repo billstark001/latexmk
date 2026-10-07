@@ -15,12 +15,13 @@ import (
 )
 
 type execution struct {
-	output            compile.Output
-	cache             *protocol.CompileCache
-	cacheKey          string
-	sessionCheckpoint bool
-	checkpoint        string
-	stamps            map[string]int64
+	invalidateCheckpoint bool
+	output               compile.Output
+	cache                *protocol.CompileCache
+	cacheKey             string
+	sessionCheckpoint    bool
+	checkpoint           string
+	stamps               map[string]int64
 }
 
 func (m *Manager) execute(ctx context.Context, rec record, workspace *compile.Workspace) execution {
@@ -170,6 +171,7 @@ func (m *Manager) publishExecution(ctx context.Context, rec record, workspace *c
 		for _, file := range rec.Snapshot.Files {
 			s.cacheHashes[file.Path] = file.SHA256
 		}
+		e.invalidateCheckpoint = false
 		return
 	}
 	if rec.Request.Auxiliary.ServerTTL != "" {
@@ -281,6 +283,9 @@ func (m *Manager) runIsolated(
 		filepath.Join(workspace.Path, "isolated"),
 		e.sessionCheckpoint,
 	)
+	// A completed compiler error cannot mutate the previous checkpoint: each
+	// attempt restores a private copy. Invalid transport/state is discarded.
+	e.invalidateCheckpoint = e.sessionCheckpoint && checkpoint != "" && err != nil && ctx.Err() == nil
 	if checkpoint != "" && (err != nil || !e.output.Result.Success) && ctx.Err() == nil && !e.output.Result.TimedOut {
 		e.cache.ColdRetry = true
 		e.cache.Reason = "warm state failed; retried with clean sources"

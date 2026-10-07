@@ -27,11 +27,12 @@ import (
 )
 
 type record struct {
-	CompletionFrom string
-	Job            protocol.Job
-	OwnerID        string
-	Request        protocol.CompileRequest
-	Snapshot       project.Snapshot
+	InvalidateCheckpoint bool
+	CompletionFrom       string
+	Job                  protocol.Job
+	OwnerID              string
+	Request              protocol.CompileRequest
+	Snapshot             project.Snapshot
 }
 
 type cleanupResultTarget struct {
@@ -770,6 +771,7 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	defer cancelCompile()
 	started := time.Now()
 	executed := m.execute(compileCtx, rec, jobWorkspace)
+	rec.InvalidateCheckpoint = executed.invalidateCheckpoint
 	executionTime = time.Since(started)
 	output := executed.output
 	output.Result.SessionID, output.Result.Revision = rec.Job.SessionID, rec.Job.Revision
@@ -793,7 +795,8 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	if success {
 		cacheStarted := time.Now()
 		m.publishExecution(compileCtx, rec, jobWorkspace, &executed)
-		m.updatePublishedCache(ctx, completed, executed)
+		rec.InvalidateCheckpoint = executed.invalidateCheckpoint
+		m.updatePublishedCache(ctx, rec, executed)
 		cacheTime = time.Since(cacheStarted)
 	}
 }

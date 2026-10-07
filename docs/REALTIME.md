@@ -112,6 +112,10 @@ corrupt state gets one cold retry within the original compile deadline. Failed,
 cancelled or expired attempts do not publish reusable state. `serverTTL` caps the
 checkpoint lifetime, further bounded by server cache retention. Checkpoints over
 the size/file limit are discarded while a successful PDF can still be published.
+A compiler error or cancellation preserves the previous verified checkpoint,
+which remains subject to its original expiry and input compatibility checks.
+Invalid checkpoint/worker transport discards that prior state unless a successful
+cold attempt publishes a replacement. Every attempt still uses a separate container.
 Full checkpoints are exported only for reusable sessions. Fresh sessions and
 ordinary jobs avoid that collection and transport cost; ordinary cache reuse
 continues to retain its separate portable auxiliary format.

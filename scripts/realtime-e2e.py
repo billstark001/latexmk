@@ -61,6 +61,7 @@ def main():
                "-e", "LATEXMK_ENGINES=xelatex", "-e", "LATEXMK_MAX_CONCURRENT_COMPILES=1",
                "-e", "LATEXMK_MAX_REALTIME_SESSIONS_PER_OWNER=4",
                "-e", "LATEXMK_COMPILE_TIMEOUT=60s",
+               "-e", "LATEXMK_STATE_DIR=/tmp/latexmk-e2e-state",
                "-e", "LATEXMK_RUNNER_IMAGE=" + args.image,
                "-e", "LATEXMK_RUNNER_NAMESPACE=" + namespace]
     if args.controller_binary:
@@ -173,6 +174,25 @@ def main():
         print("TIMING execution-ms cold=" + str(first["result"]["durationMs"]) +
               " noop=" + str(noop["result"]["durationMs"]) +
               " tex-edit=" + str(warm["result"]["durationMs"]), flush=True)
+        docker("exec", name, "sh", "-c", "for cache in /tmp/latexmk-e2e-state/live-cache/*/" + sid +
+               ".tar.gz; do printf '%s' broken > \"$cache\"; done")
+        repaired = completed(submit(files))
+        result, _ = bundle(repaired)
+        assert result["success"] and repaired["result"]["compileCache"]["coldRetry"], repaired
+        retained = completed(submit(files))
+        result, stdout = bundle(retained)
+        assert result.get("workspaceReuse") and "Nothing to do" in stdout
+        print("PASS corrupt checkpoint retries cold and publishes a valid replacement", flush=True)
+        files["main.tex"] = source(r"\undefinedcommand")
+        broken_syntax = completed(submit(files))
+        assert broken_syntax["status"] == "failed", broken_syntax
+        assert api("GET", "/v1/sessions/" + sid)["lastSuccessfulJobId"] == retained["id"]
+        files["main.tex"] = source("Repaired")
+        repaired_syntax = completed(submit(files))
+        result, _ = bundle(repaired_syntax)
+        assert result["success"] and result.get("workspaceReuse"), repaired_syntax
+        assert not repaired_syntax["result"]["compileCache"].get("coldRetry", False), repaired_syntax
+        print("PASS syntax errors preserve the previous verified checkpoint for warm recovery", flush=True)
         files["extra.sty"] = b"\\ProvidesPackage{extra}\n"
         changed = completed(submit(files))
         result, _ = bundle(changed)
@@ -202,8 +222,8 @@ def main():
         files["main.tex"] = source("Fixed")
         fixed = completed(submit(files))
         result, _ = bundle(fixed)
-        assert result["success"] and not result.get("workspaceReuse", False)
-        print("PASS errors retain last good result and recover cold", flush=True)
+        assert result["success"]
+        print("PASS errors retain last good result and recover with bounded retries", flush=True)
         files["main.tex"] = source(r"\loop\iftrue\repeat")
         blocked = submit(files)
         wait_for(lambda: api("GET", "/v1/jobs/" + blocked["id"])["status"] == "running")
