@@ -16,7 +16,7 @@ import (
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
-func workerInput(t *testing.T, root, source, checkpoint string) []byte {
+func workerInput(t *testing.T, source, checkpoint string, export bool) []byte {
 	t.Helper()
 	staging := t.TempDir()
 	if err := os.WriteFile(filepath.Join(staging, "main.tex"), []byte(source), 0600); err != nil {
@@ -27,7 +27,8 @@ func workerInput(t *testing.T, root, source, checkpoint string) []byte {
 		t.Fatal(err)
 	}
 	req := workerRequest{
-		Version: 1,
+		Version:          workerProtocolVersion,
+		ExportCheckpoint: export,
 		Request: protocol.CompileRequest{
 			ProtocolVersion: 2,
 			Entry:           "main.tex",
@@ -106,7 +107,7 @@ printf 'PWD %s\nINPUT main.tex\nOUTPUT .latexmk-build/main.pdf\nOUTPUT .latexmk-
 	t.Cleanup(cleanup)
 	run := func(source, checkpoint string) (bool, string, string) {
 		t.Helper()
-		input := workerInput(t, root, source, checkpoint)
+		input := workerInput(t, source, checkpoint, true)
 		cleanup()
 		var response bytes.Buffer
 		if err := runWorker(context.Background(), bytes.NewReader(input), &response, root, 1<<20, 200); err != nil {
@@ -195,5 +196,49 @@ func testConfig() config.Config {
 		RunnerPIDs:           16,
 		RunnerCPUs:           1,
 		MaxFiles:             100,
+	}
+}
+func TestFreshWorkerExportsStateOnlyWhenRequested(t *testing.T) {
+	bin := t.TempDir()
+	script := "#!/bin/sh\nprintf pdf > .latexmk-build/main.pdf\nprintf aux > .latexmk-build/main.aux\nprintf 'INPUT main.tex\\nOUTPUT .latexmk-build/main.pdf\\nOUTPUT .latexmk-build/main.aux\\n' > .latexmk-build/main.fls\n"
+	if err := os.WriteFile(filepath.Join(bin, "latexmk"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, export := range []bool{false, true} {
+		t.Run(map[bool]string{false: "result only", true: "result and checkpoint"}[export], func(t *testing.T) {
+			root := t.TempDir()
+			t.Cleanup(func() {
+				_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+					if err == nil && info.IsDir() {
+						_ = os.Chmod(path, 0700)
+					}
+					return nil
+				})
+			})
+			input := workerInput(t, "source", "", export)
+			var response bytes.Buffer
+			if err := runWorker(context.Background(), bytes.NewReader(input), &response, root, 1<<20, 200); err != nil {
+				t.Fatal(err)
+			}
+			dest := t.TempDir()
+			if _, err := projectarchive.ExtractTarGz(
+				bytes.NewReader(response.Bytes()),
+				dest,
+				projectarchive.Limits{MaxFiles: 2, MaxBytes: 1 << 20},
+			); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(filepath.Join(dest, "result.tar.gz")); err != nil {
+				t.Fatal(err)
+			}
+			_, err := os.Stat(filepath.Join(dest, "checkpoint.tar.gz"))
+			if export && err != nil {
+				t.Fatal("requested checkpoint missing:", err)
+			}
+			if !export && !os.IsNotExist(err) {
+				t.Fatal("unrequested checkpoint exported:", err)
+			}
+		})
 	}
 }

@@ -264,6 +264,7 @@ func (m *Manager) runIsolated(
 		checkpoint,
 		workspace.Project,
 		filepath.Join(workspace.Path, "isolated"),
+		e.sessionCheckpoint,
 	)
 	if checkpoint != "" && (err != nil || !e.output.Result.Success) && ctx.Err() == nil && !e.output.Result.TimedOut {
 		e.cache.ColdRetry = true
@@ -279,6 +280,7 @@ func (m *Manager) runIsolated(
 			"",
 			workspace.Project,
 			filepath.Join(workspace.Path, "isolated-cold"),
+			e.sessionCheckpoint,
 		)
 	}
 	if err != nil {

@@ -31,6 +31,7 @@ func Run(
 	sources []protocol.ProjectFile,
 	stamps map[string]int64,
 	checkpoint, sourceRoot, destination string,
+	exportCheckpoint bool,
 ) (compile.Output, string, error) {
 	if cfg.RunnerImage == "" {
 		return compile.Output{}, "", errors.New("isolated runner is not configured")
@@ -40,7 +41,8 @@ func Run(
 	}
 	warm := checkpoint != ""
 	payload := workerRequest{
-		Version:          1,
+		Version:          workerProtocolVersion,
+		ExportCheckpoint: exportCheckpoint,
 		Request:          req,
 		RequestID:        id,
 		Sources:          sources,
@@ -188,6 +190,10 @@ func Run(
 		return result, "", nil
 	}
 	cache, err := resultRoot.OpenRegular("checkpoint.tar.gz")
+	if !exportCheckpoint && err == nil {
+		_ = cache.Close()
+		return compile.Output{}, "", errors.New("worker exported an unrequested checkpoint")
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		return result, "", nil
 	}

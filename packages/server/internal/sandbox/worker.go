@@ -21,6 +21,7 @@ import (
 )
 
 type workerRequest struct {
+	ExportCheckpoint bool                    `json:"exportCheckpoint"`
 	Version          int                     `json:"version"`
 	Request          protocol.CompileRequest `json:"request"`
 	RequestID        string                  `json:"requestId"`
@@ -33,6 +34,8 @@ type workerRequest struct {
 	MaxLogBytes      int64                   `json:"maxLogBytes"`
 	TimeoutMS        int64                   `json:"timeoutMs"`
 }
+
+const workerProtocolVersion = 2
 
 // Worker runs only inside a dedicated disposable container. Its fixed logical
 // path makes .fdb_latexmk and recorder paths valid across successful checkpoints.
@@ -72,9 +75,11 @@ func runWorker(
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return err
 	}
-	if req.Version != 1 || req.Request.ShellEscape || req.MaxFiles <= 0 || req.MaxSourceBytes <= 0 ||
+	if req.Version != workerProtocolVersion || req.Request.ShellEscape || req.MaxFiles <= 0 ||
+		req.MaxSourceBytes <= 0 ||
 		req.MaxArtifactBytes <= 0 ||
-		req.MaxStateBytes < 0 || (req.Warm && req.MaxStateBytes == 0) ||
+		req.MaxStateBytes < 0 ||
+		((req.Warm || req.ExportCheckpoint) && req.MaxStateBytes == 0) ||
 		req.MaxLogBytes <= 0 ||
 		req.TimeoutMS <= 0 {
 		return errors.New("invalid worker protocol or limits")
@@ -199,7 +204,7 @@ func runWorker(
 		return err
 	}
 	members := []archiveMember{{name: "result.tar.gz", file: response}}
-	if result.Result.Success && req.MaxStateBytes > 0 {
+	if result.Result.Success && req.ExportCheckpoint {
 		// A successful no-op retains recorder and final output files from the previous
 		// verified state; failure never exports a partially mutated checkpoint.
 		state, err := collectState(build, req.MaxFiles, req.MaxStateBytes)
