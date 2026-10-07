@@ -142,3 +142,8 @@ Docker access belongs to the trusted controller and grants administrative contro
 of its daemon. Use a dedicated host/VM or broker for hostile tenants. Native fresh
 sessions retain the existing compiler trust boundary; enabling realtime alone
 without a runner does not add OS isolation.
+
+Source modes `0444/0555` protect against accidental writes. The worker and
+compiler share a UID, so a compromised compiler can change those modes; they
+are not an enforced read-only mount or ownership boundary. Controller snapshots
+remain separate verified copies, and only bounded build state is exported.
