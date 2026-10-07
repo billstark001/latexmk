@@ -270,6 +270,11 @@ func (m *Manager) runIsolated(
 	e *execution,
 	checkpoint string,
 ) {
+	sourceFiles, sourceErr := m.projects.SourceFiles(rec.Snapshot)
+	if sourceErr != nil {
+		e.output = failedOutput(rec, sourceErr)
+		return
+	}
 	var err error
 	e.output, e.checkpoint, err = sandbox.Run(
 		ctx,
@@ -279,7 +284,7 @@ func (m *Manager) runIsolated(
 		rec.Snapshot.Files,
 		e.stamps,
 		checkpoint,
-		workspace.Project,
+		sourceFiles,
 		filepath.Join(workspace.Path, "isolated"),
 		e.sessionCheckpoint,
 	)
@@ -298,7 +303,7 @@ func (m *Manager) runIsolated(
 			rec.Snapshot.Files,
 			e.stamps,
 			"",
-			workspace.Project,
+			sourceFiles,
 			filepath.Join(workspace.Path, "isolated-cold"),
 			e.sessionCheckpoint,
 		)

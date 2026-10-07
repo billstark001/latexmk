@@ -784,11 +784,13 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	}()
 	workspace := jobWorkspace.Project
 
-	if err := m.projects.Materialize(rec.Snapshot, workspace); err != nil {
-		rec, _ = m.finish(ctx, rec, nil, "could not materialize project: "+err.Error(), false)
-		return
+	if m.cfg.RunnerImage == "" {
+		if err := m.projects.Materialize(rec.Snapshot, workspace); err != nil {
+			rec, _ = m.finish(ctx, rec, nil, "could not materialize project: "+err.Error(), false)
+			return
+		}
+		materializeTime = time.Since(workerStarted)
 	}
-	materializeTime = time.Since(workerStarted)
 
 	compileCtx, cancelCompile := context.WithTimeout(jobCtx, m.cfg.CompileTimeout)
 	defer cancelCompile()

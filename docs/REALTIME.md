@@ -125,6 +125,9 @@ a separate quota reservation, and abandoned staged files are removed at startup.
 Worker source/checkpoint archives use fast gzip compression. The response's gzip
 envelope stores its already compressed members without recompressing them. The
 same archive validation, expanded limits and per-attempt container boundary apply.
+Isolated source transport reads pinned content-addressed blobs directly, verifying
+their complete size and hash while packaging them. It avoids an extra controller
+source copy; workers still receive only archive bytes, without host mounts.
 
 Sessions and checkpoints are process-local. Server restart cancels persisted
 queued/running session jobs, removes orphan checkpoints and containers belonging

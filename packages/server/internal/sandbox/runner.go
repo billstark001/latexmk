@@ -31,7 +31,9 @@ func Run(
 	id string,
 	sources []protocol.ProjectFile,
 	stamps map[string]int64,
-	checkpoint, sourceRoot, destination string,
+	checkpoint string,
+	sourceFiles map[string]compile.File,
+	destination string,
 	exportCheckpoint bool,
 ) (compile.Output, string, error) {
 	if cfg.RunnerImage == "" {
@@ -67,17 +69,19 @@ func Run(
 		return compile.Output{}, "", err
 	}
 	members := []archiveMember{{name: "request.json", file: metadata}}
+	if len(sourceFiles) != len(sources) {
+		return compile.Output{}, "", errors.New("source descriptors do not match the snapshot")
+	}
 	for _, source := range sources {
+		file, present := sourceFiles[source.Path]
+		if !present || file.Size != source.Size || file.SHA256 != source.SHA256 {
+			return compile.Output{}, "", errors.New("source descriptor does not match its manifest")
+		}
 		members = append(
 			members,
 			archiveMember{
-				name: "sources/" + source.Path,
-				file: compile.File{
-					Workspace:    sourceRoot,
-					RelativePath: source.Path,
-					Size:         source.Size,
-					SHA256:       source.SHA256,
-				},
+				name:    "sources/" + source.Path,
+				file:    file,
 				modTime: time.Unix(stamps[source.Path], 0),
 			},
 		)
