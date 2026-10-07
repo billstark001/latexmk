@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 type Config struct {

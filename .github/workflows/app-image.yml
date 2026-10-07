@@ -12,6 +12,7 @@ on:
     branches: [main]
     paths:
       - packages/server/**
+      - packages/shared/**
       - packages/deploy/src/**
       - packages/deploy/templates/Dockerfile.app
       - packages/deploy/runtime/lock.json

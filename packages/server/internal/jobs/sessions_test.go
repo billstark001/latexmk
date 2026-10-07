@@ -15,13 +15,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/project"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
-func sessionManager(t *testing.T) (*Manager, api.SessionRequest) {
+func sessionManager(t *testing.T) (*Manager, protocol.SessionRequest) {
 	t.Helper()
 	cfg := config.Config{
 		StateDir:                    t.TempDir(),
@@ -45,12 +45,12 @@ func sessionManager(t *testing.T) (*Manager, api.SessionRequest) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := New(cfg, api.Metadata{}, compile.NewRunner(cfg), p, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	return m, api.SessionRequest{
+	m := New(cfg, protocol.Metadata{}, compile.NewRunner(cfg), p, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return m, protocol.SessionRequest{
 		IdempotencyKey: "session-key-00000001",
 		ProjectID:      "paper",
 		Workspace:      "fresh",
-		Request: api.CompileRequest{
+		Request: protocol.CompileRequest{
 			ProtocolVersion: 2,
 			Entry:           "main.tex",
 			Engine:          "xelatex",
@@ -59,16 +59,22 @@ func sessionManager(t *testing.T) (*Manager, api.SessionRequest) {
 	}
 }
 
-func planRevision(t *testing.T, m *Manager, req api.SessionRequest, content string, base uint64) api.RevisionRequest {
+func planRevision(
+	t *testing.T,
+	m *Manager,
+	req protocol.SessionRequest,
+	content string,
+	base uint64,
+) protocol.RevisionRequest {
 	t.Helper()
 	digest := sha256.Sum256([]byte(content))
 	hash := hex.EncodeToString(digest[:])
 	plan, err := m.projects.Plan(
 		"owner",
-		api.UploadPlanRequest{
+		protocol.UploadPlanRequest{
 			ProjectID: req.ProjectID,
 			Request:   req.Request,
-			Files:     []api.ProjectFile{{Path: "main.tex", SHA256: hash, Size: int64(len(content))}},
+			Files:     []protocol.ProjectFile{{Path: "main.tex", SHA256: hash, Size: int64(len(content))}},
 		},
 	)
 	if err != nil {
@@ -79,7 +85,7 @@ func planRevision(t *testing.T, m *Manager, req api.SessionRequest, content stri
 			t.Fatal(err)
 		}
 	}
-	return api.RevisionRequest{
+	return protocol.RevisionRequest{
 		UploadID:       plan.UploadID,
 		BaseRevision:   base,
 		IdempotencyKey: fmt.Sprintf("revision-key-%016d", base),
@@ -93,8 +99,8 @@ func TestSessionCoalescesWithoutGrowingQueueAndReplaysReceipts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var last api.Job
-	var submitted api.RevisionRequest
+	var last protocol.Job
+	var submitted protocol.RevisionRequest
 	for i := uint64(0); i < 150; i++ {
 		submitted = planRevision(t, m, req, fmt.Sprintf("version %d", i), i)
 		job, err := m.SubmitRevision(ctx, "owner", s.ID, submitted)
@@ -162,7 +168,12 @@ func TestSessionCreationReplaysBeforeQuotaAndRejectsChangedPayload(t *testing.T)
 	}
 	changed := req
 	changed.Request.JobName = "different"
-	if _, err := m.CreateSession(ctx, "owner", changed); err == nil || !strings.Contains(err.Error(), "different session") {
+	if _, err := m.CreateSession(
+		ctx,
+		"owner",
+		changed,
+	); err == nil ||
+		!strings.Contains(err.Error(), "different session") {
 		t.Fatalf("changed creation payload = %v", err)
 	}
 	foreign, err := m.CreateSession(ctx, "other", req)
@@ -182,7 +193,7 @@ func TestSessionRejectsControlIdempotencyKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, control := range []string{"\x1b", "\x00", "\x7f", "\u0085"} {
-		_, err := m.SubmitRevision(context.Background(), "owner", s.ID, api.RevisionRequest{
+		_, err := m.SubmitRevision(context.Background(), "owner", s.ID, protocol.RevisionRequest{
 			IdempotencyKey: "revision-key-0001" + control,
 		})
 		if err == nil || !strings.Contains(err.Error(), "control characters") {

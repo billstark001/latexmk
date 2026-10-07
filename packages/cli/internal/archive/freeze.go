@@ -2,13 +2,13 @@ package archive
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 type Frozen struct {
@@ -54,8 +54,7 @@ func Freeze(ctx context.Context, files []File, maxFiles int, maxBytes int64) (_ 
 			_ = in.Close()
 			return nil, err
 		}
-		hash := sha256.New()
-		size, copyErr := io.Copy(io.MultiWriter(out, hash), io.LimitReader(in, maxBytes-total+1))
+		hash, size, copyErr := safefs.Digest(io.TeeReader(in, out), maxBytes-total)
 		err = errors.Join(copyErr, in.Close(), out.Close())
 		if err != nil {
 			return nil, err
@@ -64,7 +63,7 @@ func Freeze(ctx context.Context, files []File, maxFiles int, maxBytes int64) (_ 
 		if total > maxBytes {
 			return nil, fmt.Errorf("snapshot exceeds %d bytes", maxBytes)
 		}
-		file.Source, file.Size, file.SHA256 = destination, size, hex.EncodeToString(hash.Sum(nil))
+		file.Source, file.Size, file.SHA256 = destination, size, hash
 		frozen.Files = append(frozen.Files, file)
 	}
 	complete = true

@@ -10,13 +10,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/auth"
 	"github.com/billstark001/latexmk/packages/server/internal/jobs"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 func (s *Server) createSession(c *gin.Context) {
-	var req api.SessionRequest
+	var req protocol.SessionRequest
 	if err := decodeStrictJSON(c.Request.Body, 64<<10, &req); err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
@@ -55,7 +55,7 @@ func (s *Server) closeSession(c *gin.Context) {
 }
 
 func (s *Server) submitRevision(c *gin.Context) {
-	var req api.RevisionRequest
+	var req protocol.RevisionRequest
 	if err := decodeStrictJSON(c.Request.Body, 4096, &req); err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return

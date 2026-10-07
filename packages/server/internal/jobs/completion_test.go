@@ -28,7 +28,12 @@ func (s *completionFaultStore) GetJob(context.Context, string) (store.CompileJob
 	return s.row, nil
 }
 
-func (s *completionFaultStore) TransitionJob(_ context.Context, _ string, expected string, values map[string]any) (bool, error) {
+func (s *completionFaultStore) TransitionJob(
+	_ context.Context,
+	_ string,
+	expected string,
+	values map[string]any,
+) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if expected == "running" && s.fail {
@@ -55,7 +60,11 @@ func TestCompletionOutageDoesNotBlockSessionReadsAndRecovers(t *testing.T) {
 			m, req := sessionManager(t)
 			m.cfg.ShutdownTimeout = 150 * time.Millisecond
 			bin := t.TempDir()
-			if err := os.WriteFile(filepath.Join(bin, "latexmk"), []byte("#!/bin/sh\ncp main.tex main.pdf\nprintf 'INPUT main.tex\\nOUTPUT main.pdf\\n' > main.fls\n"), 0700); err != nil {
+			if err := os.WriteFile(
+				filepath.Join(bin, "latexmk"),
+				[]byte("#!/bin/sh\ncp main.tex main.pdf\nprintf 'INPUT main.tex\\nOUTPUT main.pdf\\n' > main.fls\n"),
+				0700,
+			); err != nil {
 				t.Fatal(err)
 			}
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -75,7 +84,21 @@ func TestCompletionOutageDoesNotBlockSessionReadsAndRecovers(t *testing.T) {
 			}
 			request, _ := json.Marshal(rec.Request)
 			snapshot, _ := json.Marshal(rec.Snapshot)
-			fault := &completionFaultStore{fail: true, attempted: make(chan struct{}), row: store.CompileJob{ID: id, OwnerID: rec.OwnerID, ProjectID: job.ProjectID, SessionID: session.ID, Revision: job.Revision, SnapshotID: rec.Snapshot.ID, Status: "queued", Request: request, SnapshotManifest: snapshot}}
+			fault := &completionFaultStore{
+				fail:      true,
+				attempted: make(chan struct{}),
+				row: store.CompileJob{
+					ID:               id,
+					OwnerID:          rec.OwnerID,
+					ProjectID:        job.ProjectID,
+					SessionID:        session.ID,
+					Revision:         job.Revision,
+					SnapshotID:       rec.Snapshot.ID,
+					Status:           "queued",
+					Request:          request,
+					SnapshotManifest: snapshot,
+				},
+			}
 			m.db = fault
 			done := make(chan struct{})
 			go func() { m.run(ctx, 1, id); close(done) }()

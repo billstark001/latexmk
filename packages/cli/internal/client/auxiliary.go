@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
-	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 // ExportArtifact applies the same path and checksum checks as result downloads.

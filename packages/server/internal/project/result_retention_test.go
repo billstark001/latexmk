@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 func TestAuxiliaryRetentionAndExpiryPreserveFinalArtifacts(t *testing.T) {
@@ -28,8 +28,8 @@ func TestAuxiliaryRetentionAndExpiryPreserveFinalArtifacts(t *testing.T) {
 						"main.synctex.gz": "sync",
 					},
 				)
-				req := api.CompileRequest{
-					Auxiliary: api.AuxiliaryOptions{Local: local, Server: server, ServerTTL: "1h"},
+				req := protocol.CompileRequest{
+					Auxiliary: protocol.AuxiliaryOptions{Local: local, Server: server, ServerTTL: "1h"},
 				}
 				retained := compile.RetainArtifacts(output, req, 24*time.Hour)
 				want := 4
@@ -86,7 +86,7 @@ func TestAuxiliaryRetentionAndExpiryPreserveFinalArtifacts(t *testing.T) {
 					}
 					files[h.Name] = true
 					if h.Name == "result.json" {
-						var result api.CompileResult
+						var result protocol.CompileResult
 						if err := json.NewDecoder(tr).Decode(&result); err != nil {
 							t.Fatal(err)
 						}

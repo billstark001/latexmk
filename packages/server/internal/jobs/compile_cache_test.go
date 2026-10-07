@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/project"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 func TestQueuedCompileCacheLifecycle(t *testing.T) {
@@ -57,15 +57,22 @@ printf 'INPUT main.tex\nOUTPUT main.aux\nOUTPUT main.pdf\n' > main.fls
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := New(cfg, api.Metadata{}, compile.NewRunner(cfg), projects, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	req := api.CompileRequest{
-		ProtocolVersion: api.ProtocolVersion,
+	m := New(
+		cfg,
+		protocol.Metadata{},
+		compile.NewRunner(cfg),
+		projects,
+		nil,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	req := protocol.CompileRequest{
+		ProtocolVersion: protocol.Version,
 		Entry:           "main.tex",
 		Engine:          "xelatex",
 		Interaction:     "nonstopmode",
-		Auxiliary:       api.AuxiliaryOptions{Server: "reuse"},
+		Auxiliary:       protocol.AuxiliaryOptions{Server: "reuse"},
 	}
-	run := func(content string, request api.CompileRequest) api.Job {
+	run := func(content string, request protocol.CompileRequest) protocol.Job {
 		t.Helper()
 		snapshot := commitTestSnapshot(t, projects, request, []byte(content))
 		job, err := m.Enqueue(context.Background(), "member", snapshot, request)

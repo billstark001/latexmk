@@ -139,6 +139,7 @@ function parseBundleOptions(args: string[], command: 'bundle' | 'runtime-bundle'
     stateVolume: true,
     ...preset,
     serverSource: path.join(repoRoot, 'packages', 'server'),
+    sharedSource: path.join(repoRoot, 'packages', 'shared'),
   };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -177,6 +178,8 @@ function parseBundleOptions(args: string[], command: 'bundle' | 'runtime-bundle'
       options.maxConcurrent = take('--max-concurrent');
     else if (arg === '--server-source' || arg.startsWith('--server-source='))
       options.serverSource = path.resolve(take('--server-source'));
+    else if (arg === '--shared-source' || arg.startsWith('--shared-source='))
+      options.sharedSource = path.resolve(take('--shared-source'));
     else if (arg === '--build') options.build = true;
     else if (arg === '--force') options.force = true;
     else if (arg === '--allow-shell-escape') options.allowShellEscape = true;
@@ -242,7 +245,9 @@ type BundleOptions = ReturnType<typeof parseBundleOptions>;
 
 async function bundle(options: BundleOptions) {
   assertSeparateOutput(options.out, options.serverSource);
+  assertSeparateOutput(options.out, options.sharedSource);
   await ensureSource(options.serverSource);
+  await ensureSource(options.sharedSource);
   await prepareOutput(options.out, options.force);
   const lock = await readRuntimeLock();
   await cp(options.serverSource, path.join(options.out, 'server'), {
@@ -250,6 +255,12 @@ async function bundle(options: BundleOptions) {
     filter(source) {
       const base = path.basename(source);
       return !['dist', '.git', '.DS_Store', 'node_modules', 'coverage'].includes(base);
+    },
+  });
+  await cp(options.sharedSource, path.join(options.out, 'shared'), {
+    recursive: true,
+    filter(source) {
+      return !['dist', '.git', '.DS_Store', 'node_modules', 'coverage'].includes(path.basename(source));
     },
   });
   const template = await readFile(path.join(packageRoot, 'templates', 'Dockerfile.app'), 'utf8');
@@ -271,6 +282,8 @@ async function bundle(options: BundleOptions) {
       '**',
       '!server/',
       '!server/**',
+      '!shared/',
+      '!shared/**',
       'server/dist/',
       'server/.git/',
       'server/node_modules/',

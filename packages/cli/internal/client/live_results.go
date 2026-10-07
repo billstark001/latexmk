@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
-	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 type LivePublication struct {

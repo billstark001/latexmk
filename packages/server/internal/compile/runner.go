@@ -4,11 +4,8 @@ package compile
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -16,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/platform/process"
-	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 type Runner struct {
@@ -28,7 +25,7 @@ type Runner struct {
 }
 
 type Output struct {
-	Result api.CompileResult
+	Result protocol.CompileResult
 	Stdout []byte
 	Stderr []byte
 	Files  []File
@@ -45,7 +42,7 @@ func NewRunner(cfg config.Config) *Runner {
 	return &Runner{Config: cfg, sem: make(chan struct{}, cfg.MaxConcurrentCompiles)}
 }
 
-func (r *Runner) Validate(workspace string, req api.CompileRequest) error {
+func (r *Runner) Validate(workspace string, req protocol.CompileRequest) error {
 	if err := r.ValidateRequest(req); err != nil {
 		return err
 	}
@@ -61,7 +58,7 @@ func (r *Runner) Validate(workspace string, req api.CompileRequest) error {
 	return entry.Close()
 }
 
-func (r *Runner) ValidateRequest(req api.CompileRequest) error {
+func (r *Runner) ValidateRequest(req protocol.CompileRequest) error {
 	if req.Auxiliary.Local != "" && req.Auxiliary.Local != "none" && req.Auxiliary.Local != "cache" &&
 		req.Auxiliary.Local != "output" {
 		return errors.New("auxiliary.local must be none, cache, or output")
@@ -78,10 +75,10 @@ func (r *Runner) ValidateRequest(req api.CompileRequest) error {
 		return errors.New("auxiliary.server must be none, retain, or reuse")
 	}
 	if req.Auxiliary.Server == "reuse" &&
-		(req.ProtocolVersion != api.ProtocolVersion || r.Config.CompileCacheRetention <= 0 || r.Config.MaxCompileCacheBytes <= 0) {
+		(req.ProtocolVersion != protocol.Version || r.Config.CompileCacheRetention <= 0 || r.Config.MaxCompileCacheBytes <= 0) {
 		return errors.New("server compile cache is not enabled for this request")
 	}
-	if req.ProtocolVersion != 1 && req.ProtocolVersion != api.ProtocolVersion {
+	if req.ProtocolVersion != 1 && req.ProtocolVersion != protocol.Version {
 		return fmt.Errorf("unsupported protocol version %d", req.ProtocolVersion)
 	}
 	if !r.Config.EngineAllowed(req.Engine) {
@@ -110,21 +107,21 @@ type RunOptions struct {
 	PreserveRecorder bool
 }
 
-func (r *Runner) Run(parent context.Context, workspace string, req api.CompileRequest, requestID string) Output {
+func (r *Runner) Run(parent context.Context, workspace string, req protocol.CompileRequest, requestID string) Output {
 	return r.RunWithOptions(parent, workspace, req, requestID, RunOptions{})
 }
 
 func (r *Runner) RunWithOptions(
 	parent context.Context,
 	workspace string,
-	req api.CompileRequest,
+	req protocol.CompileRequest,
 	requestID string,
 	opts RunOptions,
 ) Output {
 	started := time.Now()
-	result := api.CompileResult{
+	result := protocol.CompileResult{
 		SourceRoot:      filepath.ToSlash(workspace),
-		ProtocolVersion: api.ProtocolVersion,
+		ProtocolVersion: protocol.Version,
 		RequestID:       requestID,
 		Entry:           req.Entry,
 		Engine:          req.Engine,
@@ -205,7 +202,10 @@ func (r *Runner) RunWithOptions(
 		files = generated
 	}
 	for _, f := range files {
-		result.Artifacts = append(result.Artifacts, api.Artifact{Path: f.RelativePath, Size: f.Size, SHA256: f.SHA256})
+		result.Artifacts = append(
+			result.Artifacts,
+			protocol.Artifact{Path: f.RelativePath, Size: f.Size, SHA256: f.SHA256},
+		)
 	}
 	if req.RecordInputs {
 		inputFiles, inputErr := collectRecordedInputs(workspace)
@@ -233,7 +233,7 @@ func (r *Runner) RunWithOptions(
 	return Output{Result: result, Stdout: executed.Stdout, Stderr: executed.Stderr, Files: files}
 }
 
-func commandArgs(req api.CompileRequest) []string {
+func commandArgs(req protocol.CompileRequest) []string {
 	args := []string{"-norc"}
 	switch req.Engine {
 	case "xelatex":
@@ -326,7 +326,7 @@ func removeStaleRecorderFiles(root string) error {
 	})
 }
 
-func collectArtifacts(root string, req api.CompileRequest, maxBytes int64) ([]File, error) {
+func collectArtifacts(root string, req protocol.CompileRequest, maxBytes int64) ([]File, error) {
 	scoped, err := safefs.Open(root)
 	if err != nil {
 		return nil, err
@@ -372,7 +372,7 @@ func collectArtifacts(root string, req api.CompileRequest, maxBytes int64) ([]Fi
 			}
 			return nil, err
 		}
-		hash, size, readErr := digestFile(f, maxBytes-total)
+		hash, size, readErr := safefs.Digest(f, maxBytes-total)
 		err = errors.Join(readErr, f.Close())
 		if err != nil {
 			return nil, err
@@ -389,21 +389,6 @@ func collectArtifacts(root string, req api.CompileRequest, maxBytes int64) ([]Fi
 		)
 	}
 	return files, nil
-}
-
-func digestFile(f *os.File, max int64) (string, int64, error) {
-	if max < 0 || max == int64(^uint64(0)>>1) {
-		return "", 0, safefs.ErrLimit
-	}
-	h := sha256.New()
-	n, err := io.Copy(h, io.LimitReader(f, max+1))
-	if err != nil {
-		return "", 0, err
-	}
-	if n > max {
-		return "", 0, safefs.ErrLimit
-	}
-	return hex.EncodeToString(h.Sum(nil)), n, nil
 }
 
 func collectRecordedInputs(root string) ([]string, error) {

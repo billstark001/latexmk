@@ -2,8 +2,6 @@ package sandbox
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,26 +12,26 @@ import (
 	"strings"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	projectarchive "github.com/billstark001/latexmk/packages/server/internal/archive"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
-	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
 	"github.com/billstark001/latexmk/packages/server/internal/resultarchive"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 type workerRequest struct {
-	Version          int                `json:"version"`
-	Request          api.CompileRequest `json:"request"`
-	RequestID        string             `json:"requestId"`
-	Sources          []api.ProjectFile  `json:"sources"`
-	Warm             bool               `json:"warm"`
-	MaxFiles         int                `json:"maxFiles"`
-	MaxSourceBytes   int64              `json:"maxSourceBytes"`
-	MaxStateBytes    int64              `json:"maxStateBytes"`
-	MaxArtifactBytes int64              `json:"maxArtifactBytes"`
-	MaxLogBytes      int64              `json:"maxLogBytes"`
-	TimeoutMS        int64              `json:"timeoutMs"`
+	Version          int                     `json:"version"`
+	Request          protocol.CompileRequest `json:"request"`
+	RequestID        string                  `json:"requestId"`
+	Sources          []protocol.ProjectFile  `json:"sources"`
+	Warm             bool                    `json:"warm"`
+	MaxFiles         int                     `json:"maxFiles"`
+	MaxSourceBytes   int64                   `json:"maxSourceBytes"`
+	MaxStateBytes    int64                   `json:"maxStateBytes"`
+	MaxArtifactBytes int64                   `json:"maxArtifactBytes"`
+	MaxLogBytes      int64                   `json:"maxLogBytes"`
+	TimeoutMS        int64                   `json:"timeoutMs"`
 }
 
 // Worker runs only inside a dedicated disposable container. Its fixed logical
@@ -216,18 +214,6 @@ func runWorker(
 		}
 	}
 	return writeArchive(output, members)
-}
-
-func hashReader(r io.Reader, max int64) (string, int64, error) {
-	if max < 0 || max == int64(^uint64(0)>>1) {
-		return "", 0, safefs.ErrLimit
-	}
-	hash := sha256.New()
-	size, err := io.Copy(hash, io.LimitReader(r, max+1))
-	if err == nil && size > max {
-		err = safefs.ErrLimit
-	}
-	return hex.EncodeToString(hash.Sum(nil)), size, err
 }
 
 func workerError(err error) error { return fmt.Errorf("isolated compiler: %w", err) }

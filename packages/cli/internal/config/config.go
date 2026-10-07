@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 const FileName = ".latexmk.json"

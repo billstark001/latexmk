@@ -16,8 +16,8 @@ import (
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
 	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
-	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
 	projectwatch "github.com/billstark001/latexmk/packages/cli/internal/watch"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 var (

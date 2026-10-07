@@ -20,29 +20,29 @@ import (
 	"sync"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
-	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
 	"github.com/billstark001/latexmk/packages/server/internal/resultarchive"
 	"github.com/billstark001/latexmk/packages/server/internal/store"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 const uploadLifetime = 15 * time.Minute
 
 type Snapshot struct {
-	ID        string            `json:"snapshotId"`
-	OwnerID   string            `json:"ownerId"`
-	ProjectID string            `json:"projectId"`
-	Files     []api.ProjectFile `json:"files"`
+	ID        string                 `json:"snapshotId"`
+	OwnerID   string                 `json:"ownerId"`
+	ProjectID string                 `json:"projectId"`
+	Files     []protocol.ProjectFile `json:"files"`
 }
 
 type session struct {
 	id         string
 	ownerID    string
 	projectID  string
-	request    api.CompileRequest
-	files      []api.ProjectFile
+	request    protocol.CompileRequest
+	files      []protocol.ProjectFile
 	expected   map[string]int64
 	expires    time.Time
 	committing bool
@@ -116,45 +116,47 @@ func New(cfg config.Config, db *store.Postgres) (*Manager, error) {
 	}, nil
 }
 
-func (m *Manager) Plan(ownerID string, request api.UploadPlanRequest) (api.UploadPlan, error) {
+func (m *Manager) Plan(ownerID string, request protocol.UploadPlanRequest) (protocol.UploadPlan, error) {
 	if ownerID == "" {
-		return api.UploadPlan{}, errors.New("authenticated owner is required")
+		return protocol.UploadPlan{}, errors.New("authenticated owner is required")
 	}
 	if !validProjectID(request.ProjectID) {
-		return api.UploadPlan{}, errors.New("projectId may contain only letters, digits, dot, underscore, and hyphen")
+		return protocol.UploadPlan{}, errors.New(
+			"projectId may contain only letters, digits, dot, underscore, and hyphen",
+		)
 	}
 	if len(request.Files) == 0 {
-		return api.UploadPlan{}, errors.New("project must contain at least one file")
+		return protocol.UploadPlan{}, errors.New("project must contain at least one file")
 	}
 	if len(request.Files) > m.cfg.MaxFiles {
-		return api.UploadPlan{}, fmt.Errorf("project contains more than %d files", m.cfg.MaxFiles)
+		return protocol.UploadPlan{}, fmt.Errorf("project contains more than %d files", m.cfg.MaxFiles)
 	}
 	paths := make(map[string]bool, len(request.Files))
 	expected := make(map[string]int64, len(request.Files))
 	var total int64
 	for _, file := range request.Files {
 		if !validProjectPath(file.Path) {
-			return api.UploadPlan{}, fmt.Errorf("invalid project path %q", file.Path)
+			return protocol.UploadPlan{}, fmt.Errorf("invalid project path %q", file.Path)
 		}
 		if paths[file.Path] {
-			return api.UploadPlan{}, fmt.Errorf("duplicate project path %q", file.Path)
+			return protocol.UploadPlan{}, fmt.Errorf("duplicate project path %q", file.Path)
 		}
 		paths[file.Path] = true
 		if !validSHA256(file.SHA256) || file.Size < 0 {
-			return api.UploadPlan{}, fmt.Errorf("invalid manifest entry %q", file.Path)
+			return protocol.UploadPlan{}, fmt.Errorf("invalid manifest entry %q", file.Path)
 		}
 		if prior, seen := expected[file.SHA256]; seen && prior != file.Size {
-			return api.UploadPlan{}, fmt.Errorf("inconsistent size for digest %s", file.SHA256)
+			return protocol.UploadPlan{}, fmt.Errorf("inconsistent size for digest %s", file.SHA256)
 		}
 		expected[file.SHA256] = file.Size
 		total += file.Size
 		if total > m.cfg.MaxExpandedBytes {
-			return api.UploadPlan{}, fmt.Errorf("project expands beyond %d bytes", m.cfg.MaxExpandedBytes)
+			return protocol.UploadPlan{}, fmt.Errorf("project expands beyond %d bytes", m.cfg.MaxExpandedBytes)
 		}
 	}
 	id, err := randomID("upl")
 	if err != nil {
-		return api.UploadPlan{}, err
+		return protocol.UploadPlan{}, err
 	}
 	now := time.Now().UTC()
 	m.mu.Lock()
@@ -165,12 +167,12 @@ func (m *Manager) Plan(ownerID string, request api.UploadPlanRequest) (api.Uploa
 		}
 	}
 	if m.cfg.MaxUploadSessions > 0 && len(m.sessions) >= m.cfg.MaxUploadSessions {
-		return api.UploadPlan{}, fmt.Errorf("upload session limit of %d has been reached", m.cfg.MaxUploadSessions)
+		return protocol.UploadPlan{}, fmt.Errorf("upload session limit of %d has been reached", m.cfg.MaxUploadSessions)
 	}
 	missing := make([]string, 0, len(expected))
 	for digest, size := range expected {
 		if m.cfg.MaxUploadBytes > 0 && size > m.cfg.MaxUploadBytes {
-			return api.UploadPlan{}, fmt.Errorf(
+			return protocol.UploadPlan{}, fmt.Errorf(
 				"file %q exceeds the per-blob upload limit of %d bytes",
 				filePathForDigest(request.Files, digest),
 				m.cfg.MaxUploadBytes,
@@ -186,11 +188,11 @@ func (m *Manager) Plan(ownerID string, request api.UploadPlanRequest) (api.Uploa
 		ownerID:   ownerID,
 		projectID: request.ProjectID,
 		request:   request.Request,
-		files:     append([]api.ProjectFile(nil), request.Files...),
+		files:     append([]protocol.ProjectFile(nil), request.Files...),
 		expected:  expected,
 		expires:   now.Add(uploadLifetime),
 	}
-	return api.UploadPlan{UploadID: id, Missing: missing, ExpiresAt: now.Add(uploadLifetime)}, nil
+	return protocol.UploadPlan{UploadID: id, Missing: missing, ExpiresAt: now.Add(uploadLifetime)}, nil
 }
 
 // PutBlob stores a single manifest digest. The content length is verified and
@@ -268,7 +270,7 @@ func (m *Manager) PutBlob(ownerID, uploadID, digest string, body io.Reader) (err
 	return nil
 }
 
-func (m *Manager) Commit(ctx context.Context, ownerID, uploadID string) (Snapshot, api.CompileRequest, error) {
+func (m *Manager) Commit(ctx context.Context, ownerID, uploadID string) (Snapshot, protocol.CompileRequest, error) {
 	m.mu.Lock()
 	s, ok := m.sessions[uploadID]
 	if ok && time.Now().After(s.expires) {
@@ -277,11 +279,11 @@ func (m *Manager) Commit(ctx context.Context, ownerID, uploadID string) (Snapsho
 	}
 	if !ok || s.ownerID != ownerID {
 		m.mu.Unlock()
-		return Snapshot{}, api.CompileRequest{}, errors.New("upload session not found or expired")
+		return Snapshot{}, protocol.CompileRequest{}, errors.New("upload session not found or expired")
 	}
 	if ok && s.committing {
 		m.mu.Unlock()
-		return Snapshot{}, api.CompileRequest{}, errors.New("upload session is already being committed")
+		return Snapshot{}, protocol.CompileRequest{}, errors.New("upload session is already being committed")
 	}
 	if ok {
 		s.committing = true
@@ -299,13 +301,13 @@ func (m *Manager) Commit(ctx context.Context, ownerID, uploadID string) (Snapsho
 	for digest, size := range s.expected {
 		if !m.hasBlob(ownerID, digest, size) {
 			release()
-			return Snapshot{}, api.CompileRequest{}, fmt.Errorf("missing required digest %s", digest)
+			return Snapshot{}, protocol.CompileRequest{}, fmt.Errorf("missing required digest %s", digest)
 		}
 	}
 	snapshot, err := NewSnapshot(ownerID, s.projectID, s.files)
 	if err != nil {
 		release()
-		return Snapshot{}, api.CompileRequest{}, err
+		return Snapshot{}, protocol.CompileRequest{}, err
 	}
 	m.snapshotMu.Lock()
 	defer m.snapshotMu.Unlock()
@@ -313,14 +315,14 @@ func (m *Manager) Commit(ctx context.Context, ownerID, uploadID string) (Snapsho
 		manifest, err := json.Marshal(snapshot)
 		if err != nil {
 			release()
-			return Snapshot{}, api.CompileRequest{}, err
+			return Snapshot{}, protocol.CompileRequest{}, err
 		}
 		if err := m.db.SaveSnapshot(
 			ctx,
 			store.ProjectSnapshot{OwnerID: ownerID, ProjectID: s.projectID, Manifest: manifest},
 		); err != nil {
 			release()
-			return Snapshot{}, api.CompileRequest{}, fmt.Errorf("save project snapshot: %w", err)
+			return Snapshot{}, protocol.CompileRequest{}, fmt.Errorf("save project snapshot: %w", err)
 		}
 	} else {
 		m.mu.Lock()
@@ -396,7 +398,7 @@ func (m *Manager) DeleteSnapshot(ctx context.Context, ownerID, projectID string)
 // NewSnapshot validates and canonicalizes a project manifest, then assigns a
 // content-derived identifier. The owner and project are included so IDs are
 // scoped to the same authorization boundary as the source blobs.
-func NewSnapshot(ownerID, projectID string, files []api.ProjectFile) (Snapshot, error) {
+func NewSnapshot(ownerID, projectID string, files []protocol.ProjectFile) (Snapshot, error) {
 	if ownerID == "" {
 		return Snapshot{}, errors.New("snapshot owner is required")
 	}
@@ -406,7 +408,7 @@ func NewSnapshot(ownerID, projectID string, files []api.ProjectFile) (Snapshot, 
 	if len(files) == 0 {
 		return Snapshot{}, errors.New("snapshot must contain at least one file")
 	}
-	canonical := append([]api.ProjectFile(nil), files...)
+	canonical := append([]protocol.ProjectFile(nil), files...)
 	sort.Slice(canonical, func(i, j int) bool { return canonical[i].Path < canonical[j].Path })
 	for i, file := range canonical {
 		if !validProjectPath(file.Path) || !validSHA256(file.SHA256) || file.Size < 0 {
@@ -417,9 +419,9 @@ func NewSnapshot(ownerID, projectID string, files []api.ProjectFile) (Snapshot, 
 		}
 	}
 	identity := struct {
-		OwnerID   string            `json:"ownerId"`
-		ProjectID string            `json:"projectId"`
-		Files     []api.ProjectFile `json:"files"`
+		OwnerID   string                 `json:"ownerId"`
+		ProjectID string                 `json:"projectId"`
+		Files     []protocol.ProjectFile `json:"files"`
 	}{OwnerID: ownerID, ProjectID: projectID, Files: canonical}
 	encoded, err := json.Marshal(identity)
 	if err != nil {
@@ -453,7 +455,7 @@ func (m *Manager) PinSnapshot(snapshot Snapshot) error {
 	if err := ValidateSnapshot(snapshot); err != nil {
 		return err
 	}
-	snapshot.Files = append([]api.ProjectFile(nil), snapshot.Files...)
+	snapshot.Files = append([]protocol.ProjectFile(nil), snapshot.Files...)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	pin := m.pins[snapshot.ID]
@@ -901,7 +903,7 @@ func ownerKey(ownerID string) string {
 
 func snapshotKey(ownerID, projectID string) string { return ownerID + "\x00" + projectID }
 
-func filePathForDigest(files []api.ProjectFile, digest string) string {
+func filePathForDigest(files []protocol.ProjectFile, digest string) string {
 	for _, file := range files {
 		if file.SHA256 == digest {
 			return file.Path

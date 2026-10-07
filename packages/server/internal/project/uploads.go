@@ -5,27 +5,27 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 // PrepareUpload pins a verified immutable manifest without consuming its upload.
 // The caller transfers this pin to a job, or releases it on admission failure.
 // Keeping the upload until admission succeeds makes failed/retried commits safe.
-func (m *Manager) PrepareUpload(ownerID, uploadID string) (Snapshot, api.CompileRequest, error) {
+func (m *Manager) PrepareUpload(ownerID, uploadID string) (Snapshot, protocol.CompileRequest, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s, ok := m.sessions[uploadID]
 	if !ok || s.ownerID != ownerID || time.Now().After(s.expires) || s.committing {
-		return Snapshot{}, api.CompileRequest{}, errors.New("upload session not found or expired")
+		return Snapshot{}, protocol.CompileRequest{}, errors.New("upload session not found or expired")
 	}
 	for digest, size := range s.expected {
 		if !m.hasBlob(ownerID, digest, size) {
-			return Snapshot{}, api.CompileRequest{}, fmt.Errorf("missing required digest %s", digest)
+			return Snapshot{}, protocol.CompileRequest{}, fmt.Errorf("missing required digest %s", digest)
 		}
 	}
 	snapshot, err := NewSnapshot(ownerID, s.projectID, s.files)
 	if err != nil {
-		return Snapshot{}, api.CompileRequest{}, err
+		return Snapshot{}, protocol.CompileRequest{}, err
 	}
 	pin := m.pins[snapshot.ID]
 	pin.Snapshot = snapshot

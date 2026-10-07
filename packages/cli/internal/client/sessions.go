@@ -14,7 +14,7 @@ import (
 
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
 	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
-	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 func (c *Client) CreateSession(ctx context.Context, req protocol.SessionRequest) (protocol.Session, error) {

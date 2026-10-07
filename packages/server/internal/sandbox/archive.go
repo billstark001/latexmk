@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
-	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 type archiveMember struct {
@@ -102,7 +102,7 @@ func describeFile(root, name string, maxBytes int64) (compile.File, error) {
 		return compile.File{}, err
 	}
 	defer func() { _ = f.Close() }()
-	hash, size, err := hashReader(f, maxBytes)
+	hash, size, err := safefs.Digest(f, maxBytes)
 	return compile.File{Workspace: root, RelativePath: filepath.ToSlash(name), Size: size, SHA256: hash}, err
 }
 

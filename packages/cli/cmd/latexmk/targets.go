@@ -9,7 +9,7 @@ import (
 
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
-	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 func selectionClient(opts compileOptions) *client.Client {

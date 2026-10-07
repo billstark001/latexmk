@@ -9,9 +9,9 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/project"
 	"github.com/billstark001/latexmk/packages/server/internal/sandbox"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 var (
@@ -23,7 +23,7 @@ var (
 )
 
 type revisionReceipt struct {
-	request api.RevisionRequest
+	request protocol.RevisionRequest
 	jobID   string
 }
 type liveSession struct {
@@ -31,45 +31,49 @@ type liveSession struct {
 	subscribers  int
 	cacheExpires time.Time
 	cachePath    string
-	cacheInputs  []api.ProjectFile
+	cacheInputs  []protocol.ProjectFile
 	cacheHashes  map[string]string
 	cacheStamps  map[string]int64
 	ownerID      string
-	request      api.CompileRequest
-	state        api.Session
+	request      protocol.CompileRequest
+	state        protocol.Session
 	snapshot     project.Snapshot
 	scheduled    bool
 	receipts     map[string]revisionReceipt
 	receiptOrder []string
-	events       []api.SessionEvent
+	events       []protocol.SessionEvent
 	changed      chan struct{}
 }
 
-func (m *Manager) CreateSession(ctx context.Context, ownerID string, req api.SessionRequest) (api.Session, error) {
+func (m *Manager) CreateSession(
+	ctx context.Context,
+	ownerID string,
+	req protocol.SessionRequest,
+) (protocol.Session, error) {
 	if err := validateIdempotencyKey(req.IdempotencyKey); err != nil {
-		return api.Session{}, err
+		return protocol.Session{}, err
 	}
 	if m.cfg.MaxRealtimeSessions <= 0 {
-		return api.Session{}, errors.New("realtime sessions are disabled")
+		return protocol.Session{}, errors.New("realtime sessions are disabled")
 	}
 	if !project.ValidProjectID(req.ProjectID) {
-		return api.Session{}, errors.New("invalid project ID")
+		return protocol.Session{}, errors.New("invalid project ID")
 	}
 	if req.Workspace != "fresh" && req.Workspace != "reuse" {
-		return api.Session{}, errors.New("workspace must be fresh or reuse")
+		return protocol.Session{}, errors.New("workspace must be fresh or reuse")
 	}
 	if req.Workspace == "reuse" &&
 		(m.cfg.RunnerImage == "" || req.Request.Auxiliary.Server != "reuse" || m.cfg.MaxCompileCacheBytes <= 0) {
-		return api.Session{}, errors.New("workspace reuse requires an isolated runner and auxiliary.server=reuse")
+		return protocol.Session{}, errors.New("workspace reuse requires an isolated runner and auxiliary.server=reuse")
 	}
 	if err := m.runner.ValidateRequest(req.Request); err != nil {
-		return api.Session{}, err
+		return protocol.Session{}, err
 	}
 	if m.cfg.RunnerImage != "" && req.Request.ShellEscape {
-		return api.Session{}, errors.New("isolated realtime workspaces do not allow shell escape")
+		return protocol.Session{}, errors.New("isolated realtime workspaces do not allow shell escape")
 	}
 	if err := ctx.Err(); err != nil {
-		return api.Session{}, err
+		return protocol.Session{}, err
 	}
 	m.admissionMu.Lock()
 	defer m.admissionMu.Unlock()
@@ -80,13 +84,14 @@ func (m *Manager) CreateSession(ctx context.Context, ownerID string, req api.Ses
 		}
 		expected, _ := json.Marshal(s.request)
 		actual, _ := json.Marshal(req.Request)
-		if s.state.ProjectID != req.ProjectID || s.state.Workspace != req.Workspace || string(expected) != string(actual) {
-			return api.Session{}, errors.New("idempotency key was used for a different session")
+		if s.state.ProjectID != req.ProjectID || s.state.Workspace != req.Workspace ||
+			string(expected) != string(actual) {
+			return protocol.Session{}, errors.New("idempotency key was used for a different session")
 		}
 		return s.state, nil
 	}
 	if len(m.sessions) >= m.cfg.MaxRealtimeSessions {
-		return api.Session{}, ErrSessionCapacity
+		return protocol.Session{}, ErrSessionCapacity
 	}
 	ownerSessions := 0
 	for _, s := range m.sessions {
@@ -95,17 +100,17 @@ func (m *Manager) CreateSession(ctx context.Context, ownerID string, req api.Ses
 		}
 	}
 	if m.cfg.MaxRealtimeSessionsPerOwner > 0 && ownerSessions >= m.cfg.MaxRealtimeSessionsPerOwner {
-		return api.Session{}, ErrSessionCapacity
+		return protocol.Session{}, ErrSessionCapacity
 	}
 	id, err := randomID("ses")
 	if err != nil {
-		return api.Session{}, err
+		return protocol.Session{}, err
 	}
 	s := &liveSession{
 		creationKey: req.IdempotencyKey,
 		ownerID:     ownerID,
 		request:     req.Request,
-		state: api.Session{
+		state: protocol.Session{
 			ID:        id,
 			ProjectID: req.ProjectID,
 			Workspace: req.Workspace,
@@ -115,7 +120,7 @@ func (m *Manager) CreateSession(ctx context.Context, ownerID string, req api.Ses
 		changed:  make(chan struct{}),
 	}
 	m.sessions[id] = s
-	m.publishSessionLocked(s, "created", api.Job{})
+	m.publishSessionLocked(s, "created", protocol.Job{})
 	return s.state, nil
 }
 
@@ -127,13 +132,13 @@ func (m *Manager) sessionLocked(ownerID, id string) (*liveSession, error) {
 	return s, nil
 }
 
-func (m *Manager) GetSession(ctx context.Context, ownerID, id string) (api.Session, error) {
+func (m *Manager) GetSession(ctx context.Context, ownerID, id string) (protocol.Session, error) {
 	m.admissionMu.Lock()
 	defer m.admissionMu.Unlock()
 	m.expireSessionsLocked(ctx)
 	s, err := m.sessionLocked(ownerID, id)
 	if err != nil {
-		return api.Session{}, err
+		return protocol.Session{}, err
 	}
 	s.state.ExpiresAt = time.Now().UTC().Add(m.cfg.RealtimeSessionTTL)
 	return s.state, nil
@@ -141,31 +146,35 @@ func (m *Manager) GetSession(ctx context.Context, ownerID, id string) (api.Sessi
 
 // SubmitRevision atomically chooses the next wanted snapshot. Only one queue
 // token exists per idle session, so rapid replacements cannot fill the channel.
-func (m *Manager) SubmitRevision(ctx context.Context, ownerID, id string, req api.RevisionRequest) (api.Job, error) {
+func (m *Manager) SubmitRevision(
+	ctx context.Context,
+	ownerID, id string,
+	req protocol.RevisionRequest,
+) (protocol.Job, error) {
 	if err := validateIdempotencyKey(req.IdempotencyKey); err != nil {
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	m.admissionMu.Lock()
 	defer m.admissionMu.Unlock()
 	s, err := m.sessionLocked(ownerID, id)
 	if err != nil {
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	if receipt, ok := s.receipts[req.IdempotencyKey]; ok {
 		if receipt.request != req {
-			return api.Job{}, errors.New("idempotency key was used for a different revision")
+			return protocol.Job{}, errors.New("idempotency key was used for a different revision")
 		}
 		return m.Get(ctx, ownerID, receipt.jobID)
 	}
 	if req.BaseRevision != s.state.Revision || s.state.Revision >= 1<<31 {
-		return api.Job{}, ErrRevisionConflict
+		return protocol.Job{}, ErrRevisionConflict
 	}
 	if !m.allowRevisionLocked(ownerID) {
-		return api.Job{}, ErrRevisionRate
+		return protocol.Job{}, ErrRevisionRate
 	}
 	snapshot, request, err := m.projects.PrepareUpload(ownerID, req.UploadID)
 	if err != nil {
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	transferred := false
 	defer func() {
@@ -176,36 +185,36 @@ func (m *Manager) SubmitRevision(ctx context.Context, ownerID, id string, req ap
 	expected, _ := json.Marshal(s.request)
 	actual, _ := json.Marshal(request)
 	if snapshot.ProjectID != s.state.ProjectID || string(expected) != string(actual) {
-		return api.Job{}, errors.New("upload project or compile options do not match the session")
+		return protocol.Job{}, errors.New("upload project or compile options do not match the session")
 	}
 	if err := sandbox.ValidateSourcePaths(snapshot.Files); err != nil {
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	pending, err := m.pendingCount(ctx)
 	if err != nil {
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	if s.state.PendingJobID != "" {
 		previous, err := m.Get(ctx, ownerID, s.state.PendingJobID)
 		if err != nil {
-			return api.Job{}, err
+			return protocol.Job{}, err
 		}
 		if previous.Status == "queued" {
 			pending--
 		}
 	}
 	if pending >= m.cfg.MaxQueuedJobs {
-		return api.Job{}, ErrQueueCapacity
+		return protocol.Job{}, ErrQueueCapacity
 	}
 	jobID, err := randomID("job")
 	if err != nil {
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	rec := record{
 		OwnerID:  ownerID,
 		Snapshot: snapshot,
 		Request:  request,
-		Job: api.Job{
+		Job: protocol.Job{
 			ID:         jobID,
 			ProjectID:  snapshot.ProjectID,
 			SnapshotID: snapshot.ID,
@@ -216,19 +225,19 @@ func (m *Manager) SubmitRevision(ctx context.Context, ownerID, id string, req ap
 		},
 	}
 	if err := m.save(ctx, rec); err != nil {
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	transferred = true // The persisted job now owns the prepared snapshot pin.
 	if s.state.PendingJobID != "" {
 		if err := m.cancel(ctx, s.state.PendingJobID, "superseded by a newer session revision"); err != nil {
 			_ = m.cancel(context.WithoutCancel(ctx), jobID, "session admission failed")
-			return api.Job{}, err
+			return protocol.Job{}, err
 		}
 	}
 	// One pin belongs to the job and one to the live session's current source tree.
 	if err := m.projects.PinSnapshot(snapshot); err != nil {
 		_ = m.cancel(context.WithoutCancel(ctx), jobID, "session snapshot pin failed")
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	if s.snapshot.ID != "" {
 		m.projects.ReleaseSnapshot(s.snapshot.ID)
@@ -285,7 +294,7 @@ func (m *Manager) takeSession(id string) string {
 	jobID := s.state.PendingJobID
 	s.state.PendingJobID = ""
 	s.state.RunningJobID = jobID
-	m.publishSessionLocked(s, "running", api.Job{ID: jobID, Revision: s.state.Revision, Status: "running"})
+	m.publishSessionLocked(s, "running", protocol.Job{ID: jobID, Revision: s.state.Revision, Status: "running"})
 	return jobID
 }
 
@@ -323,11 +332,11 @@ func (m *Manager) finishSession(ctx context.Context, rec record) {
 	m.scheduleSessionLocked(s)
 }
 
-func (m *Manager) publishSessionLocked(s *liveSession, kind string, job api.Job) {
+func (m *Manager) publishSessionLocked(s *liveSession, kind string, job protocol.Job) {
 	s.state.EventSequence++
 	s.events = append(
 		s.events,
-		api.SessionEvent{
+		protocol.SessionEvent{
 			Sequence: s.state.EventSequence,
 			Type:     kind,
 			Revision: job.Revision,
@@ -344,16 +353,16 @@ func (m *Manager) publishSessionLocked(s *liveSession, kind string, job api.Job)
 
 // SessionEvents returns a bounded replay plus a broadcast notification. Subscribers
 // never run on a compile worker, and slow clients cannot backpressure compiles.
-func (m *Manager) SessionEvents(ownerID, id string, after uint64) ([]api.SessionEvent, <-chan struct{}, error) {
+func (m *Manager) SessionEvents(ownerID, id string, after uint64) ([]protocol.SessionEvent, <-chan struct{}, error) {
 	m.admissionMu.Lock()
 	defer m.admissionMu.Unlock()
 	s, err := m.sessionLocked(ownerID, id)
 	if err != nil {
 		return nil, nil, err
 	}
-	var events []api.SessionEvent
+	var events []protocol.SessionEvent
 	if after > s.state.EventSequence || (len(s.events) > 0 && after+1 < s.events[0].Sequence) {
-		events = []api.SessionEvent{{Sequence: s.state.EventSequence, Type: "resync", Revision: s.state.Revision}}
+		events = []protocol.SessionEvent{{Sequence: s.state.EventSequence, Type: "resync", Revision: s.state.Revision}}
 	} else {
 		for _, event := range s.events {
 			if event.Sequence > after {

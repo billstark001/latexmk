@@ -12,13 +12,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	projectarchive "github.com/billstark001/latexmk/packages/server/internal/archive"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/platform/process"
-	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
 	"github.com/billstark001/latexmk/packages/server/internal/resultarchive"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 // Run gives each compile attempt a new container, PID namespace and quota-bound
@@ -26,9 +26,9 @@ import (
 func Run(
 	ctx context.Context,
 	cfg config.Config,
-	req api.CompileRequest,
+	req protocol.CompileRequest,
 	id string,
-	sources []api.ProjectFile,
+	sources []protocol.ProjectFile,
 	stamps map[string]int64,
 	checkpoint, sourceRoot, destination string,
 ) (compile.Output, string, error) {
@@ -167,7 +167,7 @@ func Run(
 		return compile.Output{}, "", workerError(err)
 	}
 	if result.Result.RequestID != id || result.Result.Entry != req.Entry || result.Result.Engine != req.Engine ||
-		result.Result.ProtocolVersion != api.ProtocolVersion {
+		result.Result.ProtocolVersion != protocol.Version {
 		return compile.Output{}, "", errors.New("runner result does not match its compile attempt")
 	}
 	selected := make(map[string]bool, len(sources))
@@ -291,7 +291,7 @@ func Validate(ctx context.Context, cfg config.Config) error {
 	return nil
 }
 
-func ValidateSourcePaths(files []api.ProjectFile) error {
+func ValidateSourcePaths(files []protocol.ProjectFile) error {
 	for _, file := range files {
 		for _, reserved := range []string{".latexmk-build", ".latexmk-home"} {
 			if file.Path == reserved || strings.HasPrefix(file.Path, reserved+"/") {

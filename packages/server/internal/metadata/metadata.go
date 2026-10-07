@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/platform/process"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 type BuildInfo struct {
@@ -19,7 +19,7 @@ type BuildInfo struct {
 	BuildDate string
 }
 
-func Collect(cfg config.Config, build BuildInfo) api.Metadata {
+func Collect(cfg config.Config, build BuildInfo) protocol.Metadata {
 	toolchain := map[string]string{}
 	for _, tool := range []struct {
 		name string
@@ -44,8 +44,8 @@ func Collect(cfg config.Config, build BuildInfo) api.Metadata {
 			database = "postgresql"
 		}
 	}
-	return api.Metadata{
-		ProtocolVersion: api.ProtocolVersion,
+	return protocol.Metadata{
+		ProtocolVersion: protocol.Version,
 		Service:         "latexmk",
 		Version:         build.Version,
 		Commit:          build.Commit,
@@ -53,7 +53,7 @@ func Collect(cfg config.Config, build BuildInfo) api.Metadata {
 		ImageProfile:    cfg.ImageProfile,
 		AuthMode:        cfg.AuthMode,
 		Database:        database,
-		Capabilities: api.Capabilities{
+		Capabilities: protocol.Capabilities{
 			RealtimeSessions:        cfg.MaxRealtimeSessions > 0,
 			IsolatedWorkspaces:      cfg.RunnerImage != "",
 			MaxRealtimeSessions:     cfg.MaxRealtimeSessions,
@@ -93,7 +93,7 @@ func Collect(cfg config.Config, build BuildInfo) api.Metadata {
 	}
 }
 
-func ValidateToolchain(meta api.Metadata, cfg config.Config) error {
+func ValidateToolchain(meta protocol.Metadata, cfg config.Config) error {
 	required := append([]string{"latexmk"}, cfg.Engines...)
 	for _, tool := range required {
 		if meta.Toolchain[tool] == "" {

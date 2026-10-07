@@ -9,7 +9,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 type Limits struct {

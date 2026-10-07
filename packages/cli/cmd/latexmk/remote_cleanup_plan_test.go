@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 func TestRemoteCleanupPlanIsPrivateAndContainsNoToken(t *testing.T) {

@@ -118,6 +118,20 @@ func ReadLimited(reader io.Reader, max int64) ([]byte, error) {
 	return data, nil
 }
 
+// Digest hashes a bounded stream and rejects an extra byte, including when the
+// caller's stat metadata no longer matches the opened file.
+func Digest(reader io.Reader, max int64) (string, int64, error) {
+	if max < 0 || max == int64(^uint64(0)>>1) {
+		return "", 0, ErrLimit
+	}
+	hash := sha256.New()
+	size, err := io.Copy(hash, io.LimitReader(reader, max+1))
+	if err == nil && size > max {
+		err = ErrLimit
+	}
+	return hex.EncodeToString(hash.Sum(nil)), size, err
+}
+
 // CopyVerified detects truncation, extra bytes and content changes in one pass.
 func CopyVerified(dst io.Writer, src io.Reader, size int64, digest string) error {
 	if size < 0 || size == int64(^uint64(0)>>1) {

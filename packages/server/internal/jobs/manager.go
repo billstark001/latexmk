@@ -18,18 +18,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/project"
 	"github.com/billstark001/latexmk/packages/server/internal/sandbox"
 	"github.com/billstark001/latexmk/packages/server/internal/store"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 type record struct {
-	Job      api.Job
+	Job      protocol.Job
 	OwnerID  string
-	Request  api.CompileRequest
+	Request  protocol.CompileRequest
 	Snapshot project.Snapshot
 }
 
@@ -53,7 +53,7 @@ type jobStore interface {
 
 type Manager struct {
 	cfg      config.Config
-	meta     api.Metadata
+	meta     protocol.Metadata
 	runner   *compile.Runner
 	projects *project.Manager
 	db       jobStore
@@ -72,7 +72,7 @@ type Manager struct {
 
 func New(
 	cfg config.Config,
-	meta api.Metadata,
+	meta protocol.Metadata,
 	runner *compile.Runner,
 	projects *project.Manager,
 	db *store.Postgres,
@@ -201,21 +201,21 @@ func (m *Manager) Enqueue(
 	ctx context.Context,
 	ownerID string,
 	snapshot project.Snapshot,
-	request api.CompileRequest,
-) (api.Job, error) {
+	request protocol.CompileRequest,
+) (protocol.Job, error) {
 	if m.cfg.RunnerImage != "" {
 		if err := sandbox.ValidateSourcePaths(snapshot.Files); err != nil {
-			return api.Job{}, err
+			return protocol.Job{}, err
 		}
 	}
 	if err := m.runner.ValidateRequest(request); err != nil {
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	if snapshot.OwnerID != ownerID {
-		return api.Job{}, errors.New("snapshot owner does not match authenticated owner")
+		return protocol.Job{}, errors.New("snapshot owner does not match authenticated owner")
 	}
 	if err := m.projects.PinSnapshot(snapshot); err != nil {
-		return api.Job{}, fmt.Errorf("pin project snapshot: %w", err)
+		return protocol.Job{}, fmt.Errorf("pin project snapshot: %w", err)
 	}
 	pinned := true
 	defer func() {
@@ -230,20 +230,20 @@ func (m *Manager) Enqueue(
 	pending, err := m.pendingCount(ctx)
 	if err != nil {
 		m.admissionMu.Unlock()
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	if pending >= m.cfg.MaxQueuedJobs {
 		m.admissionMu.Unlock()
-		return api.Job{}, errors.New("compile queue is full")
+		return protocol.Job{}, errors.New("compile queue is full")
 	}
 	id, err := randomID("job")
 	if err != nil {
 		m.admissionMu.Unlock()
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	now := time.Now().UTC()
 	rec := record{
-		Job: api.Job{
+		Job: protocol.Job{
 			ID:         id,
 			ProjectID:  snapshot.ProjectID,
 			SnapshotID: snapshot.ID,
@@ -256,7 +256,7 @@ func (m *Manager) Enqueue(
 	}
 	if err := m.save(ctx, rec); err != nil {
 		m.admissionMu.Unlock()
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	select {
 	case m.queue <- id:
@@ -268,7 +268,7 @@ func (m *Manager) Enqueue(
 		// Do not retain a row which cannot ever be scheduled.
 		pinned = false
 		_ = m.cancel(ctx, id, "compile queue is full")
-		return api.Job{}, errors.New("compile queue is full")
+		return protocol.Job{}, errors.New("compile queue is full")
 	}
 }
 
@@ -299,24 +299,24 @@ func (m *Manager) pendingCount(ctx context.Context) (int, error) {
 	return count, nil
 }
 
-func (m *Manager) Get(ctx context.Context, ownerID, id string) (api.Job, error) {
+func (m *Manager) Get(ctx context.Context, ownerID, id string) (protocol.Job, error) {
 	rec, err := m.load(ctx, id)
 	if err != nil {
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	if rec.OwnerID != ownerID {
-		return api.Job{}, errors.New("job not found")
+		return protocol.Job{}, errors.New("job not found")
 	}
 	return withoutExpiredAuxiliary(rec.Job), nil
 }
 
-func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]api.Job, error) {
+func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]protocol.Job, error) {
 	if limit < 1 || limit > 200 {
 		limit = 50
 	}
 	if m.db == nil {
 		m.mu.Lock()
-		out := make([]api.Job, 0, len(m.jobs))
+		out := make([]protocol.Job, 0, len(m.jobs))
 		for _, rec := range m.jobs {
 			if rec.OwnerID == ownerID {
 				out = append(out, withoutExpiredAuxiliary(rec.Job))
@@ -334,7 +334,7 @@ func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]api.Jo
 	if err != nil {
 		return nil, err
 	}
-	out := make([]api.Job, 0, len(rows))
+	out := make([]protocol.Job, 0, len(rows))
 	for _, row := range rows {
 		rec, err := recordFromRow(row)
 		if err != nil {
@@ -345,19 +345,19 @@ func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]api.Jo
 	return out, nil
 }
 
-func (m *Manager) Cancel(ctx context.Context, ownerID, id string) (api.Job, error) {
+func (m *Manager) Cancel(ctx context.Context, ownerID, id string) (protocol.Job, error) {
 	m.admissionMu.Lock()
 	defer m.admissionMu.Unlock()
 	rec, err := m.load(ctx, id)
 	if err != nil {
-		return api.Job{}, err
+		return protocol.Job{}, err
 	}
 	if rec.OwnerID != ownerID {
-		return api.Job{}, errors.New("job not found")
+		return protocol.Job{}, errors.New("job not found")
 	}
 	if rec.Job.Status == "queued" {
 		if err := m.cancel(ctx, id, "cancelled by user"); err != nil {
-			return api.Job{}, err
+			return protocol.Job{}, err
 		}
 	} else if rec.Job.Status == "running" {
 		cancel := m.active[id]
@@ -365,28 +365,28 @@ func (m *Manager) Cancel(ctx context.Context, ownerID, id string) (api.Job, erro
 		_, completing := m.completions[id]
 		m.mu.Unlock()
 		if cancel == nil && !completing {
-			return api.Job{}, errors.New("job is not running on this instance")
+			return protocol.Job{}, errors.New("job is not running on this instance")
 		}
 		now := time.Now().UTC()
 		rec.Job.Status, rec.Job.Error, rec.Job.FinishedAt = "cancelled", "cancelled by user", &now
 		if changed, err := m.transition(ctx, rec, "running"); err != nil {
-			return api.Job{}, err
+			return protocol.Job{}, err
 		} else if !changed {
-			return api.Job{}, errors.New("job already finished")
+			return protocol.Job{}, errors.New("job already finished")
 		}
 		if cancel != nil {
 			cancel()
 		}
 	} else {
-		return api.Job{}, errors.New("only queued or running jobs can be cancelled")
+		return protocol.Job{}, errors.New("only queued or running jobs can be cancelled")
 	}
 	return m.Get(ctx, ownerID, id)
 }
 
-func (m *Manager) ResultPath(ctx context.Context, ownerID, id string) (string, api.Job, error) {
+func (m *Manager) ResultPath(ctx context.Context, ownerID, id string) (string, protocol.Job, error) {
 	job, err := m.Get(ctx, ownerID, id)
 	if err != nil {
-		return "", api.Job{}, err
+		return "", protocol.Job{}, err
 	}
 	if job.Status != "succeeded" && job.Status != "failed" {
 		return "", job, errors.New("job result is not ready")
@@ -406,16 +406,19 @@ func (m *Manager) ResultPath(ctx context.Context, ownerID, id string) (string, a
 
 // CleanupProject returns a preview. Destructive cleanup is only exposed via
 // CleanupProjectWithPlan so callers cannot bypass the preview/digest contract.
-func (m *Manager) CleanupProject(ctx context.Context, ownerID, projectID, scope string) (api.CleanupReport, error) {
+func (m *Manager) CleanupProject(
+	ctx context.Context,
+	ownerID, projectID, scope string,
+) (protocol.CleanupReport, error) {
 	return m.cleanupProject(ctx, ownerID, projectID, scope, true, "")
 }
 
 func (m *Manager) CleanupProjectWithPlan(
 	ctx context.Context,
 	ownerID, projectID, scope, expectedDigest string,
-) (api.CleanupReport, error) {
+) (protocol.CleanupReport, error) {
 	if expectedDigest == "" {
-		return api.CleanupReport{}, errors.New("cleanup plan digest is required")
+		return protocol.CleanupReport{}, errors.New("cleanup plan digest is required")
 	}
 	return m.cleanupProject(ctx, ownerID, projectID, scope, false, expectedDigest)
 }
@@ -425,8 +428,8 @@ func (m *Manager) cleanupProject(
 	ownerID, projectID, scope string,
 	dryRun bool,
 	expectedDigest string,
-) (api.CleanupReport, error) {
-	report := api.CleanupReport{ProjectID: projectID, Scope: scope, DryRun: dryRun}
+) (protocol.CleanupReport, error) {
+	report := protocol.CleanupReport{ProjectID: projectID, Scope: scope, DryRun: dryRun}
 	if !project.ValidProjectID(projectID) {
 		return report, errors.New("project ID is invalid")
 	}
@@ -553,7 +556,7 @@ func (m *Manager) cleanupProject(
 }
 
 func cleanupReportDigest(
-	report api.CleanupReport,
+	report protocol.CleanupReport,
 	terminalIDs []string,
 	resultTargets []cleanupResultTarget,
 	snapshotID string,
@@ -564,10 +567,10 @@ func cleanupReportDigest(
 	report.ActiveJobs = append([]string(nil), report.ActiveJobs...)
 	sort.Strings(report.ActiveJobs)
 	targets := struct {
-		Report      api.CleanupReport     `json:"report"`
-		TerminalIDs []string              `json:"terminalJobIds,omitempty"`
-		Results     []cleanupResultTarget `json:"results,omitempty"`
-		SnapshotID  string                `json:"snapshotId,omitempty"`
+		Report      protocol.CleanupReport `json:"report"`
+		TerminalIDs []string               `json:"terminalJobIds,omitempty"`
+		Results     []cleanupResultTarget  `json:"results,omitempty"`
+		SnapshotID  string                 `json:"snapshotId,omitempty"`
 	}{Report: report, Results: resultTargets, SnapshotID: snapshotID}
 	if report.Scope == "project" {
 		targets.TerminalIDs = append([]string(nil), terminalIDs...)
@@ -590,7 +593,10 @@ func (m *Manager) projectRecords(ctx context.Context, ownerID, projectID string)
 		for _, row := range rows {
 			out = append(
 				out,
-				record{OwnerID: row.OwnerID, Job: api.Job{ID: row.ID, ProjectID: row.ProjectID, Status: row.Status}},
+				record{
+					OwnerID: row.OwnerID,
+					Job:     protocol.Job{ID: row.ID, ProjectID: row.ProjectID, Status: row.Status},
+				},
 			)
 		}
 		return out, nil
@@ -731,7 +737,7 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 func (m *Manager) finish(
 	ctx context.Context,
 	rec record,
-	result *api.CompileResult,
+	result *protocol.CompileResult,
 	message string,
 	resultArchived bool,
 ) bool {
@@ -1070,7 +1076,7 @@ func (m *Manager) save(ctx context.Context, rec record) error {
 	)
 }
 
-func marshalResult(result *api.CompileResult) ([]byte, error) {
+func marshalResult(result *protocol.CompileResult) ([]byte, error) {
 	if result == nil {
 		return nil, nil
 	}
@@ -1078,11 +1084,11 @@ func marshalResult(result *api.CompileResult) ([]byte, error) {
 }
 
 func recordFromRow(row store.CompileJob) (record, error) {
-	var request api.CompileRequest
+	var request protocol.CompileRequest
 	if err := json.Unmarshal(row.Request, &request); err != nil {
 		return record{}, fmt.Errorf("decode queued job request: %w", err)
 	}
-	job := api.Job{
+	job := protocol.Job{
 		SessionID: row.SessionID, Revision: row.Revision,
 		ID:         row.ID,
 		SnapshotID: row.SnapshotID,
@@ -1094,7 +1100,7 @@ func recordFromRow(row store.CompileJob) (record, error) {
 		Error:      row.Error,
 	}
 	if len(row.Result) > 0 {
-		var result api.CompileResult
+		var result protocol.CompileResult
 		if err := json.Unmarshal(row.Result, &result); err != nil {
 			return record{}, fmt.Errorf("decode queued job result: %w", err)
 		}
@@ -1123,7 +1129,7 @@ func recordFromRow(row store.CompileJob) (record, error) {
 	return record{Job: job, OwnerID: row.OwnerID, Request: request, Snapshot: snapshot}, nil
 }
 
-func resultDuration(result *api.CompileResult) int64 {
+func resultDuration(result *protocol.CompileResult) int64 {
 	if result == nil {
 		return 0
 	}
@@ -1138,7 +1144,7 @@ func randomID(prefix string) (string, error) {
 	return prefix + "_" + hex.EncodeToString(b), nil
 }
 
-func withoutExpiredAuxiliary(job api.Job) api.Job {
+func withoutExpiredAuxiliary(job protocol.Job) protocol.Job {
 	if job.Result == nil || job.Result.AuxiliaryExpiresAt == nil || time.Now().Before(*job.Result.AuxiliaryExpiresAt) {
 		return job
 	}

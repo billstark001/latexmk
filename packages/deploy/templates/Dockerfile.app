@@ -5,9 +5,10 @@ ARG RUNTIME_IMAGE=__RUNTIME_IMAGE__
 FROM __DOCKER_CLI_IMAGE__ AS docker-cli
 
 FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS builder
-WORKDIR /src
+WORKDIR /src/server
 ENV GOWORK=off CGO_ENABLED=0
 COPY server/go.mod server/go.sum ./
+COPY shared/ ../shared/
 # Keep modules in an exportable layer: cache mounts alone do not survive ephemeral CI builders.
 RUN go mod download
 COPY server/ ./

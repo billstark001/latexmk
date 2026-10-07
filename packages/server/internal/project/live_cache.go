@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 func (m *Manager) LiveCachePath(ownerID, sessionID string) (string, error) {

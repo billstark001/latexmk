@@ -17,8 +17,8 @@ import (
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
-	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
 	projectwatch "github.com/billstark001/latexmk/packages/cli/internal/watch"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 const reloadLiveSettings = -20
@@ -166,7 +166,12 @@ func runLive(c *client.Client, request protocol.CompileRequest, opts compileOpti
 		operation, finish := context.WithTimeout(ctx, opts.timeout)
 		session, err := c.CreateSession(
 			operation,
-			protocol.SessionRequest{ProjectID: c.ProjectID, Request: request, Workspace: mode, IdempotencyKey: creationKey},
+			protocol.SessionRequest{
+				ProjectID:      c.ProjectID,
+				Request:        request,
+				Workspace:      mode,
+				IdempotencyKey: creationKey,
+			},
 		)
 		finish()
 		if err != nil {

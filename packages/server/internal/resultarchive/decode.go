@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
-	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 type Limits struct {
@@ -48,7 +48,7 @@ func Decode(reader io.Reader, destination string, limits Limits) (compile.Output
 	if err := json.Unmarshal(raw, &out.Result); err != nil {
 		return out, err
 	}
-	declared := make(map[string]api.Artifact)
+	declared := make(map[string]protocol.Artifact)
 	var total int64
 	for _, artifact := range out.Result.Artifacts {
 		clean, err := safefs.Clean(artifact.Path)

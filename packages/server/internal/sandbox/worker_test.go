@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	projectarchive "github.com/billstark001/latexmk/packages/server/internal/archive"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/resultarchive"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 func workerInput(t *testing.T, root, source, checkpoint string) []byte {
@@ -28,7 +28,7 @@ func workerInput(t *testing.T, root, source, checkpoint string) []byte {
 	}
 	req := workerRequest{
 		Version: 1,
-		Request: api.CompileRequest{
+		Request: protocol.CompileRequest{
 			ProtocolVersion: 2,
 			Entry:           "main.tex",
 			Engine:          "xelatex",
@@ -36,7 +36,7 @@ func workerInput(t *testing.T, root, source, checkpoint string) []byte {
 			RecordInputs:    true,
 		},
 		RequestID:        "job-test",
-		Sources:          []api.ProjectFile{{Path: "main.tex", Size: file.Size, SHA256: file.SHA256}},
+		Sources:          []protocol.ProjectFile{{Path: "main.tex", Size: file.Size, SHA256: file.SHA256}},
 		MaxFiles:         100,
 		MaxSourceBytes:   8192,
 		MaxStateBytes:    8192,

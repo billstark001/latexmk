@@ -14,9 +14,9 @@ import (
 	"sort"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
-	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 // Only portable TeX state is restored. In particular, .fls, .fdb_latexmk,
@@ -37,23 +37,23 @@ type auxiliaryFile struct {
 }
 
 type compileCacheRecord struct {
-	ExpiresAt *time.Time        `json:"expiresAt,omitempty"`
-	Version   int               `json:"version"`
-	Submitted time.Time         `json:"submitted"`
-	JobID     string            `json:"jobId"`
-	Inputs    []api.ProjectFile `json:"inputs"`
-	Files     []auxiliaryFile   `json:"files"`
+	ExpiresAt *time.Time             `json:"expiresAt,omitempty"`
+	Version   int                    `json:"version"`
+	Submitted time.Time              `json:"submitted"`
+	JobID     string                 `json:"jobId"`
+	Inputs    []protocol.ProjectFile `json:"inputs"`
+	Files     []auxiliaryFile        `json:"files"`
 }
 
 // CompileCacheKey deliberately excludes input hashes: ordinary edits to TeX
 // should benefit from the previous auxiliary state. Input compatibility is
 // checked separately before restoring anything.
-func CompileCacheKey(req api.CompileRequest, meta api.Metadata, epoch string) string {
-	req.Auxiliary = api.AuxiliaryOptions{}
+func CompileCacheKey(req protocol.CompileRequest, meta protocol.Metadata, epoch string) string {
+	req.Auxiliary = protocol.AuxiliaryOptions{}
 	req.Force, req.Quiet, req.RecordInputs, req.DetectMissingFiles = false, false, false, false
 	payload, _ := json.Marshal(struct {
 		Format    int
-		Request   api.CompileRequest
+		Request   protocol.CompileRequest
 		Version   string
 		Commit    string
 		BuildDate string
@@ -142,11 +142,11 @@ func (m *Manager) readCompileCache(path string) (compileCacheRecord, error) {
 	return record, nil
 }
 
-func CompatibleCacheInputs(previous, current []api.ProjectFile) bool {
+func CompatibleCacheInputs(previous, current []protocol.ProjectFile) bool {
 	if len(previous) != len(current) {
 		return false
 	}
-	old := make(map[string]api.ProjectFile, len(previous))
+	old := make(map[string]protocol.ProjectFile, len(previous))
 	for _, file := range previous {
 		old[file.Path] = file
 	}
@@ -169,8 +169,8 @@ func CompatibleCacheInputs(previous, current []api.ProjectFile) bool {
 
 // RestoreCompileCache is best effort: corrupt or incompatible state produces
 // a cold build, never a partial warm start or overwritten source file.
-func (m *Manager) RestoreCompileCache(snapshot Snapshot, key, workspace string) api.CompileCache {
-	info := api.CompileCache{Status: "miss", Reason: "no compatible cache"}
+func (m *Manager) RestoreCompileCache(snapshot Snapshot, key, workspace string) protocol.CompileCache {
+	info := protocol.CompileCache{Status: "miss", Reason: "no compatible cache"}
 	path, err := m.compileCachePath(snapshot, key)
 	if err != nil {
 		info.Warning = err.Error()

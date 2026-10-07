@@ -2,24 +2,21 @@ package jobs
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
-	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
 	"github.com/billstark001/latexmk/packages/server/internal/project"
 	"github.com/billstark001/latexmk/packages/server/internal/sandbox"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 type execution struct {
 	output            compile.Output
-	cache             *api.CompileCache
+	cache             *protocol.CompileCache
 	cacheKey          string
 	sessionCheckpoint bool
 	checkpoint        string
@@ -38,7 +35,7 @@ func (m *Manager) execute(ctx context.Context, rec record, workspace *compile.Wo
 	}
 	e := execution{cacheKey: project.CompileCacheKey(rec.Request, m.meta, m.cfg.CompileCacheEpoch)}
 	if rec.Request.Auxiliary.Server == "reuse" {
-		info := api.CompileCache{Status: "bypass", Reason: "forced clean compile"}
+		info := protocol.CompileCache{Status: "bypass", Reason: "forced clean compile"}
 		if !rec.Request.Force {
 			info = m.projects.RestoreCompileCache(rec.Snapshot, e.cacheKey, workspace.Project)
 		}
@@ -81,7 +78,7 @@ func (m *Manager) executeIsolated(ctx context.Context, rec record, workspace *co
 		e.stamps[file.Path] = stamp
 	}
 	m.admissionMu.Unlock()
-	info := api.CompileCache{Status: "miss", Reason: "no compatible session checkpoint"}
+	info := protocol.CompileCache{Status: "miss", Reason: "no compatible session checkpoint"}
 	if cachePath != "" {
 		info.Status = "hit"
 		info.Reason = "successful isolated workspace checkpoint"
@@ -99,8 +96,8 @@ func (m *Manager) executeIsolated(ctx context.Context, rec record, workspace *co
 
 func failedOutput(rec record, err error) compile.Output {
 	return compile.Output{
-		Result: api.CompileResult{
-			ProtocolVersion: api.ProtocolVersion,
+		Result: protocol.CompileResult{
+			ProtocolVersion: protocol.Version,
 			RequestID:       rec.Job.ID,
 			Entry:           rec.Request.Entry,
 			Engine:          rec.Request.Engine,
@@ -133,7 +130,7 @@ func (m *Manager) publishExecution(ctx context.Context, rec record, workspace *c
 			e.cache.Warning = err.Error()
 			return
 		}
-		hash, size, err := checkpointDigest(file, m.cfg.MaxCompileCacheBytes+(1<<20))
+		hash, size, err := safefs.Digest(file, m.cfg.MaxCompileCacheBytes+(1<<20))
 		err = errors.Join(err, file.Close(), root.Close())
 		if err != nil {
 			e.cache.Warning = err.Error()
@@ -152,7 +149,7 @@ func (m *Manager) publishExecution(ctx context.Context, rec record, workspace *c
 		s.cacheExpires = time.Now().UTC().Add(ttl)
 		e.output.Result.AuxiliaryExpiresAt = &s.cacheExpires
 		s.cachePath = path
-		s.cacheInputs = append([]api.ProjectFile(nil), rec.Snapshot.Files...)
+		s.cacheInputs = append([]protocol.ProjectFile(nil), rec.Snapshot.Files...)
 		s.cacheStamps = e.stamps
 		s.cacheHashes = make(map[string]string, len(rec.Snapshot.Files))
 		for _, file := range rec.Snapshot.Files {
@@ -211,15 +208,6 @@ func (m *Manager) updatePublishedCache(ctx context.Context, rec record, e execut
 	}
 }
 
-func checkpointDigest(r io.Reader, max int64) (string, int64, error) {
-	hash := sha256.New()
-	size, err := io.Copy(hash, io.LimitReader(r, max+1))
-	if err == nil && size > max {
-		err = safefs.ErrLimit
-	}
-	return hex.EncodeToString(hash.Sum(nil)), size, err
-}
-
 // Ordinary jobs retain their portable auxiliary policy while moving all TeX
 // execution out of a controller that has access to the Docker daemon.
 func (m *Manager) executePortableIsolated(ctx context.Context, rec record, workspace *compile.Workspace) execution {
@@ -232,7 +220,7 @@ func (m *Manager) executePortableIsolated(ctx context.Context, rec record, works
 	}
 	checkpoint := ""
 	if rec.Request.Auxiliary.Server == "reuse" {
-		info := api.CompileCache{Status: "bypass", Reason: "forced clean compile"}
+		info := protocol.CompileCache{Status: "bypass", Reason: "forced clean compile"}
 		if !rec.Request.Force {
 			portable := filepath.Join(workspace.Path, "portable")
 			if err := os.MkdirAll(portable, 0700); err != nil {

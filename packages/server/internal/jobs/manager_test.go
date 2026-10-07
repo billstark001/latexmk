@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/project"
 	"github.com/billstark001/latexmk/packages/server/internal/store"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 func TestQueueAcceptsMultipleJobsAndAllowsQueuedCancellation(t *testing.T) {
@@ -32,18 +32,18 @@ func TestQueueAcceptsMultipleJobsAndAllowsQueuedCancellation(t *testing.T) {
 	content := []byte("\\documentclass{article}")
 	digest := sha256.Sum256(content)
 	sha := hex.EncodeToString(digest[:])
-	request := api.CompileRequest{
-		ProtocolVersion: api.ProtocolVersion,
+	request := protocol.CompileRequest{
+		ProtocolVersion: protocol.Version,
 		Entry:           "main.tex",
 		Engine:          "xelatex",
 		Interaction:     "nonstopmode",
 	}
 	plan, err := projects.Plan(
 		"member",
-		api.UploadPlanRequest{
+		protocol.UploadPlanRequest{
 			ProjectID: "paper",
 			Request:   request,
-			Files:     []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
+			Files:     []protocol.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
 		},
 	)
 	if err != nil {
@@ -58,7 +58,7 @@ func TestQueueAcceptsMultipleJobsAndAllowsQueuedCancellation(t *testing.T) {
 	}
 	manager := New(
 		cfg,
-		api.Metadata{},
+		protocol.Metadata{},
 		compile.NewRunner(cfg),
 		projects,
 		nil,
@@ -95,7 +95,7 @@ func TestQueuedTransitionCannotOverwriteCancellation(t *testing.T) {
 		logger: slog.New(slog.NewTextHandler(testWriter{t}, nil)),
 	}
 	now := time.Now().UTC()
-	original := record{OwnerID: "member", Job: api.Job{ID: "job_race", Status: "queued", CreatedAt: now}}
+	original := record{OwnerID: "member", Job: protocol.Job{ID: "job_race", Status: "queued", CreatedAt: now}}
 	manager.jobs[original.Job.ID] = original
 
 	staleWorkerCopy := original
@@ -138,18 +138,18 @@ func TestSuccessfulCompileRequiresArchivedResult(t *testing.T) {
 	}
 	manager := New(
 		cfg,
-		api.Metadata{},
+		protocol.Metadata{},
 		compile.NewRunner(config.Config{MaxConcurrentCompiles: 1}),
 		projects,
 		nil,
 		slog.New(slog.NewTextHandler(testWriter{t}, nil)),
 	)
 	now := time.Now().UTC()
-	rec := record{OwnerID: "member", Job: api.Job{ID: "job_archive_failed", Status: "running", CreatedAt: now}}
+	rec := record{OwnerID: "member", Job: protocol.Job{ID: "job_archive_failed", Status: "running", CreatedAt: now}}
 	if err := manager.save(context.Background(), rec); err != nil {
 		t.Fatal(err)
 	}
-	result := &api.CompileResult{Success: true, ExitCode: 0}
+	result := &protocol.CompileResult{Success: true, ExitCode: 0}
 	manager.finish(context.Background(), rec, result, "could not package compile result", false)
 	got, err := manager.Get(context.Background(), "member", rec.Job.ID)
 	if err != nil {
@@ -171,8 +171,8 @@ func TestQueuedJobKeepsSnapshotCapturedAtEnqueue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := api.CompileRequest{
-		ProtocolVersion: api.ProtocolVersion,
+	request := protocol.CompileRequest{
+		ProtocolVersion: protocol.Version,
 		Entry:           "main.tex",
 		Engine:          "xelatex",
 		Interaction:     "nonstopmode",
@@ -180,7 +180,7 @@ func TestQueuedJobKeepsSnapshotCapturedAtEnqueue(t *testing.T) {
 	first := commitTestSnapshot(t, projects, request, []byte("first version"))
 	manager := New(
 		cfg,
-		api.Metadata{},
+		protocol.Metadata{},
 		compile.NewRunner(cfg),
 		projects,
 		nil,
@@ -249,8 +249,8 @@ func TestCleanupPlanRejectsChangedTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := api.CompileRequest{
-		ProtocolVersion: api.ProtocolVersion,
+	request := protocol.CompileRequest{
+		ProtocolVersion: protocol.Version,
 		Entry:           "main.tex",
 		Engine:          "xelatex",
 		Interaction:     "nonstopmode",
@@ -258,7 +258,7 @@ func TestCleanupPlanRejectsChangedTargets(t *testing.T) {
 	commitTestSnapshot(t, projects, request, []byte("first version"))
 	manager := New(
 		cfg,
-		api.Metadata{},
+		protocol.Metadata{},
 		compile.NewRunner(cfg),
 		projects,
 		nil,
@@ -267,7 +267,13 @@ func TestCleanupPlanRejectsChangedTargets(t *testing.T) {
 	now := time.Now().UTC()
 	manager.jobs["job_first"] = record{
 		OwnerID: "member",
-		Job:     api.Job{ID: "job_first", ProjectID: "paper", Status: "cancelled", CreatedAt: now, FinishedAt: &now},
+		Job: protocol.Job{
+			ID:         "job_first",
+			ProjectID:  "paper",
+			Status:     "cancelled",
+			CreatedAt:  now,
+			FinishedAt: &now,
+		},
 	}
 	preview, err := manager.CleanupProject(context.Background(), "member", "paper", "project")
 	if err != nil {
@@ -275,7 +281,13 @@ func TestCleanupPlanRejectsChangedTargets(t *testing.T) {
 	}
 	manager.jobs["job_second"] = record{
 		OwnerID: "member",
-		Job:     api.Job{ID: "job_second", ProjectID: "paper", Status: "cancelled", CreatedAt: now, FinishedAt: &now},
+		Job: protocol.Job{
+			ID:         "job_second",
+			ProjectID:  "paper",
+			Status:     "cancelled",
+			CreatedAt:  now,
+			FinishedAt: &now,
+		},
 	}
 	if _, err := manager.CleanupProjectWithPlan(
 		context.Background(),
@@ -306,8 +318,8 @@ func TestCleanupProjectBlocksActiveJobsAndAppliesExactPreview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := api.CompileRequest{
-		ProtocolVersion: api.ProtocolVersion,
+	request := protocol.CompileRequest{
+		ProtocolVersion: protocol.Version,
 		Entry:           "main.tex",
 		Engine:          "xelatex",
 		Interaction:     "nonstopmode",
@@ -315,7 +327,7 @@ func TestCleanupProjectBlocksActiveJobsAndAppliesExactPreview(t *testing.T) {
 	commitTestSnapshot(t, projects, request, []byte("source"))
 	manager := New(
 		cfg,
-		api.Metadata{},
+		protocol.Metadata{},
 		compile.NewRunner(cfg),
 		projects,
 		nil,
@@ -324,7 +336,7 @@ func TestCleanupProjectBlocksActiveJobsAndAppliesExactPreview(t *testing.T) {
 	now := time.Now().UTC()
 	manager.jobs["job_active"] = record{
 		OwnerID: "member",
-		Job:     api.Job{ID: "job_active", ProjectID: "paper", Status: "queued", CreatedAt: now},
+		Job:     protocol.Job{ID: "job_active", ProjectID: "paper", Status: "queued", CreatedAt: now},
 	}
 	preview, err := manager.CleanupProject(context.Background(), "member", "paper", "project")
 	if err != nil {
@@ -382,16 +394,16 @@ func TestCleanupProjectBlocksActiveJobsAndAppliesExactPreview(t *testing.T) {
 func commitTestSnapshot(
 	t *testing.T,
 	projects *project.Manager,
-	request api.CompileRequest,
+	request protocol.CompileRequest,
 	content []byte,
 ) project.Snapshot {
 	t.Helper()
 	digest := sha256.Sum256(content)
 	sha := hex.EncodeToString(digest[:])
-	plan, err := projects.Plan("member", api.UploadPlanRequest{
+	plan, err := projects.Plan("member", protocol.UploadPlanRequest{
 		ProjectID: "paper",
 		Request:   request,
-		Files:     []api.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
+		Files:     []protocol.ProjectFile{{Path: "main.tex", SHA256: sha, Size: int64(len(content))}},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -7,12 +7,12 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	"github.com/billstark001/latexmk/packages/server/internal/auth"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/jobs"
 	"github.com/billstark001/latexmk/packages/server/internal/project"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 func newTestServer(t *testing.T, legacy bool) *Server {
@@ -35,8 +35,8 @@ func newTestServer(t *testing.T, legacy bool) *Server {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	runner := compile.NewRunner(cfg)
-	queue := jobs.New(cfg, api.Metadata{}, runner, projects, nil, logger)
-	return New(cfg, api.Metadata{}, runner, auth.New(cfg, nil), nil, projects, queue, logger)
+	queue := jobs.New(cfg, protocol.Metadata{}, runner, projects, nil, logger)
+	return New(cfg, protocol.Metadata{}, runner, auth.New(cfg, nil), nil, projects, queue, logger)
 }
 
 func TestLegacyCompileRouteDisabledByDefault(t *testing.T) {

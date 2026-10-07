@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 // ArtifactKind classifies generated artifacts; it is never used to delete inputs.
@@ -26,7 +26,7 @@ func ArtifactKind(name string) string {
 
 // RetainArtifacts runs after recorder/diagnostic extraction. Transfer-only auxiliary
 // files have a short expiry; final outputs and logs retain the normal job lifetime.
-func RetainArtifacts(output Output, req api.CompileRequest, limit time.Duration) Output {
+func RetainArtifacts(output Output, req protocol.CompileRequest, limit time.Duration) Output {
 	retained := output
 	retained.Files = nil
 	retained.Result.Artifacts = nil
@@ -60,7 +60,7 @@ func RetainArtifacts(output Output, req api.CompileRequest, limit time.Duration)
 			continue
 		}
 		retained.Files = append(retained.Files, file)
-		artifact := api.Artifact{Path: file.RelativePath, Size: file.Size, SHA256: file.SHA256}
+		artifact := protocol.Artifact{Path: file.RelativePath, Size: file.Size, SHA256: file.SHA256}
 		artifact.Kind = kind
 		retained.Result.Artifacts = append(retained.Result.Artifacts, artifact)
 	}

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
-	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 func Write(path string, output compile.Output) error {

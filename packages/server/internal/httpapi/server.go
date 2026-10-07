@@ -22,7 +22,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
 	projectarchive "github.com/billstark001/latexmk/packages/server/internal/archive"
 	"github.com/billstark001/latexmk/packages/server/internal/auth"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
@@ -31,13 +30,14 @@ import (
 	"github.com/billstark001/latexmk/packages/server/internal/project"
 	"github.com/billstark001/latexmk/packages/server/internal/resultarchive"
 	"github.com/billstark001/latexmk/packages/server/internal/store"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 // Server owns the Gin engine and exposes the v2 content-addressed upload and
 // queued-job API. The legacy synchronous endpoint is opt-in.
 type Server struct {
 	cfg      config.Config
-	meta     api.Metadata
+	meta     protocol.Metadata
 	runner   *compile.Runner
 	auth     *auth.Manager
 	db       *store.Postgres
@@ -49,7 +49,7 @@ type Server struct {
 
 func New(
 	cfg config.Config,
-	meta api.Metadata,
+	meta protocol.Metadata,
 	runner *compile.Runner,
 	authManager *auth.Manager,
 	db *store.Postgres,
@@ -153,7 +153,7 @@ func (s *Server) compileLegacy(c *gin.Context) {
 	}()
 	workspace := jobWorkspace.Project
 
-	var request api.CompileRequest
+	var request protocol.CompileRequest
 	var gotRequest, gotProject bool
 	for {
 		part, nextErr := mr.NextPart()
@@ -259,7 +259,7 @@ func (s *Server) compileLegacy(c *gin.Context) {
 }
 
 func (s *Server) planUpload(c *gin.Context) {
-	var request api.UploadPlanRequest
+	var request protocol.UploadPlanRequest
 	if err := decodeStrictJSON(c.Request.Body, 4<<20, &request); err != nil {
 		writeError(c, http.StatusBadRequest, "invalid upload plan: "+err.Error())
 		return
@@ -383,7 +383,7 @@ func (s *Server) projectCleanup(c *gin.Context, dryRun bool) {
 		return
 	}
 	principal, _ := auth.FromContext(c.Request.Context())
-	var report api.CleanupReport
+	var report protocol.CleanupReport
 	var err error
 	if dryRun {
 		report, err = s.jobs.CleanupProject(c.Request.Context(), principal.ID, c.Param("id"), scope)

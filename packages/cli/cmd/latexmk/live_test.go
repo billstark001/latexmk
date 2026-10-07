@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
-	"github.com/billstark001/latexmk/packages/cli/internal/protocol"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 func TestRealtimeRetriesTransientDiagnosticDownload(t *testing.T) {
@@ -26,8 +26,22 @@ func TestRealtimeRetriesTransientDiagnosticDownload(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte("source"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	result := protocol.CompileResult{ProtocolVersion: protocol.Version, RequestID: "job_failed", SessionID: "ses_test", Revision: 1, Entry: "main.tex", Engine: "xelatex", Error: "diagnostic recovered"}
-	job := protocol.Job{ID: result.RequestID, SessionID: result.SessionID, Revision: 1, Status: "failed", Result: &result}
+	result := protocol.CompileResult{
+		ProtocolVersion: protocol.Version,
+		RequestID:       "job_failed",
+		SessionID:       "ses_test",
+		Revision:        1,
+		Entry:           "main.tex",
+		Engine:          "xelatex",
+		Error:           "diagnostic recovered",
+	}
+	job := protocol.Job{
+		ID:        result.RequestID,
+		SessionID: result.SessionID,
+		Revision:  1,
+		Status:    "failed",
+		Result:    &result,
+	}
 	session := protocol.Session{ID: result.SessionID, Revision: 1, LatestJobID: job.ID}
 	var archive bytes.Buffer
 	gz := gzip.NewWriter(&archive)
@@ -36,7 +50,9 @@ func TestRealtimeRetriesTransientDiagnosticDownload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := tw.WriteHeader(&tar.Header{Name: "result.json", Mode: 0600, Size: int64(len(raw)), Typeflag: tar.TypeReg}); err != nil {
+	if err := tw.WriteHeader(
+		&tar.Header{Name: "result.json", Mode: 0600, Size: int64(len(raw)), Typeflag: tar.TypeReg},
+	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tw.Write(raw); err != nil {
@@ -74,7 +90,12 @@ func TestRealtimeRetriesTransientDiagnosticDownload(t *testing.T) {
 				case <-r.Context().Done():
 					return
 				case <-ticker.C:
-					_, _ = fmt.Fprintf(w, "event: session\nid: %d\ndata: {\"sequence\":%d,\"type\":\"finished\",\"status\":\"failed\"}\n\n", sequence, sequence)
+					_, _ = fmt.Fprintf(
+						w,
+						"event: session\nid: %d\ndata: {\"sequence\":%d,\"type\":\"finished\",\"status\":\"failed\"}\n\n",
+						sequence,
+						sequence,
+					)
 					w.(http.Flusher).Flush()
 				}
 			}
@@ -91,7 +112,15 @@ func TestRealtimeRetriesTransientDiagnosticDownload(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	_, _, stderr := captureCommandOutput(t, func() int {
-		return runLiveSession(ctx, c, protocol.CompileRequest{Entry: "main.tex", Engine: "xelatex"}, compileOptions{timeout: time.Second, outDir: t.TempDir()}, protocol.Metadata{Capabilities: protocol.Capabilities{MaxFiles: 10, MaxExpandedBytes: 1024}}, session, liveObservation{})
+		return runLiveSession(
+			ctx,
+			c,
+			protocol.CompileRequest{Entry: "main.tex", Engine: "xelatex"},
+			compileOptions{timeout: time.Second, outDir: t.TempDir()},
+			protocol.Metadata{Capabilities: protocol.Capabilities{MaxFiles: 10, MaxExpandedBytes: 1024}},
+			session,
+			liveObservation{},
+		)
 	})
 	if downloads.Load() != 2 || !strings.Contains(stderr, result.Error) {
 		t.Fatalf("diagnostics were not recovered exactly once: downloads=%d, stderr=%s", downloads.Load(), stderr)

@@ -242,3 +242,14 @@ func TestEncoderPanicCleansTemporaryFiles(t *testing.T) {
 		}
 	}
 }
+func TestDigestRejectsUnboundedAndOversizedStreams(t *testing.T) {
+	for _, limit := range []int64{-1, int64(^uint64(0) >> 1), 2} {
+		if _, _, err := Digest(strings.NewReader("abc"), limit); !errors.Is(err, ErrLimit) {
+			t.Fatalf("limit %d accepted: %v", limit, err)
+		}
+	}
+	hash, size, err := Digest(strings.NewReader("abc"), 3)
+	if err != nil || size != 3 || hash != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" {
+		t.Fatalf("bounded digest = %s, %d, %v", hash, size, err)
+	}
+}

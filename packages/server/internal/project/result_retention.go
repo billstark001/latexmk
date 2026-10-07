@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/billstark001/latexmk/packages/server/internal/api"
-	"github.com/billstark001/latexmk/packages/server/internal/platform/safefs"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 // The global retention remains an upper bound; individual requests may ask for
@@ -88,7 +88,7 @@ func (m *Manager) pruneResultAuxiliary(name string, now time.Time) (int64, error
 	if header.Name != "result.json" || header.Size > 1<<20 {
 		return 0, nil
 	}
-	var result api.CompileResult
+	var result protocol.CompileResult
 	if err := json.NewDecoder(io.LimitReader(tr, header.Size)).Decode(&result); err != nil {
 		return 0, err
 	}
@@ -96,7 +96,7 @@ func (m *Manager) pruneResultAuxiliary(name string, now time.Time) (int64, error
 		return 0, nil
 	}
 	drop := make(map[string]bool)
-	kept := make([]api.Artifact, 0, len(result.Artifacts))
+	kept := make([]protocol.Artifact, 0, len(result.Artifacts))
 	for _, artifact := range result.Artifacts {
 		if artifact.Kind == "auxiliary" {
 			drop["artifacts/"+artifact.Path] = true
