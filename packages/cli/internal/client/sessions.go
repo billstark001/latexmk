@@ -31,29 +31,60 @@ func (c *Client) CloseSession(ctx context.Context, id string) error {
 	return c.jsonRequest(ctx, http.MethodDelete, "/v1/sessions/"+url.PathEscape(id), nil, nil)
 }
 
-// FreezeSnapshot reevaluates the complete upload policy before and after reading
-// sources. Membership changes discard the spool rather than uploading stale policy.
+// CapturedSnapshot owns the immutable source spool and its selection diagnostics.
+type CapturedSnapshot struct {
+	*projectarchive.Frozen
+	Warnings []string
+}
+
+// FreezeSnapshot reevaluates upload policy before and after source capture.
+// Membership changes discard the spool rather than uploading stale policy.
 func (c *Client) FreezeSnapshot(
 	ctx context.Context,
 	request protocol.CompileRequest,
 	additional []string,
 	meta protocol.Metadata,
-) (*projectarchive.Frozen, error) {
+) (*CapturedSnapshot, error) {
 	selection, err := c.selectFiles(request.Entry, request.Engine, additional, false)
 	if err != nil {
 		return nil, err
 	}
+	return c.freezeSelection(ctx, request, additional, selection, meta)
+}
+
+func (c *Client) freezeSelection(
+	ctx context.Context,
+	request protocol.CompileRequest,
+	additional []string,
+	selection dependency.Result,
+	meta protocol.Metadata,
+) (*CapturedSnapshot, error) {
+	_, warnings, err := describeSelection(selection)
+	if err != nil {
+		return nil, err
+	}
+	maxFiles, maxBytes := 20_000, int64(2<<30)
+	if meta.Capabilities.MaxFiles > 0 {
+		maxFiles = min(maxFiles, meta.Capabilities.MaxFiles)
+	}
+	if meta.Capabilities.MaxExpandedBytes > 0 {
+		maxBytes = min(maxBytes, meta.Capabilities.MaxExpandedBytes)
+	}
 	frozen, err := projectarchive.Freeze(
 		ctx,
 		selection.Files,
-		meta.Capabilities.MaxFiles,
-		meta.Capabilities.MaxExpandedBytes,
+		maxFiles,
+		maxBytes,
 	)
 	if err != nil {
 		return nil, err
 	}
 	current, err := c.selectFiles(request.Entry, request.Engine, additional, false)
 	if err != nil {
+		_ = frozen.Close()
+		return nil, err
+	}
+	if _, _, err := describeSelection(current); err != nil {
 		_ = frozen.Close()
 		return nil, err
 	}
@@ -71,7 +102,7 @@ func (c *Client) FreezeSnapshot(
 			return nil, errors.New("upload policy changed while capturing the snapshot")
 		}
 	}
-	return frozen, nil
+	return &CapturedSnapshot{Frozen: frozen, Warnings: warnings}, nil
 }
 
 // PreparedRevision survives an ambiguous HTTP response. Replaying the exact
@@ -171,51 +202,6 @@ func (c *Client) StreamSessionEvents(
 		return err
 	}
 	return io.EOF
-}
-
-func (c *Client) ResolveMissingFiles(
-	needs []string,
-	selected []projectarchive.File,
-	already []string,
-) ([]string, error) {
-	if len(already) >= maxNeedsFiles {
-		return nil, errors.New("missing-file recovery reached its file limit")
-	}
-	candidates, _, err := c.policyManifest()
-	if err != nil {
-		return nil, err
-	}
-	requested, err := dependency.ResolveRequestedFiles(needs, candidates)
-	if err != nil {
-		return nil, err
-	}
-	seen := make(map[string]bool)
-	for _, file := range selected {
-		seen[file.Path] = true
-	}
-	for _, name := range already {
-		seen[name] = true
-	}
-	var additional []string
-	var bytes int64
-	for _, file := range candidates {
-		for _, name := range already {
-			if file.Path == name {
-				bytes += file.Size
-			}
-		}
-	}
-	for _, file := range requested {
-		if seen[file.Path] {
-			continue
-		}
-		bytes += file.Size
-		additional = append(additional, file.Path)
-	}
-	if len(already)+len(additional) > maxNeedsFiles || bytes > maxNeedsFileBytes {
-		return nil, errors.New("missing-file recovery exceeds file or byte limits")
-	}
-	return additional, nil
 }
 
 func ValidateRealtimeRequest(request protocol.CompileRequest, meta protocol.Metadata) error {

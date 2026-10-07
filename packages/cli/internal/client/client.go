@@ -242,7 +242,11 @@ func (c *Client) Compile(
 	request protocol.CompileRequest,
 	outputRoot string,
 ) (CompileOutput, error) {
-	files, selectionWarnings, err := c.projectManifest(request.Entry, request.Engine)
+	selection, err := c.selectFiles(request.Entry, request.Engine, nil, false)
+	if err != nil {
+		return CompileOutput{}, err
+	}
+	_, selectionWarnings, err := describeSelection(selection)
 	if err != nil {
 		return CompileOutput{}, err
 	}
@@ -259,83 +263,47 @@ func (c *Client) Compile(
 		return CompileOutput{}, err
 	}
 	request.DetectMissingFiles = meta.Capabilities.NeedsFiles && (c.UploadMode == "" || c.UploadMode == "auto")
-	output, err := c.compileOnce(ctx, request, outputRoot, files, meta)
+	captured, err := c.freezeSelection(ctx, request, nil, selection, meta)
+	if err != nil {
+		return CompileOutput{}, err
+	}
+	files := captured.Files
+	compile := func(snapshot *CapturedSnapshot) (CompileOutput, error) {
+		defer func() { _ = snapshot.Close() }()
+		return c.compileOnce(ctx, request, outputRoot, snapshot.Files, meta)
+	}
+	output, err := compile(captured)
 	warnings := append([]string(nil), selectionWarnings...)
 	if err != nil {
 		output.Warnings = append(output.Warnings, warnings...)
 		return output, err
 	}
 
-	selected := make(map[string]struct{}, len(files))
-	for _, file := range files {
-		selected[file.Path] = struct{}{}
-	}
-	additional := make([]string, 0)
-	totalAddedFiles := 0
-	var totalAddedBytes int64
-	for round := 0; request.DetectMissingFiles && !output.Result.Success && len(output.Result.NeedsFiles) > 0; round++ {
-		if round >= maxNeedsFileRounds {
-			warnings = append(warnings, fmt.Sprintf("missing-file retry stopped after %d rounds", maxNeedsFileRounds))
-			break
-		}
-		candidates, _, manifestErr := c.policyManifest()
-		if manifestErr != nil {
-			warnings = append(warnings, "missing-file retry refused: "+manifestErr.Error())
-			break
-		}
-		requestedFiles, resolveErr := dependency.ResolveRequestedFiles(output.Result.NeedsFiles, candidates)
+	recovery := MissingFileRecovery{}
+	for request.DetectMissingFiles && !output.Result.Success && len(output.Result.NeedsFiles) > 0 {
+		paths, resolveErr := c.ResolveMissingFiles(output.Result.NeedsFiles, files, &recovery)
 		if resolveErr != nil {
 			warnings = append(warnings, "missing-file retry refused: "+resolveErr.Error())
 			break
 		}
-		newFiles := make([]projectarchive.File, 0, len(requestedFiles))
-		for _, file := range requestedFiles {
-			if _, exists := selected[file.Path]; !exists {
-				newFiles = append(newFiles, file)
+		retry, captureErr := c.FreezeSnapshot(ctx, request, recovery.Additional, meta)
+		if captureErr == nil {
+			captureErr = recovery.ValidateCaptured(retry.Files)
+		}
+		if captureErr != nil {
+			if retry != nil {
+				_ = retry.Close()
 			}
-		}
-		if len(newFiles) == 0 {
-			warnings = append(warnings, "missing-file retry stopped because the server requested no new allowed files")
+			warnings = append(warnings, "missing-file retry refused: "+captureErr.Error())
 			break
 		}
-		var newBytes int64
-		for _, file := range newFiles {
-			newBytes += file.Size
-		}
-		if totalAddedFiles+len(newFiles) > maxNeedsFiles || totalAddedBytes+newBytes > maxNeedsFileBytes {
-			warnings = append(
-				warnings,
-				fmt.Sprintf(
-					"missing-file retry refused: additions exceed %d files or %d bytes",
-					maxNeedsFiles,
-					maxNeedsFileBytes,
-				),
-			)
-			break
-		}
-		paths := make([]string, 0, len(newFiles))
-		for _, file := range newFiles {
-			selected[file.Path] = struct{}{}
-			additional = append(additional, file.Path)
-			paths = append(paths, file.Path)
-		}
-		totalAddedFiles += len(newFiles)
-		totalAddedBytes += newBytes
-		retryFiles, retryWarnings, manifestErr := c.projectManifestWithAdditional(
-			request.Entry,
-			request.Engine,
-			additional,
-		)
-		if manifestErr != nil {
-			warnings = append(warnings, "missing-file retry refused: "+manifestErr.Error())
-			break
-		}
-		warnings = append(warnings, retryWarnings...)
+		warnings = append(warnings, retry.Warnings...)
 		warnings = append(
 			warnings,
 			"server reported missing files; creating a new immutable snapshot with: "+strings.Join(paths, ", "),
 		)
-		output, err = c.compileOnce(ctx, request, outputRoot, retryFiles, meta)
+		files = retry.Files
+		output, err = compile(retry)
 		if err != nil {
 			output.Warnings = append(output.Warnings, warnings...)
 			return output, err
@@ -359,7 +327,11 @@ func (c *Client) Compile(
 // committed it to an immutable queued job. It never polls or downloads a
 // result, so missing-file retries are left to the caller.
 func (c *Client) StartCompile(ctx context.Context, request protocol.CompileRequest) (StartCompileOutput, error) {
-	files, warnings, err := c.projectManifest(request.Entry, request.Engine)
+	selection, err := c.selectFiles(request.Entry, request.Engine, nil, false)
+	if err != nil {
+		return StartCompileOutput{}, err
+	}
+	_, warnings, err := describeSelection(selection)
 	if err != nil {
 		return StartCompileOutput{}, err
 	}
@@ -378,7 +350,12 @@ func (c *Client) StartCompile(ctx context.Context, request protocol.CompileReque
 		return StartCompileOutput{}, err
 	}
 	request.DetectMissingFiles = meta.Capabilities.NeedsFiles && (c.UploadMode == "" || c.UploadMode == "auto")
-	job, err := c.startQueued(ctx, request, files)
+	captured, err := c.freezeSelection(ctx, request, nil, selection, meta)
+	if err != nil {
+		return StartCompileOutput{Warnings: warnings}, err
+	}
+	defer func() { _ = captured.Close() }()
+	job, err := c.startQueued(ctx, request, captured.Files)
 	if err != nil {
 		return StartCompileOutput{Warnings: warnings}, err
 	}
@@ -662,6 +639,10 @@ func (c *Client) projectManifestWithAdditional(
 	if err != nil {
 		return nil, nil, err
 	}
+	return describeSelection(result)
+}
+
+func describeSelection(result dependency.Result) ([]projectarchive.File, []string, error) {
 	if !result.Resolved {
 		message := "dependency discovery has unresolved references"
 		if len(result.Diagnostics) > 0 {

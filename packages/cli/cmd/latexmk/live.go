@@ -224,8 +224,7 @@ func runLiveSession(
 	var pending *client.PreparedRevision
 	var pendingFiles []projectarchive.File
 	dirty := true
-	var additional []string
-	missingRounds := 0
+	recovery := client.MissingFileRecovery{}
 	lastReported := ""
 	displayed := uint64(0)
 	submit := func() error {
@@ -252,11 +251,14 @@ func runLiveSession(
 			}
 		}
 		dirty = true
-		frozen, err := c.FreezeSnapshot(operation, request, additional, meta)
+		frozen, err := c.FreezeSnapshot(operation, request, recovery.Additional, meta)
 		if err != nil {
 			return err
 		}
 		defer func() { _ = frozen.Close() }()
+		if err := recovery.ValidateCaptured(frozen.Files); err != nil {
+			return err
+		}
 		if lastFiles != nil && !selectedFilesChanged(lastFiles, frozen.Files) {
 			dirty = false
 			return nil
@@ -270,7 +272,7 @@ func runLiveSession(
 		if err != nil {
 			return err
 		}
-		prepared, err := c.PrepareRevision(operation, session, request, frozen, key)
+		prepared, err := c.PrepareRevision(operation, session, request, frozen.Frozen, key)
 		if err != nil {
 			return err
 		}
@@ -353,15 +355,13 @@ func runLiveSession(
 		}
 		reportCompile(out, nil, opts)
 		lastReported = job.ID
-		if request.DetectMissingFiles && missingRounds < 3 && len(out.Result.NeedsFiles) > 0 {
-			allowed, err := c.ResolveMissingFiles(out.Result.NeedsFiles, lastFiles, additional)
+		if request.DetectMissingFiles && len(out.Result.NeedsFiles) > 0 {
+			allowed, err := c.ResolveMissingFiles(out.Result.NeedsFiles, lastFiles, &recovery)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "latexmk: missing-file recovery refused:", err)
 				return nil
 			}
 			if len(allowed) > 0 {
-				missingRounds++
-				additional = append(additional, allowed...)
 				lastFiles = nil
 				select {
 				case trigger <- struct{}{}:
@@ -395,7 +395,7 @@ func runLiveSession(
 		case err := <-observation.errors:
 			return fail(err)
 		case <-observation.changed:
-			missingRounds = 0
+			recovery.Rounds = 0
 			if code := handle(submit()); code != -2 {
 				return code
 			}
