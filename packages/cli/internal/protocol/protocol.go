@@ -92,9 +92,10 @@ type UploadPlan struct {
 }
 
 type SessionRequest struct {
-	ProjectID string         `json:"projectId"`
-	Request   CompileRequest `json:"request"`
-	Workspace string         `json:"workspace"`
+	IdempotencyKey string         `json:"idempotencyKey"`
+	ProjectID      string         `json:"projectId"`
+	Request        CompileRequest `json:"request"`
+	Workspace      string         `json:"workspace"`
 }
 
 type RevisionRequest struct {

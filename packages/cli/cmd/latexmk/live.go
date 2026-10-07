@@ -158,11 +158,15 @@ func runLive(c *client.Client, request protocol.CompileRequest, opts compileOpti
 		mode = "reuse"
 	}
 	observation := observeLive(ctx, c, request, opts, cancel)
+	creationKey, err := liveIdempotencyKey()
+	if err != nil {
+		return fail(err)
+	}
 	for ctx.Err() == nil {
 		operation, finish := context.WithTimeout(ctx, opts.timeout)
 		session, err := c.CreateSession(
 			operation,
-			protocol.SessionRequest{ProjectID: c.ProjectID, Request: request, Workspace: mode},
+			protocol.SessionRequest{ProjectID: c.ProjectID, Request: request, Workspace: mode, IdempotencyKey: creationKey},
 		)
 		finish()
 		if err != nil {
@@ -184,6 +188,10 @@ func runLive(c *client.Client, request protocol.CompileRequest, opts compileOpti
 			return code
 		}
 		fmt.Fprintln(os.Stderr, "latexmk: session ended; reconnecting with a fresh source snapshot")
+		creationKey, err = liveIdempotencyKey()
+		if err != nil {
+			return fail(err)
+		}
 	}
 	return 0
 }
@@ -253,11 +261,11 @@ func runLiveSession(
 			return err
 		}
 		session = state
-		var nonce [16]byte
-		if _, err := rand.Read(nonce[:]); err != nil {
+		key, err := liveIdempotencyKey()
+		if err != nil {
 			return err
 		}
-		prepared, err := c.PrepareRevision(operation, session, request, frozen, hex.EncodeToString(nonce[:]))
+		prepared, err := c.PrepareRevision(operation, session, request, frozen, key)
 		if err != nil {
 			return err
 		}
@@ -328,10 +336,10 @@ func runLiveSession(
 		if job.ID == lastReported || job.Status != "failed" {
 			return nil
 		}
-		lastReported = job.ID
 		fmt.Fprintf(os.Stderr, "latexmk: revision %d failed; retaining the last successful PDF\n", job.Revision)
 		if job.Result == nil {
 			fmt.Fprintln(os.Stderr, "latexmk:", job.Error)
+			lastReported = job.ID
 			return nil
 		}
 		out, _, err := c.DownloadLiveResult(operation, job, request, opts.outDir)
@@ -339,6 +347,7 @@ func runLiveSession(
 			return err
 		}
 		reportCompile(out, nil, opts)
+		lastReported = job.ID
 		if request.DetectMissingFiles && missingRounds < 3 && len(out.Result.NeedsFiles) > 0 {
 			allowed, err := c.ResolveMissingFiles(out.Result.NeedsFiles, lastFiles, additional)
 			if err != nil {
@@ -409,6 +418,14 @@ func runLiveSession(
 			}
 		}
 	}
+}
+
+func liveIdempotencyKey() (string, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(nonce[:]), nil
 }
 
 func permanentLiveError(err error) bool {

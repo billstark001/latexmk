@@ -110,8 +110,9 @@ func failedOutput(rec record, err error) compile.Output {
 	}
 }
 
-// publishExecution runs under admissionMu after durable result publication. A
-// cancellation cannot interleave with cache publication and terminal transition.
+// publishExecution runs under admissionMu after the terminal success commits.
+// Cancellation cannot overwrite that conditional transition; session closure
+// can still prevent checkpoint publication by removing the session.
 func (m *Manager) publishExecution(ctx context.Context, rec record, workspace *compile.Workspace, e *execution) {
 	if e.cache == nil || !e.output.Result.Success || ctx.Err() != nil {
 		return
@@ -187,6 +188,26 @@ func (m *Manager) clearSessionCacheLocked(s *liveSession) {
 	s.cacheHashes = nil
 	if err := m.projects.DeleteLiveCache(s.ownerID, s.state.ID); err != nil && !errors.Is(err, os.ErrNotExist) {
 		m.logger.Warn("remove session checkpoint", "error", err)
+	}
+}
+
+func (m *Manager) updatePublishedCache(ctx context.Context, rec record, e execution) {
+	if e.cache == nil || !e.output.Result.Success {
+		return
+	}
+	operation, cancel := m.persistenceContext(ctx)
+	defer cancel()
+	current, err := m.load(operation, rec.Job.ID)
+	if err == nil && current.Job.Status == "succeeded" && current.Job.Result != nil {
+		result := *current.Job.Result
+		cache := *e.cache
+		result.CompileCache = &cache
+		result.AuxiliaryExpiresAt = e.output.Result.AuxiliaryExpiresAt
+		current.Job.Result = &result
+		_, err = m.transition(operation, current, "succeeded")
+	}
+	if err != nil {
+		m.logger.Warn("update completed cache accounting", "job_id", rec.Job.ID, "error", err)
 	}
 }
 

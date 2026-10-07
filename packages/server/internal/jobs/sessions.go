@@ -27,6 +27,7 @@ type revisionReceipt struct {
 	jobID   string
 }
 type liveSession struct {
+	creationKey  string
 	subscribers  int
 	cacheExpires time.Time
 	cachePath    string
@@ -45,6 +46,9 @@ type liveSession struct {
 }
 
 func (m *Manager) CreateSession(ctx context.Context, ownerID string, req api.SessionRequest) (api.Session, error) {
+	if err := validateIdempotencyKey(req.IdempotencyKey); err != nil {
+		return api.Session{}, err
+	}
 	if m.cfg.MaxRealtimeSessions <= 0 {
 		return api.Session{}, errors.New("realtime sessions are disabled")
 	}
@@ -70,6 +74,17 @@ func (m *Manager) CreateSession(ctx context.Context, ownerID string, req api.Ses
 	m.admissionMu.Lock()
 	defer m.admissionMu.Unlock()
 	m.expireSessionsLocked(ctx)
+	for _, s := range m.sessions {
+		if s.ownerID != ownerID || s.creationKey != req.IdempotencyKey {
+			continue
+		}
+		expected, _ := json.Marshal(s.request)
+		actual, _ := json.Marshal(req.Request)
+		if s.state.ProjectID != req.ProjectID || s.state.Workspace != req.Workspace || string(expected) != string(actual) {
+			return api.Session{}, errors.New("idempotency key was used for a different session")
+		}
+		return s.state, nil
+	}
 	if len(m.sessions) >= m.cfg.MaxRealtimeSessions {
 		return api.Session{}, ErrSessionCapacity
 	}
@@ -87,8 +102,9 @@ func (m *Manager) CreateSession(ctx context.Context, ownerID string, req api.Ses
 		return api.Session{}, err
 	}
 	s := &liveSession{
-		ownerID: ownerID,
-		request: req.Request,
+		creationKey: req.IdempotencyKey,
+		ownerID:     ownerID,
+		request:     req.Request,
 		state: api.Session{
 			ID:        id,
 			ProjectID: req.ProjectID,
@@ -126,9 +142,8 @@ func (m *Manager) GetSession(ctx context.Context, ownerID, id string) (api.Sessi
 // SubmitRevision atomically chooses the next wanted snapshot. Only one queue
 // token exists per idle session, so rapid replacements cannot fill the channel.
 func (m *Manager) SubmitRevision(ctx context.Context, ownerID, id string, req api.RevisionRequest) (api.Job, error) {
-	if len(req.IdempotencyKey) < 16 || len(req.IdempotencyKey) > 64 ||
-		strings.IndexFunc(req.IdempotencyKey, unicode.IsControl) >= 0 {
-		return api.Job{}, errors.New("idempotencyKey must have 16-64 characters without control characters")
+	if err := validateIdempotencyKey(req.IdempotencyKey); err != nil {
+		return api.Job{}, err
 	}
 	m.admissionMu.Lock()
 	defer m.admissionMu.Unlock()
@@ -236,6 +251,13 @@ func (m *Manager) SubmitRevision(ctx context.Context, ownerID, id string, req ap
 	return rec.Job, nil
 }
 
+func validateIdempotencyKey(key string) error {
+	if len(key) < 16 || len(key) > 64 || strings.IndexFunc(key, unicode.IsControl) >= 0 {
+		return errors.New("idempotencyKey must have 16-64 characters without control characters")
+	}
+	return nil
+}
+
 func (m *Manager) scheduleSessionLocked(s *liveSession) {
 	if s.scheduled || s.state.RunningJobID != "" || s.state.PendingJobID == "" {
 		return
@@ -271,16 +293,25 @@ func (m *Manager) finishSession(ctx context.Context, rec record) {
 	if rec.Job.SessionID == "" {
 		return
 	}
+	job := rec.Job
+	if job.FinishedAt == nil {
+		operation, cancel := m.persistenceContext(ctx)
+		var err error
+		job, err = m.Get(operation, rec.OwnerID, rec.Job.ID)
+		cancel()
+		if err != nil {
+			m.logger.Error("read session completion", "error", err)
+			return
+		}
+	}
+	if job.FinishedAt == nil {
+		return
+	}
 	m.admissionMu.Lock()
 	defer m.admissionMu.Unlock()
 	s := m.sessions[rec.Job.SessionID]
 	if s == nil || s.state.RunningJobID != rec.Job.ID {
 		return
-	}
-	job, err := m.Get(ctx, rec.OwnerID, rec.Job.ID)
-	if err != nil {
-		m.logger.Error("read session completion", "error", err)
-		job = rec.Job
 	}
 	s.state.RunningJobID = ""
 	if job.Status == "succeeded" {
@@ -349,7 +380,11 @@ func (m *Manager) closeSessionLocked(ctx context.Context, s *liveSession) error 
 			return err
 		}
 	}
-	if cancel := m.active[s.state.RunningJobID]; cancel != nil {
+	cancel := m.active[s.state.RunningJobID]
+	m.mu.Lock()
+	_, completing := m.completions[s.state.RunningJobID]
+	m.mu.Unlock()
+	if cancel != nil || completing {
 		rec, err := m.load(ctx, s.state.RunningJobID)
 		if err != nil {
 			return err
@@ -359,7 +394,9 @@ func (m *Manager) closeSessionLocked(ctx context.Context, s *liveSession) error 
 		if _, err := m.transition(ctx, rec, "running"); err != nil {
 			return err
 		}
-		cancel()
+		if cancel != nil {
+			cancel()
+		}
 	}
 	if s.snapshot.ID != "" {
 		m.projects.ReleaseSnapshot(s.snapshot.ID)
@@ -392,10 +429,12 @@ func (m *Manager) maintainSessions(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	defer func() {
+		operation, cancel := m.persistenceContext(ctx)
+		defer cancel()
 		m.admissionMu.Lock()
 		defer m.admissionMu.Unlock()
 		for _, s := range m.sessions {
-			_ = m.closeSessionLocked(context.WithoutCancel(ctx), s)
+			_ = m.closeSessionLocked(operation, s)
 		}
 	}()
 	for {
@@ -403,12 +442,14 @@ func (m *Manager) maintainSessions(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			operation, cancel := m.persistenceContext(ctx)
 			m.admissionMu.Lock()
-			m.expireSessionsLocked(ctx)
+			m.expireSessionsLocked(operation)
 			for _, s := range m.sessions {
 				m.scheduleSessionLocked(s)
 			}
 			m.admissionMu.Unlock()
+			cancel()
 		}
 	}
 }

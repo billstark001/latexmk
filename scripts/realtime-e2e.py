@@ -106,7 +106,7 @@ def main():
                    "interaction": "nonstopmode", "synctex": True, "haltOnError": True,
                    "fileLineError": True, "recordInputs": True,
                    "auxiliary": {"local": "none", "server": "reuse", "serverTTL": "5m"}}
-        session = api("POST", "/v1/sessions", {"projectId": "e2e-paper", "workspace": "reuse", "request": request})
+        session = api("POST", "/v1/sessions", {"projectId": "e2e-paper", "workspace": "reuse", "request": request, "idempotencyKey": secrets.token_hex(16)})
         sid = session["id"]
         revision = 0
 
@@ -280,7 +280,7 @@ def main():
             log.close()
             print("PASS CLI watch, atomic publication, failure recovery and session reconnect", flush=True)
         if args.database_image:
-            session = api("POST", "/v1/sessions", {"projectId": "e2e-paper", "workspace": "reuse", "request": request})
+            session = api("POST", "/v1/sessions", {"projectId": "e2e-paper", "workspace": "reuse", "request": request, "idempotencyKey": secrets.token_hex(16)})
             sid, revision = session["id"], 0
             blocked = submit({"main.tex": source(r"\loop\iftrue\repeat")})
             wait_for(lambda: api("GET", "/v1/jobs/" + blocked["id"])["status"] == "running")

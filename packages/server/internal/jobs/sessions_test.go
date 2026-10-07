@@ -47,8 +47,9 @@ func sessionManager(t *testing.T) (*Manager, api.SessionRequest) {
 	}
 	m := New(cfg, api.Metadata{}, compile.NewRunner(cfg), p, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	return m, api.SessionRequest{
-		ProjectID: "paper",
-		Workspace: "fresh",
+		IdempotencyKey: "session-key-00000001",
+		ProjectID:      "paper",
+		Workspace:      "fresh",
 		Request: api.CompileRequest{
 			ProtocolVersion: 2,
 			Entry:           "main.tex",
@@ -142,6 +143,35 @@ func TestSessionCoalescesWithoutGrowingQueueAndReplaysReceipts(t *testing.T) {
 	}
 	if _, err := m.GetSession(ctx, "owner", s.ID); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatal("closed session remained live")
+	}
+}
+
+func TestSessionCreationReplaysBeforeQuotaAndRejectsChangedPayload(t *testing.T) {
+	m, req := sessionManager(t)
+	m.cfg.MaxRealtimeSessionsPerOwner = 1
+	ctx := context.Background()
+	first, err := m.CreateSession(ctx, "owner", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 8; i++ {
+		replayed, err := m.CreateSession(ctx, "owner", req)
+		if err != nil || replayed.ID != first.ID || len(m.sessions) != 1 {
+			t.Fatalf("ambiguous creation replay = %+v, %v; sessions=%d", replayed, err, len(m.sessions))
+		}
+	}
+	changed := req
+	changed.Request.JobName = "different"
+	if _, err := m.CreateSession(ctx, "owner", changed); err == nil || !strings.Contains(err.Error(), "different session") {
+		t.Fatalf("changed creation payload = %v", err)
+	}
+	foreign, err := m.CreateSession(ctx, "other", req)
+	if err != nil || foreign.ID == first.ID {
+		t.Fatalf("creation key crossed owner boundary: %+v, %v", foreign, err)
+	}
+	req.IdempotencyKey = ""
+	if _, err := m.CreateSession(ctx, "owner", req); err == nil {
+		t.Fatal("creation without a replay key was accepted")
 	}
 }
 
@@ -248,6 +278,7 @@ func TestSessionOwnerQuotaAndAlreadyCancelledPendingClosure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	req.IdempotencyKey = "session-key-00000002"
 	if _, err := m.CreateSession(ctx, "owner", req); !errors.Is(err, ErrSessionCapacity) {
 		t.Fatalf("quota=%v", err)
 	}
@@ -339,6 +370,7 @@ func TestRevisionRateIsSharedAcrossOwnerSessionsAndReceiptsRemainReplayable(t *t
 	if _, err := m.SubmitRevision(ctx, "owner", s.ID, payload); err != nil {
 		t.Fatal("receipt consumed rate budget:", err)
 	}
+	req.IdempotencyKey = "session-key-00000002"
 	other, err := m.CreateSession(ctx, "owner", req)
 	if err != nil {
 		t.Fatal(err)

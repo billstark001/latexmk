@@ -61,6 +61,19 @@ have write deadlines, periodic authentication checks and a four-stream limit per
 session. Closing the CLI releases its session. A disconnected session expires
 unless renewed; a missing session is recreated from current local sources.
 
+Session creation uses an owner-scoped idempotency key retained for the live
+session's lifetime. A lost creation response is retried with the same key and
+payload, so retries do not consume additional session slots. A replacement after
+expiration or restart uses a new key.
+
+Terminal persistence retries run outside the admission lock and have a five-second
+budget, capped by the shutdown timeout. Persistent errors defer completion to a
+bounded recovery queue; workers can continue serving other sessions, while the
+affected session keeps its running slot until completion is durably recorded.
+Deferred completions count against queue capacity. After recovery, immutable
+results can still be published, but a discarded attempt's checkpoint is not saved.
+Running cancellation remains available for a deferred completion.
+
 ## Fresh and reusable workspaces
 
 `--realtime --server-cache none` creates a fresh session. Without an isolated

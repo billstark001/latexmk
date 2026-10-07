@@ -223,8 +223,11 @@ All session endpoints use the existing compile authentication and owner boundary
 Session availability is advertised by `realtimeSessions`, `isolatedWorkspaces`,
 `maxRealtimeSessions` and `sessionTTLMS` in metadata. See [realtime behavior](REALTIME.md).
 
-- `POST /v1/sessions`: strict JSON `{ "projectId": "paper", "workspace": "fresh|reuse", "request": COMPILE_REQUEST }`.
+- `POST /v1/sessions`: strict JSON `{ "projectId": "paper", "workspace": "fresh|reuse", "request": COMPILE_REQUEST, "idempotencyKey": "16-to-64-characters" }`.
   Returns 201 and `Location`. Compile options are immutable for its lifetime.
+  Replaying the same key and payload returns the same live session, including
+  when the first response was lost. Keys are scoped to the owner and retained
+  for the session lifetime; different payloads with the same key return 400.
 - `GET /v1/sessions/:id`: renews the idle lease and returns revision, latest/running/
   pending job IDs, last successful job ID, event sequence and expiration.
 - `DELETE /v1/sessions/:id`: cancels pending/running work and releases checkpoint
