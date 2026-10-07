@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -89,7 +90,7 @@ func Run(
 		members = append(members, archiveMember{name: "checkpoint.tar.gz", file: file})
 	}
 	inputPath := filepath.Join(destination, "input.tar.gz")
-	if err := writeArchiveFile(inputPath, members, cfg.RunnerWorkspaceBytes); err != nil {
+	if err := writeArchiveFile(inputPath, members, cfg.RunnerWorkspaceBytes, gzip.BestSpeed); err != nil {
 		return compile.Output{}, "", err
 	}
 	input, err := os.Open(inputPath)

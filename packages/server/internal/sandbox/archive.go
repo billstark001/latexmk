@@ -22,8 +22,11 @@ type archiveMember struct {
 	modTime time.Time
 }
 
-func writeArchive(w io.Writer, members []archiveMember) error {
-	gz := gzip.NewWriter(w)
+func writeArchive(w io.Writer, members []archiveMember, compression int) error {
+	gz, err := gzip.NewWriterLevel(w, compression)
+	if err != nil {
+		return err
+	}
 	tw := tar.NewWriter(gz)
 	for _, member := range members {
 		f, err := member.file.Open()
@@ -106,7 +109,7 @@ func describeFile(root, name string, maxBytes int64) (compile.File, error) {
 	return compile.File{Workspace: root, RelativePath: filepath.ToSlash(name), Size: size, SHA256: hash}, err
 }
 
-func writeArchiveFile(path string, members []archiveMember, maxBytes int64) error {
+func writeArchiveFile(path string, members []archiveMember, maxBytes int64, compression int) error {
 	scoped, err := safefs.Open(filepath.Dir(path))
 	if err != nil {
 		return err
@@ -115,7 +118,7 @@ func writeArchiveFile(path string, members []archiveMember, maxBytes int64) erro
 	return scoped.WriteExclusive(
 		filepath.Base(path),
 		maxBytes,
-		func(w io.Writer) error { return writeArchive(w, members) },
+		func(w io.Writer) error { return writeArchive(w, members, compression) },
 	)
 }
 
@@ -128,5 +131,5 @@ func ArchiveCheckpoint(root, destination string, maxFiles int, maxBytes int64) e
 	if err != nil {
 		return err
 	}
-	return writeArchiveFile(destination, members, maxBytes+(1<<20))
+	return writeArchiveFile(destination, members, maxBytes+(1<<20), gzip.BestSpeed)
 }

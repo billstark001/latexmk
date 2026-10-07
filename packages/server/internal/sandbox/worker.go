@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -210,7 +211,12 @@ func runWorker(
 		state, err := collectState(build, req.MaxFiles, req.MaxStateBytes)
 		if err == nil {
 			checkpointPath := filepath.Join(root, "checkpoint.tar.gz")
-			if err := writeArchiveFile(checkpointPath, state, req.MaxStateBytes+(1<<20)); err == nil {
+			if err := writeArchiveFile(
+				checkpointPath,
+				state,
+				req.MaxStateBytes+(1<<20),
+				gzip.BestSpeed,
+			); err == nil {
 				checkpoint, err := describeFile(root, "checkpoint.tar.gz", req.MaxStateBytes+(1<<20))
 				if err == nil {
 					members = append(members, archiveMember{name: "checkpoint.tar.gz", file: checkpoint})
@@ -218,7 +224,9 @@ func runWorker(
 			}
 		}
 	}
-	return writeArchive(output, members)
+	// Both members are already compressed; keep the gzip envelope without
+	// spending CPU recompressing them. Extraction and limits remain identical.
+	return writeArchive(output, members, gzip.NoCompression)
 }
 
 func workerError(err error) error { return fmt.Errorf("isolated compiler: %w", err) }

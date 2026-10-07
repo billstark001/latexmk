@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"os"
@@ -66,7 +67,7 @@ func workerInput(t *testing.T, source, checkpoint string, export bool) []byte {
 		members = append(members, archiveMember{name: "checkpoint.tar.gz", file: cached})
 	}
 	var input bytes.Buffer
-	if err := writeArchive(&input, members); err != nil {
+	if err := writeArchive(&input, members, gzip.DefaultCompression); err != nil {
 		t.Fatal(err)
 	}
 	return input.Bytes()
