@@ -90,6 +90,9 @@ Running cancellation remains available for a deferred completion.
 Successful job reads and idempotent revision replays wait for cache publication
 and its final accounting, respecting the request context. This wait does not hold
 the global admission lock; other sessions remain available during recovery.
+Explicit closure and expiry cleanup also have bounded persistence budgets; one
+shared budget covers an entire expiry sweep. A failed durable cleanup retains its
+unfinished lease/job for retry rather than forgetting it.
 
 ## Fresh and reusable workspaces
 

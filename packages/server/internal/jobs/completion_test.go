@@ -101,6 +101,48 @@ type pruneFaultStore struct {
 	started chan struct{}
 }
 
+type closeFaultStore struct{ *store.Postgres }
+
+func (s *closeFaultStore) GetJob(ctx context.Context, _ string) (store.CompileJob, error) {
+	<-ctx.Done()
+	return store.CompileJob{}, ctx.Err()
+}
+
+func TestExpiredLeasePersistenceHasOneBoundedSweepBudget(t *testing.T) {
+	m, req := sessionManager(t)
+	m.cfg.ShutdownTimeout = 40 * time.Millisecond
+	first, err := m.CreateSession(context.Background(), "owner", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := m.CreateSession(context.Background(), "other-owner", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both expired sessions require a durable read. Their shared sweep should
+	// spend one budget, rather than restarting it for every failed session.
+	for _, id := range []string{first.ID, second.ID} {
+		live := m.sessions[id]
+		live.state.ExpiresAt = time.Now().Add(-time.Second)
+		live.state.RunningJobID = "job_" + id
+		m.active[live.state.RunningJobID] = func() {}
+	}
+	m.db = &closeFaultStore{}
+	request, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	m.admissionMu.Lock()
+	m.expireSessionsLocked(request)
+	m.admissionMu.Unlock()
+	if elapsed := time.Since(started); elapsed >= 100*time.Millisecond {
+		t.Fatalf("expired leases monopolized admission: %v", elapsed)
+	}
+	// Cleanup failure retains the lease/job for a later durable retry.
+	if len(m.sessions) != 2 {
+		t.Fatal("failed lease cleanup forgot unfinished durable jobs")
+	}
+}
+
 type historyPublicationStore struct {
 	*store.Postgres
 	manager *Manager

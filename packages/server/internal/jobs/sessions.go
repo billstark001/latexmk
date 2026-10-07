@@ -387,11 +387,13 @@ func (m *Manager) SessionEvents(ownerID, id string, after uint64) ([]protocol.Se
 func (m *Manager) CloseSession(ctx context.Context, ownerID, id string) error {
 	m.admissionMu.Lock()
 	defer m.admissionMu.Unlock()
+	operation, cancel := m.persistenceContext(ctx)
+	defer cancel()
 	s, err := m.sessionLocked(ownerID, id)
 	if err != nil {
 		return err
 	}
-	return m.closeSessionLocked(ctx, s)
+	return m.closeSessionLocked(operation, s)
 }
 
 func (m *Manager) closeSessionLocked(ctx context.Context, s *liveSession) error {
@@ -428,6 +430,11 @@ func (m *Manager) closeSessionLocked(ctx context.Context, s *liveSession) error 
 }
 
 func (m *Manager) expireSessionsLocked(ctx context.Context) {
+	// Lease cleanup may touch durable running jobs. One shared budget bounds an
+	// entire sweep so an expired session cannot indefinitely hold admission
+	// during a database outage, including sweeps triggered by other owners.
+	operation, cancel := m.persistenceContext(ctx)
+	defer cancel()
 	for owner, budget := range m.revisionBudgets {
 		if time.Since(budget.updated) > m.cfg.RealtimeSessionTTL {
 			delete(m.revisionBudgets, owner)
@@ -438,7 +445,7 @@ func (m *Manager) expireSessionsLocked(ctx context.Context) {
 			m.clearSessionCacheLocked(s)
 		}
 		if time.Now().After(s.state.ExpiresAt) {
-			if err := m.closeSessionLocked(ctx, s); err != nil {
+			if err := m.closeSessionLocked(operation, s); err != nil {
 				m.logger.Warn("expire session", "error", err)
 			}
 		}
