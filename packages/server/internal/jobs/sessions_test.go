@@ -59,6 +59,30 @@ func sessionManager(t *testing.T) (*Manager, protocol.SessionRequest) {
 	}
 }
 
+func TestSessionSubscriptionReleaseIsIdempotent(t *testing.T) {
+	m, req := sessionManager(t)
+	s, err := m.CreateSession(context.Background(), "owner", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := m.SubscribeSession("owner", s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	release()
+	for i := 0; i < 4; i++ {
+		release, err := m.SubscribeSession("owner", s.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer release()
+	}
+	if _, err := m.SubscribeSession("owner", s.ID); !errors.Is(err, ErrSessionCapacity) {
+		t.Fatalf("double release bypassed subscription capacity: %v", err)
+	}
+}
+
 func planRevision(
 	t *testing.T,
 	m *Manager,

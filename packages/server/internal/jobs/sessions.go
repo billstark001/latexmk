@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -20,6 +21,14 @@ var (
 	ErrSessionCapacity  = errors.New("realtime session capacity exhausted")
 	ErrQueueCapacity    = errors.New("compile queue is full")
 	ErrRevisionConflict = errors.New("session revision conflict; refresh session state")
+)
+
+const (
+	maxSessionReceipts    = 128
+	maxSessionEvents      = 64
+	maxSessionSubscribers = 4
+	maxSessionRevision    = 1 << 31
+	revisionBurstSeconds  = 2
 )
 
 type revisionReceipt struct {
@@ -518,7 +527,8 @@ func (m *Manager) validateSessionJobLocked(rec record) error {
 	return nil
 }
 
-// SubscribeSession bounds streaming connections independently from job workers.
+// SubscribeSession reserves one owner-scoped streaming connection independently
+// from job workers. Call the returned, idempotent release function on every exit.
 func (m *Manager) SubscribeSession(ownerID, id string) (func(), error) {
 	m.admissionMu.Lock()
 	defer m.admissionMu.Unlock()
@@ -526,11 +536,15 @@ func (m *Manager) SubscribeSession(ownerID, id string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	if s.subscribers >= 4 {
+	if s.subscribers >= maxSessionSubscribers {
 		return nil, ErrSessionCapacity
 	}
 	s.subscribers++
-	return func() { m.admissionMu.Lock(); defer m.admissionMu.Unlock(); s.subscribers-- }, nil
+	return sync.OnceFunc(func() {
+		m.admissionMu.Lock()
+		defer m.admissionMu.Unlock()
+		s.subscribers--
+	}), nil
 }
 
 type revisionBudget struct {
