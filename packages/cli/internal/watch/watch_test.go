@@ -17,7 +17,7 @@ func TestTrackerDebouncesRapidChanges(t *testing.T) {
 	if err := os.WriteFile(file, []byte("one"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	tracker, err := New([]Target{{Name: "main.tex", Path: file}}, 5*time.Millisecond, 25*time.Millisecond)
+	tracker, err := New([]Target{{Name: "main.tex", Path: file}}, 5*time.Millisecond, 25*time.Millisecond, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,6 +63,7 @@ func TestTrackerDetectsCreationAndDeletion(t *testing.T) {
 		[]Target{{Name: ".gitignore", Path: missing}, {Name: "chapter.tex", Path: present}},
 		5*time.Millisecond,
 		10*time.Millisecond,
+		time.Second,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +88,7 @@ func TestTrackerDetectsCreationAndDeletion(t *testing.T) {
 
 func TestRefreshDetectsNewMatchingFile(t *testing.T) {
 	root := t.TempDir()
-	tracker, err := New(nil, 10*time.Millisecond, 10*time.Millisecond)
+	tracker, err := New(nil, 10*time.Millisecond, 10*time.Millisecond, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +113,7 @@ func TestNativeWatchDetectsAtomicReplacementWithUnchangedMetadata(t *testing.T) 
 		t.Fatal(err)
 	}
 	info, _ := os.Stat(file)
-	tracker, err := New([]Target{{Name: "main.tex", Path: file}}, time.Hour, 10*time.Millisecond)
+	tracker, err := New([]Target{{Name: "main.tex", Path: file}}, time.Hour, 10*time.Millisecond, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,11 +155,10 @@ func TestMaximumWaitBoundsContinuousEdits(t *testing.T) {
 	if err := os.WriteFile(file, []byte("one"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	tracker, err := New([]Target{{Name: "main.tex", Path: file}}, 5*time.Millisecond, time.Second)
+	tracker, err := New([]Target{{Name: "main.tex", Path: file}}, 5*time.Millisecond, time.Second, 70*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tracker.MaxWait = 70 * time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	go func() {
@@ -179,7 +179,7 @@ func TestMaximumWaitBoundsContinuousEdits(t *testing.T) {
 }
 
 func TestRefreshFailureStopsInsteadOfUsingStalePolicy(t *testing.T) {
-	tracker, err := New(nil, time.Millisecond, 0)
+	tracker, err := New(nil, time.Millisecond, 0, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestBatchedEventsRefreshOnceAfterSaveBurst(t *testing.T) {
 		t.Fatal(err)
 	}
 	targets := []Target{{Name: "main.tex", Path: file}}
-	tracker, err := New(targets, 5*time.Millisecond, 80*time.Millisecond)
+	tracker, err := New(targets, 5*time.Millisecond, 80*time.Millisecond, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestBatchedReconciliationDiscoversNewMembers(t *testing.T) {
 		t.Fatal(err)
 	}
 	targets := []Target{{Name: "main.tex", Path: file}}
-	tracker, err := New(targets, 10*time.Millisecond, 20*time.Millisecond)
+	tracker, err := New(targets, 10*time.Millisecond, 20*time.Millisecond, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

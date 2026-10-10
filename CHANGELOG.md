@@ -45,6 +45,12 @@ numbers.
 
 ## Unreleased
 
+### Added
+
+- Configure shared ordinary-watch and realtime timing through
+  `watch.interval`, `watch.debounce`, and `watch.maxWait`, with environment and
+  CLI overrides. The default maximum wait is independently fixed at 2.5 seconds.
+
 ### Fixed
 
 - Renew realtime leases only through explicit client renewal or new revision

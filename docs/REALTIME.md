@@ -8,6 +8,8 @@ Native save events are coalesced before dependency discovery. Selected files
 still use the configured polling interval, with full membership reconciliation
 every two seconds and after each settled burst. Upload policy and captured
 content are fully checked for every submitted snapshot.
+`watch.interval`, `watch.debounce`, and `watch.maxWait` configure both realtime
+and ordinary watch timing; see [watch configuration](CONFIGURATION.md#watching-changes).
 The CLI retains one private captured snapshot during a live session. Unchanged
 files of at least 256 KiB are linked into the next spool only after their current
 source content hashes match. Changed files and filesystems without hard links

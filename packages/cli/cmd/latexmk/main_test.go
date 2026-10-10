@@ -197,19 +197,25 @@ func TestParseCompileArgsWatchOptions(t *testing.T) {
 		timeout:       time.Minute,
 		watchInterval: 500 * time.Millisecond,
 		watchDebounce: 500 * time.Millisecond,
+		watchMaxWait:  time.Second,
 	}
 	if err := parseCompileArgs(
-		[]string{"--watch", "--watch-interval", "25ms", "--watch-debounce=75ms", "main.tex"},
+		[]string{"--watch", "--watch-interval", "25ms", "--watch-debounce=75ms", "--watch-max-wait=100ms", "main.tex"},
 		&opts,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if !opts.watch || opts.watchInterval != 25*time.Millisecond || opts.watchDebounce != 75*time.Millisecond {
+	if !opts.watch || opts.watchInterval != 25*time.Millisecond || opts.watchDebounce != 75*time.Millisecond ||
+		opts.watchMaxWait != 100*time.Millisecond {
 		t.Fatalf("watch options = %#v", opts)
 	}
 	opts.watchInterval = 0
 	if err := parseCompileArgs([]string{"--watch", "main.tex"}, &opts); err == nil {
 		t.Fatal("expected zero watch interval to fail")
+	}
+	opts.watchInterval, opts.watchMaxWait = time.Second, 0
+	if err := parseCompileArgs([]string{"--realtime", "main.tex"}, &opts); err == nil {
+		t.Fatal("expected zero realtime max wait to fail")
 	}
 }
 

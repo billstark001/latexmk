@@ -160,6 +160,7 @@ func TestRealtimeSettingsChangeCancelsInFlightOperations(t *testing.T) {
 			projectRoot:   root,
 			watchInterval: 20 * time.Millisecond,
 			watchDebounce: 10 * time.Millisecond,
+			watchMaxWait:  time.Second,
 			controlFiles:  []string{cfg},
 		},
 		cancel,
@@ -230,8 +231,14 @@ func TestRealtimeUploadPolicyChangesCancelInFlightOperations(t *testing.T) {
 			ctx, cancel := context.WithCancelCause(context.Background())
 			defer cancel(nil)
 			observation := observeLive(ctx, c, protocol.CompileRequest{Entry: "main.tex", Engine: "xelatex"},
-				compileOptions{projectRoot: root, manifestFile: tc.manifest, gitIgnore: tc.git,
-					watchInterval: 20 * time.Millisecond, watchDebounce: 10 * time.Millisecond}, cancel)
+				compileOptions{
+					projectRoot:   root,
+					manifestFile:  tc.manifest,
+					gitIgnore:     tc.git,
+					watchInterval: 20 * time.Millisecond,
+					watchDebounce: 10 * time.Millisecond,
+					watchMaxWait:  time.Second,
+				}, cancel)
 			if err := os.WriteFile(policy, []byte("# changed policy\n"), 0600); err != nil {
 				t.Fatal(err)
 			}

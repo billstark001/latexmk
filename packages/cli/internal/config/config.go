@@ -30,7 +30,20 @@ type Target struct {
 	IncludeFiles []string `json:"includeFiles,omitempty"`
 }
 
+type WatchConfig struct {
+	Interval string `json:"interval,omitempty"`
+	Debounce string `json:"debounce,omitempty"`
+	MaxWait  string `json:"maxWait,omitempty"`
+}
+
+type WatchSettings struct {
+	Interval time.Duration
+	Debounce time.Duration
+	MaxWait  time.Duration
+}
+
 type FileConfig struct {
+	Watch         *WatchConfig `json:"watch,omitempty"`
 	tokenSource   *ValueSource
 	TokenMode     string            `json:"tokenMode,omitempty"`
 	TokenFile     string            `json:"tokenFile,omitempty"`
@@ -58,6 +71,7 @@ type FileConfig struct {
 }
 
 type Resolved struct {
+	Watch         WatchSettings
 	TokenMode     string
 	TokenSource   string
 	EnvPath       string
@@ -126,6 +140,7 @@ func DefaultDeny() []string {
 func load(start string, envOverride *string) (Resolved, error) {
 	respectGitIgnore := true
 	cfg := FileConfig{
+		Watch:     &WatchConfig{Interval: "500ms", Debounce: "500ms", MaxWait: "2.5s"},
 		TokenMode: "auto", UnmatchedGlob: "error",
 		Server:           ServerSources{LiteralSource("http://127.0.0.1:8080")},
 		RootMode:         "entry",
@@ -257,6 +272,10 @@ func load(start string, envOverride *string) (Resolved, error) {
 	if timeout <= 0 {
 		return Resolved{}, errors.New("timeout must be positive")
 	}
+	watch, err := resolveWatch(cfg.Watch, get)
+	if err != nil {
+		return Resolved{}, err
+	}
 
 	root := cfg.ProjectRoot
 	if root != "" && !filepath.IsAbs(root) {
@@ -279,6 +298,7 @@ func load(start string, envOverride *string) (Resolved, error) {
 	}
 	respectGitIgnore = cfg.RespectGitIgnore == nil || *cfg.RespectGitIgnore
 	return Resolved{
+		Watch:         watch,
 		TokenMode:     cfg.TokenMode,
 		EnvPath:       envPath,
 		IgnoreFiles:   cfg.IgnoreFiles,
@@ -325,6 +345,37 @@ func load(start string, envOverride *string) (Resolved, error) {
 		ConfigPath:         path,
 		UserConfigPath:     userPath,
 	}, nil
+}
+
+func resolveWatch(cfg *WatchConfig, get func(string) string) (WatchSettings, error) {
+	if cfg == nil {
+		return WatchSettings{}, errors.New("watch must be an object")
+	}
+	settings := WatchSettings{}
+	for _, field := range []struct {
+		name, env, value string
+		destination      *time.Duration
+		allowZero        bool
+	}{
+		{"interval", "LATEXMK_WATCH_INTERVAL", cfg.Interval, &settings.Interval, false},
+		{"debounce", "LATEXMK_WATCH_DEBOUNCE", cfg.Debounce, &settings.Debounce, true},
+		{"maxWait", "LATEXMK_WATCH_MAX_WAIT", cfg.MaxWait, &settings.MaxWait, false},
+	} {
+		value := field.value
+		if override := get(field.env); override != "" {
+			value = override
+		}
+		duration, err := time.ParseDuration(value)
+		if err != nil || duration < 0 || (!field.allowZero && duration == 0) {
+			requirement := "positive"
+			if field.allowZero {
+				requirement = "nonnegative"
+			}
+			return WatchSettings{}, fmt.Errorf("watch.%s must be a valid %s duration", field.name, requirement)
+		}
+		*field.destination = duration
+	}
+	return settings, nil
 }
 
 func mergeFile(path string, cfg *FileConfig) error {

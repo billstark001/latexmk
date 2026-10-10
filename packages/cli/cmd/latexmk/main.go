@@ -61,6 +61,7 @@ type compileOptions struct {
 	controlFiles  []string
 	watchInterval time.Duration
 	watchDebounce time.Duration
+	watchMaxWait  time.Duration
 	insecure      bool
 	entry         string
 	exclude       []string
@@ -173,8 +174,9 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		exclude:       cfg.Exclude,
 		configPath:    cfg.ConfigPath,
 		dryRun:        listOnly,
-		watchInterval: 500 * time.Millisecond,
-		watchDebounce: 500 * time.Millisecond,
+		watchInterval: cfg.Watch.Interval,
+		watchDebounce: cfg.Watch.Debounce,
+		watchMaxWait:  cfg.Watch.MaxWait,
 	}
 	if forcedEngine != "" {
 		opts.engine = forcedEngine
@@ -711,6 +713,15 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 			}
 		case a == "--insecure-skip-verify":
 			opts.insecure = true
+		case a == "--watch-max-wait" || strings.HasPrefix(a, "--watch-max-wait="):
+			v, err := value("--watch-max-wait")
+			if err != nil {
+				return err
+			}
+			opts.watchMaxWait, err = time.ParseDuration(v)
+			if err != nil {
+				return err
+			}
 		case a == "--version":
 			return errors.New("--version must be used without a compile target")
 		case strings.HasPrefix(a, "-"):
@@ -733,6 +744,9 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 	}
 	if opts.watch && opts.watchDebounce < 0 {
 		return errors.New("watch debounce cannot be negative")
+	}
+	if opts.watch && opts.watchMaxWait <= 0 {
+		return errors.New("watch max wait must be positive")
 	}
 	return nil
 }
@@ -1394,6 +1408,7 @@ Compile options:
   --watch                      Ordinary jobs after changes; prefer --realtime
   --watch-interval 500ms       Refresh selection and poll selected files
   --watch-debounce 500ms       Wait for rapid edits to settle before compiling
+  --watch-max-wait 2.5s        Compile after this bound even during continuous edits
 
 The executable may be symlinked as xelatex, lualatex, or pdflatex.
 Configuration is read from user/project JSON, .env.latexmk, environment and CLI flags.

@@ -29,7 +29,7 @@ func newSourceTracker(
 	extra []projectwatch.Target,
 ) (*sourceTracker, error) {
 	targets := append(watchTargets(opts, files), extra...)
-	tracker, err := projectwatch.New(targets, opts.watchInterval, opts.watchDebounce)
+	tracker, err := projectwatch.New(targets, opts.watchInterval, opts.watchDebounce, opts.watchMaxWait)
 	if err != nil {
 		return nil, err
 	}

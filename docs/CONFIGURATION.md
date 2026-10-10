@@ -34,6 +34,27 @@ through the process environment are relative to the current working directory.
 `projectRoot` and `outDir` in JSON are relative to their declaring JSON file.
 Manifest entries, ignore patterns, and `includeFiles` are project-root-relative.
 
+## Watching changes
+
+Ordinary `watch` / `--watch` and `--realtime` share the same timing configuration:
+
+```json
+{
+  "watch": { "interval": "500ms", "debounce": "500ms", "maxWait": "2.5s" }
+}
+```
+
+`interval` controls selected-file polling. `debounce` waits for a quiet save burst;
+zero disables that wait. `maxWait` bounds the wait during continuous edits and
+can be shorter than `debounce`. Interval and maxWait must be positive Go durations.
+The values above are the defaults; maxWait is independent of debounce.
+
+User/project JSON merges these fields individually. `LATEXMK_WATCH_INTERVAL`,
+`LATEXMK_WATCH_DEBOUNCE`, and `LATEXMK_WATCH_MAX_WAIT` override JSON through the
+usual dotenv/process precedence. `--watch-interval`, `--watch-debounce`, and
+`--watch-max-wait` take final precedence. These settings do not enable either mode;
+select the mode explicitly on the command line.
+
 ## Declaring value sources
 
 `server` accepts a string, a source object, or an array mixing strings and source

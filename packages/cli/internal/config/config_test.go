@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func isolateUserConfig(t *testing.T) string {
@@ -25,6 +26,50 @@ func TestLoadDefaultsToAutomaticDependencySelection(t *testing.T) {
 	}
 	if cfg.UploadMode != "auto" {
 		t.Fatalf("upload mode = %q, want auto", cfg.UploadMode)
+	}
+}
+
+func TestWatchSettingsMergePerFieldAndEnvironment(t *testing.T) {
+	user := isolateUserConfig(t)
+	if err := os.MkdirAll(filepath.Join(user, "latexmk"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(user, "latexmk", UserFileName),
+		[]byte(`{"watch":{"interval":"100ms","debounce":"200ms","maxWait":"3s"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, FileName), []byte(`{"watch":{"debounce":"0s"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, EnvFileName), []byte("LATEXMK_WATCH_MAX_WAIT=4s\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LATEXMK_WATCH_INTERVAL", "50ms")
+	t.Setenv("LATEXMK_WATCH_MAX_WAIT", "5s")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Watch != (WatchSettings{Interval: 50 * time.Millisecond, Debounce: 0, MaxWait: 5 * time.Second}) {
+		t.Fatalf("watch settings: %+v", cfg.Watch)
+	}
+}
+
+func TestWatchSettingsRejectInvalidDurations(t *testing.T) {
+	for _, setting := range []string{
+		`null`, `{"interval":"0s"}`, `{"debounce":"-1ms"}`, `{"maxWait":"0s"}`, `{"maxWait":"never"}`,
+	} {
+		t.Run(setting, func(t *testing.T) {
+			isolateUserConfig(t)
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, FileName), []byte(`{"watch":`+setting+`}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(root); err == nil {
+				t.Fatal("accepted invalid watch settings")
+			}
+		})
 	}
 }
 

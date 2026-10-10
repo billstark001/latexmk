@@ -37,12 +37,15 @@ type Tracker struct {
 	debounce        time.Duration
 }
 
-func New(targets []Target, interval, debounce time.Duration) (*Tracker, error) {
+func New(targets []Target, interval, debounce, maxWait time.Duration) (*Tracker, error) {
 	if interval <= 0 {
 		return nil, errors.New("watch interval must be positive")
 	}
 	if debounce < 0 {
 		return nil, errors.New("watch debounce cannot be negative")
+	}
+	if maxWait <= 0 {
+		return nil, errors.New("watch max wait must be positive")
 	}
 	ordered, err := normalizeTargets(targets)
 	if err != nil {
@@ -53,7 +56,7 @@ func New(targets []Target, interval, debounce time.Duration) (*Tracker, error) {
 		states:   make(map[string]fileState, len(ordered)),
 		interval: interval,
 		debounce: debounce,
-		MaxWait:  max(2*time.Second, 5*debounce),
+		MaxWait:  maxWait,
 	}
 	for _, target := range ordered {
 		tracker.states[target.Path] = statFile(target.Path)

@@ -299,7 +299,10 @@ and submits ordinary independent jobs.
 
 `latexmk watch main.tex` performs one compile immediately, then polls only the
 selected dependency set. The default interval and debounce are both 500 ms and
-can be changed with `--watch-interval` and `--watch-debounce`. Native notification
+can be changed with `--watch-interval` and `--watch-debounce`. `--watch-max-wait`
+bounds continuous save bursts, defaulting to 2.5 seconds independently of debounce.
+All three also use the shared [`watch` configuration](CONFIGURATION.md#watching-changes).
+Native notification
 hints are backed by polling for paths and Docker bind mounts that do not deliver
 reliable events.
 
