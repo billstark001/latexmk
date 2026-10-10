@@ -4,9 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
-	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -109,32 +108,15 @@ func SaveCachedInputs(root, entry, engine string, inputFiles []string) error {
 
 func readCache(root string) (cacheFile, bool, error) {
 	var cache cacheFile
-	cacheDir := filepath.Join(root, cacheDirName)
-	dirInfo, err := os.Lstat(cacheDir)
-	if os.IsNotExist(err) {
+	fs, err := safefs.Open(root)
+	if err != nil {
+		return cache, false, fmt.Errorf("open project root: %w", err)
+	}
+	defer func() { _ = fs.Close() }()
+	payload, err := fs.ReadLimited(cacheDirName+"/"+cacheFileName, maxCacheBytes)
+	if errors.Is(err, os.ErrNotExist) {
 		return cache, false, nil
 	}
-	if err != nil {
-		return cache, false, fmt.Errorf("inspect dependency cache directory: %w", err)
-	}
-	if dirInfo.Mode()&os.ModeSymlink != 0 || !dirInfo.IsDir() {
-		return cache, false, errors.New("dependency cache directory is not a real directory")
-	}
-	cachePath := filepath.Join(cacheDir, cacheFileName)
-	info, err := os.Lstat(cachePath)
-	if os.IsNotExist(err) {
-		return cache, false, nil
-	}
-	if err != nil {
-		return cache, false, fmt.Errorf("inspect dependency cache: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return cache, false, errors.New("dependency cache is not a regular file")
-	}
-	if info.Size() > maxCacheBytes {
-		return cache, false, fmt.Errorf("dependency cache exceeds %d bytes", maxCacheBytes)
-	}
-	payload, err := os.ReadFile(cachePath)
 	if err != nil {
 		return cache, false, fmt.Errorf("read dependency cache: %w", err)
 	}
@@ -165,18 +147,6 @@ func readCache(root string) (cacheFile, bool, error) {
 }
 
 func writeCache(root string, cache cacheFile) error {
-	cacheDir := filepath.Join(root, cacheDirName)
-	info, err := os.Lstat(cacheDir)
-	switch {
-	case os.IsNotExist(err):
-		if err := os.Mkdir(cacheDir, 0o700); err != nil {
-			return fmt.Errorf("create dependency cache directory: %w", err)
-		}
-	case err != nil:
-		return fmt.Errorf("inspect dependency cache directory: %w", err)
-	case info.Mode()&os.ModeSymlink != 0 || !info.IsDir():
-		return errors.New("dependency cache directory is not a real directory")
-	}
 	payload, err := json.MarshalIndent(cache, "", "  ")
 	if err != nil {
 		return err
@@ -185,44 +155,16 @@ func writeCache(root string, cache cacheFile) error {
 	if len(payload) > maxCacheBytes {
 		return fmt.Errorf("dependency cache exceeds %d bytes", maxCacheBytes)
 	}
-	tmp, err := os.CreateTemp(cacheDir, ".dependencies-*")
+	fs, err := safefs.Open(root)
 	if err != nil {
-		return err
+		return fmt.Errorf("open project root: %w", err)
 	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
+	defer func() { _ = fs.Close() }()
+	_, err = fs.WriteAtomic(cacheDirName+"/"+cacheFileName, maxCacheBytes, func(writer io.Writer) error {
+		_, err := writer.Write(payload)
 		return err
-	}
-	if _, err := tmp.Write(payload); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	cachePath := filepath.Join(cacheDir, cacheFileName)
-	if existing, err := os.Lstat(cachePath); err == nil {
-		if existing.Mode()&os.ModeSymlink != 0 || !existing.Mode().IsRegular() {
-			return errors.New("dependency cache target is not a regular file")
-		}
-		if runtime.GOOS == "windows" {
-			if err := os.Remove(cachePath); err != nil {
-				return err
-			}
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	if err := os.Rename(tmpName, cachePath); err != nil {
-		return err
-	}
-	return nil
+	})
+	return err
 }
 
 // Engine keys are opaque registry names. The complete cache size already bounds
