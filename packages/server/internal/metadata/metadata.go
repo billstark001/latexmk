@@ -3,9 +3,11 @@ package metadata
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/billstark001/latexmk/packages/server/internal/config"
@@ -20,31 +22,61 @@ type BuildInfo struct {
 	BuildDate string
 }
 
+const (
+	maxConcurrentProbes  = 4
+	versionProbeTimeout  = 3 * time.Second
+	maxVersionProbeBytes = 4096
+	maxVersionLineBytes  = 300
+)
+
+type toolProbe struct {
+	command engine.Command
+	names   []string
+}
+
+// The callback must be safe for concurrent use. Exact executable/argument pairs
+// share one probe, including aliases registered under different engine names.
 func collectToolchain(probe func(string, ...string) string) map[string]string {
-	toolchain := map[string]string{}
-	for _, tool := range []struct {
-		name string
-		args []string
-	}{
-		{"latexmk", []string{"-v"}},
-		{"biber", []string{"--version"}},
-		{"kpsewhich", []string{"--version"}},
-	} {
-		if line := probe(tool.name, tool.args...); line != "" {
-			toolchain[tool.name] = line
+	var probes []toolProbe
+	indices := make(map[string]int)
+	add := func(name string, command engine.Command) {
+		raw, _ := json.Marshal(command)
+		key := string(raw)
+		if index, exists := indices[key]; exists {
+			probes[index].names = append(probes[index].names, name)
+			return
 		}
+		indices[key] = len(probes)
+		probes = append(probes, toolProbe{command: command, names: []string{name}})
+	}
+	for _, tool := range []engine.Command{{Name: "latexmk", Args: []string{"-v"}}, {Name: "biber", Args: []string{"--version"}}, {Name: "kpsewhich", Args: []string{"--version"}}} {
+		add(tool.Name, tool)
 	}
 	for _, name := range engine.Default.Names() {
 		driver, _ := engine.Default.Lookup(name)
-		command := driver.VersionProbe()
-		if line := probe(command.Name, command.Args...); line != "" {
-			toolchain[name] = line
+		add(name, driver.VersionProbe())
+	}
+	results := make([]string, len(probes))
+	slots := make(chan struct{}, maxConcurrentProbes)
+	var group sync.WaitGroup
+	for index, task := range probes {
+		slots <- struct{}{}
+		group.Go(func() { defer func() { <-slots }(); results[index] = probe(task.command.Name, task.command.Args...) })
+	}
+	group.Wait()
+	toolchain := make(map[string]string, len(probes))
+	for index, task := range probes {
+		if results[index] != "" {
+			for _, name := range task.names {
+				toolchain[name] = results[index]
+			}
 		}
 	}
-
 	return toolchain
 }
 
+// Collect probes registered tool versions and describes the configured service.
+// Individual probes have a short deadline; unavailable optional tools are omitted.
 func Collect(cfg config.Config, build BuildInfo) protocol.Metadata {
 	toolchain := collectToolchain(firstLine)
 	database := "disabled"
@@ -104,6 +136,8 @@ func Collect(cfg config.Config, build BuildInfo) protocol.Metadata {
 	}
 }
 
+// ValidateToolchain requires latexmk and each enabled engine to have a
+// successful version probe before the service accepts compilation requests.
 func ValidateToolchain(meta protocol.Metadata, cfg config.Config) error {
 	required := append([]string{"latexmk"}, cfg.Engines...)
 	for _, tool := range required {
@@ -115,19 +149,22 @@ func ValidateToolchain(meta protocol.Metadata, cfg config.Config) error {
 }
 
 func firstLine(name string, args ...string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout)
 	defer cancel()
-	result := process.Run(ctx, process.Spec{Name: name, Args: args, MaxOutputBytes: 4096, CombinedOutput: true})
+	result := process.Run(
+		ctx,
+		process.Spec{Name: name, Args: args, MaxOutputBytes: maxVersionProbeBytes, CombinedOutput: true},
+	)
 	out, err := result.Stdout, result.Err
-	if err != nil && len(out) == 0 {
+	if err != nil {
 		return ""
 	}
 	line := strings.TrimSpace(string(out))
 	if i := strings.IndexByte(line, '\n'); i >= 0 {
 		line = line[:i]
 	}
-	if len(line) > 300 {
-		line = line[:300]
+	if len(line) > maxVersionLineBytes {
+		line = line[:maxVersionLineBytes]
 	}
 	return line
 }
