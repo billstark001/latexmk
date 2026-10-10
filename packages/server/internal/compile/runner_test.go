@@ -5,9 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/billstark001/latexmk/packages/server/internal/config"
+	"github.com/billstark001/latexmk/packages/shared/engine"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
@@ -64,11 +66,14 @@ func TestValidJobName(t *testing.T) {
 }
 
 func TestCommandArgsHardensLuaLaTeX(t *testing.T) {
-	args := commandArgs(protocol.CompileRequest{
+	args, err := commandArgs(protocol.CompileRequest{
 		Entry:       "main.tex",
 		Engine:      "lualatex",
 		Interaction: "nonstopmode",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	joined := strings.Join(args, "\n")
 	for _, required := range []string{
 		"-lualatex",
@@ -83,11 +88,14 @@ func TestCommandArgsHardensLuaLaTeX(t *testing.T) {
 
 func TestCommandArgsDoesNotAddLuaOptionsToOtherEngines(t *testing.T) {
 	for _, engine := range []string{"xelatex", "pdflatex"} {
-		args := commandArgs(protocol.CompileRequest{
+		args, err := commandArgs(protocol.CompileRequest{
 			Entry:       "main.tex",
 			Engine:      engine,
 			Interaction: "nonstopmode",
 		})
+		if err != nil {
+			t.Fatal(err)
+		}
 		joined := strings.Join(args, "\n")
 		if strings.Contains(joined, "--safer") || strings.Contains(joined, "--nosocket") {
 			t.Errorf("%s unexpectedly received Lua options: %v", engine, args)
@@ -210,5 +218,49 @@ func TestRecorderUsesPWDForInputsAndOutputs(t *testing.T) {
 	inputs, err := collectRecordedInputs(root)
 	if err != nil || strings.Join(inputs, ",") != "chapter/body.tex" {
 		t.Fatalf("%v %v", inputs, err)
+	}
+}
+
+var customEngineCounter atomic.Uint64
+
+type customEngine struct{}
+
+func (customEngine) LatexmkArgs() []string        { return []string{"-pdf", "-pdflatex=trusted-tex %O %S"} }
+func (customEngine) GraphicsExtensions() []string { return []string{".pdf"} }
+func (customEngine) VersionProbe() engine.Command {
+	return engine.Command{Name: "trusted-tex", Args: []string{"--version"}}
+}
+
+func TestRegisteredEngineBuildsWithoutNameSpecificBranches(t *testing.T) {
+	name := fmt.Sprintf("lab/custom+%d", customEngineCounter.Add(1))
+	if err := engine.Default.Register(name, customEngine{}); err != nil {
+		t.Fatal(err)
+	}
+	request := protocol.CompileRequest{
+		ProtocolVersion: protocol.Version,
+		Entry:           "main.tex",
+		Engine:          name,
+		Interaction:     "nonstopmode",
+	}
+	runner := NewRunner(config.Config{Engines: []string{name}})
+	if err := runner.ValidateRequest(request); err != nil {
+		t.Fatal(err)
+	}
+	args, err := commandArgs(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, "\n")
+	if !strings.Contains(joined, "-pdflatex=trusted-tex %O %S") || !strings.Contains(joined, "-no-shell-escape") ||
+		args[0] != "-norc" {
+		t.Fatal(args)
+	}
+	request.Engine = "unregistered-but-enabled"
+	runner.Config.Engines = []string{request.Engine}
+	if err := runner.ValidateRequest(request); err == nil {
+		t.Fatal("unregistered engine accepted")
+	}
+	if _, err := commandArgs(request); err == nil {
+		t.Fatal("unregistered engine used latexmk's default")
 	}
 }

@@ -1,10 +1,13 @@
 package dependency
 
 import (
+	"fmt"
 	"reflect"
+	"sync/atomic"
 	"testing"
 
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
+	"github.com/billstark001/latexmk/packages/shared/engine"
 )
 
 func TestEngineGraphicsSelection(t *testing.T) {
@@ -71,5 +74,44 @@ func TestEngineGraphicsNeverSelectsUnsupportedDefault(t *testing.T) {
 		if _, err := Discover("main.tex", engine, candidates); err == nil {
 			t.Fatalf("unknown engine %q used a fallback", engine)
 		}
+	}
+}
+
+var customEngineCounter atomic.Uint64
+
+type chartEngine struct{}
+
+func (chartEngine) LatexmkArgs() []string        { return []string{"-pdf"} }
+func (chartEngine) GraphicsExtensions() []string { return []string{".chart", ".pdf"} }
+func (chartEngine) VersionProbe() engine.Command {
+	return engine.Command{Name: "chart-tex", Args: []string{"--version"}}
+}
+
+func TestRegisteredEngineControlsDiscoveryAndRequestedExtensions(t *testing.T) {
+	name := fmt.Sprintf("lab/chart+%d", customEngineCounter.Add(1))
+	if err := engine.Default.Register(name, chartEngine{}); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	writeFile(t, root, "main.tex", `\includegraphics{plot}`)
+	writeFile(t, root, "plot.chart", "chart")
+	writeFile(t, root, "plot.pdf", "PDF")
+	candidates, _, err := projectarchive.Manifest(projectarchive.Options{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := Discover("main.tex", name, candidates)
+	if err != nil || !result.Resolved || len(result.Files) != 2 || result.Files[1].Path != "plot.chart" {
+		t.Fatalf("custom engine selection: %#v %v", result, err)
+	}
+	for i, file := range candidates {
+		if file.Path == "plot.pdf" {
+			candidates = append(candidates[:i], candidates[i+1:]...)
+			break
+		}
+	}
+	requested, err := ResolveRequestedFiles([]string{"plot"}, candidates)
+	if err != nil || len(requested) != 1 || requested[0].Path != "plot.chart" {
+		t.Fatalf("registered extension missing from bounded recovery: %v %v", requested, err)
 	}
 }

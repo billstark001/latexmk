@@ -1,11 +1,45 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	"github.com/billstark001/latexmk/packages/shared/engine"
 )
+
+var customEngineCounter atomic.Uint64
+
+func TestEngineConfigurationUsesExactRegisteredNames(t *testing.T) {
+	name := fmt.Sprintf("Lab/Custom TeX+%d", customEngineCounter.Add(1))
+	driver, err := engine.Default.Lookup("pdflatex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Default.Register(name, driver); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LATEXMK_AUTH_MODE", "none")
+	t.Setenv("LATEXMK_API_TOKEN", "")
+	t.Setenv("LATEXMK_API_TOKEN_FILE", "")
+	t.Setenv("LATEXMK_ENGINES", " "+name+", "+name+" ")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Engines) != 1 || cfg.Engines[0] != name || !cfg.EngineAllowed(name) {
+		t.Fatalf("engine names were normalized: %v", cfg.Engines)
+	}
+	for _, unregistered := range []string{strings.ToLower(name), "unknown-engine"} {
+		t.Setenv("LATEXMK_ENGINES", unregistered)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "unregistered engine") {
+			t.Fatalf("unregistered engine %q: %v", unregistered, err)
+		}
+	}
+}
 
 func TestInvalidLimitFailsFast(t *testing.T) {
 	t.Setenv("LATEXMK_MAX_FILES", "not-a-number")

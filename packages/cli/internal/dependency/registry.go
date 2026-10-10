@@ -1,6 +1,10 @@
 package dependency
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/billstark001/latexmk/packages/shared/engine"
+)
 
 // Patterns describe syntax and dependency policy independently of command names.
 // Every TeX spelling is registered directly; dispatch never rewrites a command.
@@ -352,8 +356,9 @@ func registeredExtensions() []string {
 	for _, extension := range optionInputExtensions {
 		unique[extension] = true
 	}
-	for _, extensions := range engineGraphicExtensions {
-		for _, extension := range extensions {
+	for _, name := range engine.Default.Names() {
+		driver, _ := engine.Default.Lookup(name)
+		for _, extension := range driver.GraphicsExtensions() {
 			unique[extension] = true
 		}
 	}

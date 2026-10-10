@@ -15,6 +15,7 @@ import (
 
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/platform/process"
+	"github.com/billstark001/latexmk/packages/shared/engine"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
@@ -80,6 +81,9 @@ func (r *Runner) ValidateRequest(req protocol.CompileRequest) error {
 	}
 	if req.ProtocolVersion != 1 && req.ProtocolVersion != protocol.Version {
 		return fmt.Errorf("unsupported protocol version %d", req.ProtocolVersion)
+	}
+	if _, err := engine.Default.Lookup(req.Engine); err != nil {
+		return err
 	}
 	if !r.Config.EngineAllowed(req.Engine) {
 		return fmt.Errorf("engine %q is not enabled", req.Engine)
@@ -152,7 +156,11 @@ func (r *Runner) RunWithOptions(
 			return Output{Result: result}
 		}
 	}
-	args := commandArgs(req)
+	args, err := commandArgs(req)
+	if err != nil {
+		result.Error = err.Error()
+		return Output{Result: result}
+	}
 	if opts.BuildDirectory != "" {
 		if opts.BuildDirectory != ".latexmk-build" {
 			result.Error = "invalid build directory"
@@ -233,16 +241,12 @@ func (r *Runner) RunWithOptions(
 	return Output{Result: result, Stdout: executed.Stdout, Stderr: executed.Stderr, Files: files}
 }
 
-func commandArgs(req protocol.CompileRequest) []string {
-	args := []string{"-norc"}
-	switch req.Engine {
-	case "xelatex":
-		args = append(args, "-xelatex")
-	case "lualatex":
-		args = append(args, "-lualatex", "-pdflualatex=lualatex --safer --nosocket %O %S")
-	case "pdflatex":
-		args = append(args, "-pdf")
+func commandArgs(req protocol.CompileRequest) ([]string, error) {
+	driver, err := engine.Default.Lookup(req.Engine)
+	if err != nil {
+		return nil, err
 	}
+	args := append([]string{"-norc"}, driver.LatexmkArgs()...)
 	args = append(args, "-interaction="+req.Interaction, "-recorder")
 	if req.Synctex {
 		args = append(args, "-synctex=1")
@@ -270,7 +274,7 @@ func commandArgs(req protocol.CompileRequest) []string {
 		args = append(args, "-silent")
 	}
 	args = append(args, req.Entry)
-	return args
+	return args, nil
 }
 
 func sandboxEnvironment(workspace string, shellEscape bool) ([]string, error) {

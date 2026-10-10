@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/billstark001/latexmk/packages/shared/engine"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
@@ -220,7 +221,7 @@ func Load() (Config, error) {
 		TempDir:                     os.Getenv("LATEXMK_TEMP_DIR"),
 		StateDir:                    env("LATEXMK_STATE_DIR", "/tmp/latexmk-state"),
 		DatabaseMode:                env("LATEXMK_DATABASE_MODE", "postgres"),
-		CORSOrigins:                 splitRawCSV(os.Getenv("LATEXMK_CORS_ORIGINS")),
+		CORSOrigins:                 splitCSV(os.Getenv("LATEXMK_CORS_ORIGINS")),
 	}
 	if v := os.Getenv("LATEXMK_ADDR"); v != "" {
 		cfg.Addr = v
@@ -293,10 +294,8 @@ func (c Config) Validate() error {
 		return fmt.Errorf("at least one engine must be enabled")
 	}
 	for _, e := range c.Engines {
-		switch e {
-		case "xelatex", "lualatex", "pdflatex":
-		default:
-			return fmt.Errorf("unsupported configured engine %q", e)
+		if _, err := engine.Default.Lookup(e); err != nil {
+			return fmt.Errorf("configured engine: %w", err)
 		}
 	}
 	if c.CompileCacheRetention < 0 || c.MaxCompileCacheBytes < 0 {
@@ -416,19 +415,6 @@ func envBytes(name string, fallback int64) (int64, error) {
 }
 
 func splitCSV(value string) []string {
-	var out []string
-	seen := map[string]bool{}
-	for _, item := range strings.Split(value, ",") {
-		item = strings.TrimSpace(strings.ToLower(item))
-		if item != "" && !seen[item] {
-			out = append(out, item)
-			seen[item] = true
-		}
-	}
-	return out
-}
-
-func splitRawCSV(value string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, item := range strings.Split(value, ",") {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/platform/process"
+	"github.com/billstark001/latexmk/packages/shared/engine"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
@@ -19,23 +20,33 @@ type BuildInfo struct {
 	BuildDate string
 }
 
-func Collect(cfg config.Config, build BuildInfo) protocol.Metadata {
+func collectToolchain(probe func(string, ...string) string) map[string]string {
 	toolchain := map[string]string{}
 	for _, tool := range []struct {
 		name string
 		args []string
 	}{
 		{"latexmk", []string{"-v"}},
-		{"xelatex", []string{"--version"}},
-		{"lualatex", []string{"--version"}},
-		{"pdflatex", []string{"--version"}},
 		{"biber", []string{"--version"}},
 		{"kpsewhich", []string{"--version"}},
 	} {
-		if line := firstLine(tool.name, tool.args...); line != "" {
+		if line := probe(tool.name, tool.args...); line != "" {
 			toolchain[tool.name] = line
 		}
 	}
+	for _, name := range engine.Default.Names() {
+		driver, _ := engine.Default.Lookup(name)
+		command := driver.VersionProbe()
+		if line := probe(command.Name, command.Args...); line != "" {
+			toolchain[name] = line
+		}
+	}
+
+	return toolchain
+}
+
+func Collect(cfg config.Config, build BuildInfo) protocol.Metadata {
+	toolchain := collectToolchain(firstLine)
 	database := "disabled"
 	if cfg.DatabaseURL != "" {
 		if cfg.DatabaseMode == "pglite" {

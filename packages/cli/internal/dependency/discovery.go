@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
+	"github.com/billstark001/latexmk/packages/shared/engine"
 )
 
 const maxDiscoveryVisits = 20_000
@@ -49,17 +50,17 @@ type discoverer struct {
 
 // Discover walks registered literal dependencies exclusively through candidates.
 // Text is cached, but execution is repeated in the caller's path and group context.
-func Discover(entry, engine string, candidates []projectarchive.File) (Result, error) {
+func Discover(entry, engineName string, candidates []projectarchive.File) (Result, error) {
 	entry = cleanProjectPath(entry)
 	if entry == "" {
 		return Result{}, errors.New("entry path is outside the project root")
 	}
-	extensions, err := defaultGraphicsExtensions(engine)
+	driver, err := engine.Default.Lookup(engineName)
 	if err != nil {
 		return Result{}, err
 	}
 	d := discoverer{
-		context:    scanContext{graphicExtensions: extensions},
+		context:    scanContext{graphicExtensions: driver.GraphicsExtensions()},
 		candidates: make(map[string]projectarchive.File), selected: make(map[string]projectarchive.File),
 		visiting: make(map[string]bool), text: make(map[string]string), generated: make(map[string]generatedFile),
 		assets: make(map[string]bool), forwarded: make(map[string][]option), loaded: make(map[string]bool),

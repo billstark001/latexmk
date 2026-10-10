@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -123,6 +124,7 @@ func run(args []string) int {
 	}
 
 	forcedEngine := ""
+	// These executable aliases are public CLI spellings, not an engine allowlist.
 	switch invokedAs {
 	case "xelatex", "xelatex.exe":
 		forcedEngine = "xelatex"
@@ -939,7 +941,12 @@ func runMeta(args []string, doctor bool) int {
 		meta.Database,
 		strings.Join(meta.Capabilities.Engines, ", "),
 	)
-	for _, name := range []string{"latexmk", "xelatex", "lualatex", "pdflatex", "biber"} {
+	names := make([]string, 0, len(meta.Toolchain))
+	for name := range meta.Toolchain {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
 		if v := meta.Toolchain[name]; v != "" {
 			fmt.Printf("%s: %s\n", name, v)
 		}
@@ -1345,7 +1352,7 @@ Compile options:
   --gitignore                  Respect Git ignore rules (default)
   --no-gitignore               Include Git-ignored files unless otherwise excluded
   --out-dir DIR                Local root for returned artifacts
-  --engine xelatex|lualatex|pdflatex
+  --engine NAME                Registered engine name (default xelatex)
   --timeout 3m                 End-to-end request timeout
   --shell-escape               Request shell escape; server policy may reject it
   --jobname NAME               TeX job name
