@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"time"
 
+	"github.com/billstark001/latexmk/packages/shared/archiveutil"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
@@ -22,8 +24,20 @@ type Stats struct {
 	Bytes int64
 }
 
+// ExtractTarGz extracts only regular files and directories under an existing
+// root, rejecting duplicate paths, links and corrupt gzip envelopes. Positive
+// limits bound entry count (including directories) and regular-file bytes;
+// zero limits are unbounded and negative limits are invalid. On failure, already
+// extracted files remain in root.
 func ExtractTarGz(r io.Reader, root string, limits Limits) (Stats, error) {
 	var stats Stats
+	if limits.MaxFiles < 0 || limits.MaxBytes < 0 {
+		return stats, errors.New("invalid archive limits")
+	}
+	byteLimit := limits.MaxBytes
+	if byteLimit == 0 {
+		byteLimit = math.MaxInt64
+	}
 	fs, err := safefs.Open(root)
 	if err != nil {
 		return stats, err
@@ -65,10 +79,10 @@ func ExtractTarGz(r io.Reader, root string, limits Limits) (Stats, error) {
 			if h.Size < 0 {
 				return stats, fmt.Errorf("negative size for %q", h.Name)
 			}
-			stats.Bytes += h.Size
-			if limits.MaxBytes > 0 && stats.Bytes > limits.MaxBytes {
+			if h.Size > byteLimit-stats.Bytes {
 				return stats, fmt.Errorf("archive expands beyond %d bytes", limits.MaxBytes)
 			}
+			stats.Bytes += h.Size
 			if err := fs.WriteExclusive(clean, h.Size, func(w io.Writer) error {
 				_, err := io.CopyN(w, tr, h.Size)
 				return err
@@ -85,5 +99,5 @@ func ExtractTarGz(r io.Reader, root string, limits Limits) (Stats, error) {
 			return stats, fmt.Errorf("unsupported archive entry type for %q", h.Name)
 		}
 	}
-	return stats, nil
+	return stats, archiveutil.VerifyTrailer(gz)
 }

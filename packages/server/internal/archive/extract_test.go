@@ -44,3 +44,45 @@ func TestExtractsRegularFile(t *testing.T) {
 		t.Fatalf("content=%q err=%v", b, err)
 	}
 }
+
+func TestExtractVerifiesGzipTrailer(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	valid := buf.Bytes()
+	corrupt := bytes.Clone(valid)
+	corrupt[len(corrupt)-8] ^= 1
+	for name, data := range map[string][]byte{
+		"checksum":  corrupt,
+		"truncated": valid[:len(valid)-8],
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ExtractTarGz(bytes.NewReader(data), t.TempDir(), Limits{}); err == nil {
+				t.Fatal("accepted an invalid gzip trailer")
+			}
+		})
+	}
+}
+
+func TestExtractRejectsNegativeLimits(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, limits := range []Limits{{MaxFiles: -1}, {MaxBytes: -1}} {
+		if _, err := ExtractTarGz(bytes.NewReader(buf.Bytes()), t.TempDir(), limits); err == nil {
+			t.Fatalf("accepted limits %+v", limits)
+		}
+	}
+}
