@@ -40,7 +40,7 @@ func TestDiscoverBuildsLiteralDependencyClosure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := Discover("main.tex", candidates)
+	result, err := Discover("main.tex", "xelatex", candidates)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestDiscoverReportsDynamicMissingAndOutsideReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := Discover("main.tex", candidates)
+	result, err := Discover("main.tex", "xelatex", candidates)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestDiscoverDoesNotTreatSystemPackagesAsExtensionlessLocalFiles(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := Discover("main.tex", candidates)
+	result, err := Discover("main.tex", "xelatex", candidates)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestDiscoverDoesNotOverridePolicyFilteredManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := Discover("main.tex", candidates)
+	result, err := Discover("main.tex", "xelatex", candidates)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestDiscoverHandlesCyclicInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := Discover("main.tex", candidates)
+	result, err := Discover("main.tex", "xelatex", candidates)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestDiscoverHandlesCyclicInputs(t *testing.T) {
 
 func TestSelectAllKeepsEveryPolicyAllowedCandidate(t *testing.T) {
 	candidates := []projectarchive.File{{Path: "main.tex", Size: 4}, {Path: "notes.txt", Size: 5}}
-	result, err := SelectWithOptions("main.tex", candidates, SelectionOptions{Mode: "all"})
+	result, err := SelectWithOptions("main.tex", candidates, SelectionOptions{Engine: "xelatex", Mode: "all"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,11 @@ func TestCachedInputsPreserveDynamicDiagnosticsWithoutBypassingPolicy(t *testing
 	result, err := SelectWithOptions(
 		"main.tex",
 		candidates,
-		SelectionOptions{Mode: "auto", CachedFiles: []string{"main.tex", "chapter.tex", "private.tex"}},
+		SelectionOptions{
+			Engine:      "xelatex",
+			Mode:        "auto",
+			CachedFiles: []string{"main.tex", "chapter.tex", "private.tex"},
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -198,7 +202,7 @@ func TestCachedInputsDoNotCoverMissingLiteralReferences(t *testing.T) {
 	result, err := SelectWithOptions(
 		"main.tex",
 		candidates,
-		SelectionOptions{Mode: "auto", CachedFiles: []string{"main.tex", "old-chapter.tex"}},
+		SelectionOptions{Engine: "xelatex", Mode: "auto", CachedFiles: []string{"main.tex", "old-chapter.tex"}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -220,7 +224,7 @@ func TestExplicitFilesDoNotProveDynamicReferenceCoverage(t *testing.T) {
 	result, err := SelectWithOptions(
 		"main.tex",
 		candidates,
-		SelectionOptions{Mode: "auto", ExplicitFiles: []string{"chapter.tex"}},
+		SelectionOptions{Engine: "xelatex", Mode: "auto", ExplicitFiles: []string{"chapter.tex"}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -245,7 +249,7 @@ func TestManifestModeUsesOnlyExactDeclaredFiles(t *testing.T) {
 	result, err := SelectWithOptions(
 		"main.tex",
 		candidates,
-		SelectionOptions{Mode: "manifest", ExplicitFiles: []string{"declared.dat"}},
+		SelectionOptions{Engine: "xelatex", Mode: "manifest", ExplicitFiles: []string{"declared.dat"}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -267,7 +271,7 @@ func TestExplicitManifestCannotRestoreFilteredFile(t *testing.T) {
 	result, err := SelectWithOptions(
 		"main.tex",
 		candidates,
-		SelectionOptions{Mode: "manifest", ExplicitFiles: []string{"private.tex"}},
+		SelectionOptions{Engine: "xelatex", Mode: "manifest", ExplicitFiles: []string{"private.tex"}},
 	)
 	if err != nil {
 		t.Fatal(err)

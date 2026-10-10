@@ -42,12 +42,13 @@ const (
 )
 
 type referenceRule struct {
-	extensions   []string
-	recursive    bool
-	missing      missingPolicy
-	graphics     bool
-	suffix       string
-	rootRelative bool
+	extensions     []string
+	recursive      bool
+	missing        missingPolicy
+	graphics       bool
+	engineGraphics bool
+	suffix         string
+	rootRelative   bool
 }
 
 type commandPattern struct {
@@ -93,8 +94,7 @@ func init() {
 			names:     []string{"includegraphics"},
 			arguments: []argumentKind{bracedArgument},
 			rule: referenceRule{
-				extensions: []string{".pdf", ".png", ".jpg", ".jpeg", ".eps", ".mps"},
-				graphics:   true,
+				graphics: true, engineGraphics: true,
 			},
 		},
 		{
@@ -351,6 +351,11 @@ func registeredExtensions() []string {
 	}
 	for _, extension := range optionInputExtensions {
 		unique[extension] = true
+	}
+	for _, extensions := range engineGraphicExtensions {
+		for _, extension := range extensions {
+			unique[extension] = true
+		}
 	}
 	delete(unique, "")
 	result := make([]string, 0, len(unique))

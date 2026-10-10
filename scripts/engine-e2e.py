@@ -11,12 +11,14 @@ import os
 from pathlib import Path
 import secrets
 import signal
+import struct
 import subprocess
 import tempfile
 import time
 import urllib.error
 import urllib.request
 import zipfile
+import zlib
 
 
 def wait_for(predicate, timeout=30):
@@ -79,11 +81,11 @@ def main():
             env = {key: value for key, value in os.environ.items() if not key.startswith("LATEXMK_")}
             env["XDG_CONFIG_HOME"] = str(parent / "config")
 
-            def command(root, *arguments):
+            def command(root, *arguments, success=True):
                 result = subprocess.run([cli, *arguments, "--server", base, "--token-mode", "none",
                                          "--project-root", str(root), "--timeout", "60s"],
                                         cwd=root, env=env, text=True, capture_output=True, timeout=65)
-                if result.returncode:
+                if (result.returncode == 0) != success:
                     raise AssertionError(result.stdout + "\n" + result.stderr)
                 return json.loads(result.stdout)
 
@@ -108,10 +110,31 @@ def main():
                                  "--server-cache", "reuse", "--local-cache", "none", "--json", entry)
                 assert result["success"] and result["engine"] == engine, result
                 assert (output / "main.pdf").read_bytes().startswith(b"%PDF-")
-                body.write_text(body.read_text() + "\nChanged text.\n")
+                assert (output / "main.synctex.gz").exists()
+                # Both drivers can read both files, but their default orders differ.
+                (root / "figures").mkdir()
+                (root / "figures/choice.PDF").write_bytes((output / "main.pdf").read_bytes())
+                def png_chunk(kind, data):
+                    return struct.pack("!I", len(data)) + kind + data + struct.pack("!I", zlib.crc32(kind + data))
+                png = (b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", struct.pack("!2I5B", 2, 2, 8, 2, 0, 0, 0))
+                       + png_chunk(b"IDAT", zlib.compress((b"\x00" + b"\xff\x00\x00" * 2) * 2)) + png_chunk(b"IEND", b""))
+                (root / "figures/choice.png").write_bytes(png)
+                (root / entry).write_text((root / entry).read_text().replace(r"\usepackage{makeidx}", r"\usepackage{graphicx}\usepackage{makeidx}"))
+                body.write_text(body.read_text() + "\nChanged text.\n" + r"\includegraphics[width=1cm]{figures/choice}")
+                chosen = "figures/choice.png" if engine == "pdflatex" else "figures/choice.PDF"
+                other = "figures/choice.PDF" if engine == "pdflatex" else "figures/choice.png"
+                selected = command(root, "files", "--engine", engine, "--json", entry)
+                selected_names = {file["path"] for file in selected["files"]}
+                assert selected["resolved"] and chosen in selected_names and other not in selected_names, selected
+
+                result = command(root, "compile", "--engine", engine, "--out-dir", str(output),
+                                 "--server-cache", "reuse", "--local-cache", "none", "--json", entry)
+                assert result["success"] and result["compileCache"]["status"] == "miss", result
+                body.write_text(body.read_text() + "\nAnother TeX-only edit.\n")
                 result = command(root, "compile", "--engine", engine, "--out-dir", str(output),
                                  "--server-cache", "reuse", "--local-cache", "none", "--json", entry)
                 assert result["success"] and result["compileCache"]["status"] == "hit", result
+                assert chosen in result["inputFiles"] and other not in result["inputFiles"], result
                 default = command(root, "pack", "--verify", "--engine", engine, "--output", "source.zip", "--json", entry)
                 assert default["ok"] and default["data"]["verified"], default
                 packed = command(root, "pack", "--mode", "arxiv", "--engine", engine, "--output", "submission.zip", "--json", entry)
@@ -119,12 +142,23 @@ def main():
                 with zipfile.ZipFile(root / "submission.zip") as archive:
                     members = set(archive.namelist())
                     assert {entry, "sections/body.tex", "refs.bib", "main.bbl", "main.ind"} <= members, members
+                    assert chosen in members and other not in members, members
                     assert "main.pdf" not in members and not any(member.endswith(".aux") for member in members), members
                     unpacked = parent / (engine + "-unpacked")
                     archive.extractall(unpacked)
                 rebuilt = command(unpacked, "compile", "--engine", engine, "--out-dir", str(unpacked / "output"), "--json", entry)
                 assert rebuilt["success"], rebuilt
-                print(engine + ": bibliography, index, cached edits, source pack, arxiv pack and ZIP rebuild passed", flush=True)
+                named = command(root, "compile", "--engine", engine, "--jobname", "custom", "--no-synctex",
+                                "--out-dir", str(root / "named"), "--json", entry)
+                assert named["success"] and (root / "named/custom.pdf").exists(), named
+                assert not (root / "named/custom.synctex.gz").exists()
+                broken = parent / (engine + "-errors")
+                broken.mkdir()
+                (broken / "main.tex").write_text(r"\documentclass{article}\begin{document}\undefinedcommand\end{document}")
+                failed = command(broken, "compile", "--engine", engine, "--out-dir", str(broken / "output"),
+                                 "--json", "main.tex", success=False)
+                assert not failed["success"] and failed["exitCode"] != 0 and not failed["timedOut"], failed
+                print(engine + ": graphics order, bibliography, index, cached edits, SyncTeX, job names, errors, packs and ZIP rebuild passed", flush=True)
 
             root = parent / "pdflatex"
             publication_root = root / "live/.latexmk-live"

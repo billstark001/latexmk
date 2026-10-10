@@ -58,6 +58,10 @@ numbers.
 
 ### Fixed
 
+- Automatic graphics selection follows the selected pdfLaTeX/LuaLaTeX/XeLaTeX
+  driver’s default extension order, including uppercase suffixes and
+  engine-specific formats, while preserving declared extension scopes.
+
 - Renew realtime leases only through explicit client renewal or new revision
   admission. Read-only state and SSE heartbeats cannot keep abandoned sessions
   alive. CLI renewal continues independently during uploads and downloads.

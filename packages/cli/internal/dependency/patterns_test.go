@@ -61,7 +61,7 @@ func TestDependencyPatternsRespectFilteredManifest(t *testing.T) {
 					result, err := SelectWithOptions(
 						"main.tex",
 						candidates,
-						SelectionOptions{Mode: "auto", CachedFiles: []string{pattern.file}},
+						SelectionOptions{Engine: "xelatex", Mode: "auto", CachedFiles: []string{pattern.file}},
 					)
 					if err != nil {
 						t.Fatal(err)
@@ -110,7 +110,7 @@ func TestCompanionTraversalIsBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := Discover("main.tex", candidates)
+	result, err := Discover("main.tex", "xelatex", candidates)
 	if err != nil {
 		t.Fatal(err)
 	}

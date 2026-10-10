@@ -17,7 +17,7 @@ The scanner recognizes literal arguments for these registered patterns:
 | Bibliography          | `bibliography`, `addbibresource`, `bibliographystyle`; biblatex `style`, `bibstyle`, `citestyle`, `datamodel`; `RequireBibliographyStyle`, `RequireCitationStyle`, `DeclareLanguageMapping`, `InheritBibliographyExtras`, `InheritBibliographyStrings`. |
 | Conditional inputs    | `InputIfFileExists`; select an existing allowed input and its dependencies, without an error for an absent optional input.                                                                                                                              |
 | Imported projects     | `import`, `subimport`, `inputfrom`, `subinputfrom`, `includefrom`, `subincludefrom`; nested inputs use the active import context.                                                                                                                       |
-| Graphics              | `includegraphics`, `graphicspath`, `DeclareGraphicsExtensions`, `includepdf`, `includesvg`; declared extension order is searched before directory order.                                                                                                |
+| Graphics              | `includegraphics`, `graphicspath`, `DeclareGraphicsExtensions`, `includepdf`, `includesvg`; engine defaults or declared extension order are searched before directory order.                                                                            |
 | Fonts                 | `setmainfont`, `setsansfont`, `setmonofont`, `newfontfamily`, `newfontface`, `fontspec`, `defaultfontfeatures`; explicit faces, `Path`, `Extension`, `*` substitution, local `.fontspec` settings.                                                      |
 | Data/code             | `lstinputlisting`, `verbatiminput`, `VerbatimInput`, `inputminted`, `DTLloaddb`, `pgfplotstableread`, and `table`/`file` forms of `addplot`/`addplot3`.                                                                                                 |
 | SVG assets            | Local XML `href`/`xlink:href` on `image`, `use`, `feImage`; existing exports and PDF+LaTeX wrappers. `svgsetup` and `svgpath` configure SVG selection.                                                                                                  |
@@ -330,3 +330,21 @@ continues so a later edit can recover it.
 Project/user configuration and environment variables are resolved once at
 startup. Restart the watcher after changing them. Git's effective global
 excludes file is watched, including its default path before the file exists.
+
+## Engine-specific graphics
+
+For extensionless `\includegraphics`, automatic selection uses the ordered
+defaults of `pdftex.def`, `luatex.def`, or `xetex.def` for the selected engine.
+For example, pdfLaTeX and LuaLaTeX choose `plot.png` before `plot.PDF`, while
+XeLaTeX chooses `plot.PDF` first. Suffix case is preserved for the Linux server.
+`\DeclareGraphicsExtensions` overrides these defaults within its TeX scope.
+Custom drivers or conversion packages that change graphics rules still require
+explicit selection when static discovery cannot model their behavior.
+
+The opt-in `scripts/engine-e2e.py` checks a local, prebuilt Docker TeX image,
+a matching Linux controller binary and a host CLI. It exercises actual pdfLaTeX
+and XeLaTeX with nested entries, driver selection, BibTeX, indexes, cache reuse,
+SyncTeX, custom job names, error propagation, verified packages and realtime
+lease expiry. It never pulls an image or reads deployment credentials. Run it
+with `--image IMAGE --controller-binary PATH --cli PATH`; it removes the
+container and temporary projects it creates.

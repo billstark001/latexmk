@@ -111,7 +111,7 @@ func TestCompilerDependencyFixture(t *testing.T) {
 		selection, err := SelectWithOptions(
 			"main.tex",
 			candidates,
-			SelectionOptions{Mode: "auto", CachedFiles: history},
+			SelectionOptions{Engine: "xelatex", Mode: "auto", CachedFiles: history},
 		)
 		if err != nil {
 			t.Fatal(err)

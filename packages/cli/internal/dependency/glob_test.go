@@ -16,7 +16,11 @@ func TestGlobSelectionAndNoMatchPolicies(t *testing.T) {
 	result, err := SelectWithOptions(
 		"main.tex",
 		candidates,
-		SelectionOptions{Mode: "manifest", ExplicitFiles: []string{"sections/**/*.tex", "sections/a.tex"}},
+		SelectionOptions{
+			Engine:        "xelatex",
+			Mode:          "manifest",
+			ExplicitFiles: []string{"sections/**/*.tex", "sections/a.tex"},
+		},
 	)
 	if err != nil || !result.Resolved || len(result.Files) != 3 {
 		t.Fatalf("glob expansion: %+v %v", result, err)
@@ -25,7 +29,12 @@ func TestGlobSelectionAndNoMatchPolicies(t *testing.T) {
 		result, err := SelectWithOptions(
 			"main.tex",
 			candidates,
-			SelectionOptions{Mode: "manifest", ExplicitFiles: []string{"missing/**/*.tex"}, UnmatchedGlob: policy},
+			SelectionOptions{
+				Engine:        "xelatex",
+				Mode:          "manifest",
+				ExplicitFiles: []string{"missing/**/*.tex"},
+				UnmatchedGlob: policy,
+			},
 		)
 		if err != nil || result.Resolved != (policy != "error") {
 			t.Fatalf("no-match %s: %+v %v", policy, result, err)
@@ -35,7 +44,7 @@ func TestGlobSelectionAndNoMatchPolicies(t *testing.T) {
 		if _, err := SelectWithOptions(
 			"main.tex",
 			candidates,
-			SelectionOptions{Mode: "manifest", ExplicitFiles: []string{pattern}},
+			SelectionOptions{Engine: "xelatex", Mode: "manifest", ExplicitFiles: []string{pattern}},
 		); err == nil {
 			t.Fatalf("accepted %s", pattern)
 		}
@@ -43,9 +52,13 @@ func TestGlobSelectionAndNoMatchPolicies(t *testing.T) {
 }
 
 func TestMissingEscapedLiteralIsAlwaysAnError(t *testing.T) {
-	result, err := SelectWithOptions("main.tex", []projectarchive.File{{Path: "main.tex"}}, SelectionOptions{
-		Mode: "manifest", ExplicitFiles: []string{ExactPattern("missing*.tex")}, UnmatchedGlob: "ignore",
-	})
+	result, err := SelectWithOptions(
+		"main.tex",
+		[]projectarchive.File{{Path: "main.tex"}},
+		SelectionOptions{Engine: "xelatex",
+			Mode: "manifest", ExplicitFiles: []string{ExactPattern("missing*.tex")}, UnmatchedGlob: "ignore",
+		},
+	)
 	if err != nil || result.Resolved {
 		t.Fatalf("missing literal treated as optional glob: %+v %v", result, err)
 	}
@@ -64,7 +77,7 @@ func TestCommentContinuationKeepsPathAndLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := Discover("main.tex", candidates)
+	result, err := Discover("main.tex", "xelatex", candidates)
 	if err != nil || len(result.Files) != 2 || len(result.Diagnostics) != 1 || result.Diagnostics[0].Line != 5 {
 		t.Fatalf("continuation: %+v %v", result, err)
 	}

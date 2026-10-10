@@ -55,7 +55,7 @@ func TestBiblatexDataModelDiscovery(t *testing.T) {
 				if history {
 					cached = []string{"main.tex", tc.model + ".dbx"}
 				}
-				result, err := SelectWithOptions("main.tex", candidates, SelectionOptions{
+				result, err := SelectWithOptions("main.tex", candidates, SelectionOptions{Engine: "xelatex",
 					Mode: "auto", CachedFiles: cached,
 				})
 				if err != nil {
@@ -100,7 +100,7 @@ func TestBiblatexDataModelDiagnostics(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := Discover("main.tex", candidates)
+			result, err := Discover("main.tex", "xelatex", candidates)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -116,7 +116,11 @@ func TestBiblatexDataModelDiagnostics(t *testing.T) {
 				cached, err := SelectWithOptions(
 					"main.tex",
 					candidates,
-					SelectionOptions{Mode: "auto", CachedFiles: []string{"history.tex", "private.dbx"}},
+					SelectionOptions{
+						Engine:      "xelatex",
+						Mode:        "auto",
+						CachedFiles: []string{"history.tex", "private.dbx"},
+					},
 				)
 				if err != nil {
 					t.Fatal(err)
@@ -148,7 +152,7 @@ func TestBiblatexDataModelExclusions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := Discover("main.tex", candidates)
+	result, err := Discover("main.tex", "xelatex", candidates)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +170,7 @@ func TestCommentsBetweenInputSyntaxElements(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := Discover("main.tex", candidates)
+	result, err := Discover("main.tex", "xelatex", candidates)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +188,7 @@ func TestBiblatexDataModelOptionEditWithHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := SelectWithOptions("main.tex", candidates, SelectionOptions{Mode: "auto"})
+	first, err := SelectWithOptions("main.tex", candidates, SelectionOptions{Engine: "xelatex", Mode: "auto"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +203,7 @@ func TestBiblatexDataModelOptionEditWithHistory(t *testing.T) {
 	changed, err := SelectWithOptions(
 		"main.tex",
 		candidates,
-		SelectionOptions{Mode: "auto", CachedFiles: []string{"main.tex", "old.dbx"}},
+		SelectionOptions{Engine: "xelatex", Mode: "auto", CachedFiles: []string{"main.tex", "old.dbx"}},
 	)
 	if err != nil {
 		t.Fatal(err)

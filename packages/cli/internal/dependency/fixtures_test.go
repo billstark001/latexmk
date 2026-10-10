@@ -388,7 +388,11 @@ func runDiscoveryFixture(t *testing.T, fixture discoveryFixture) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := SelectWithOptions("main.tex", candidates, SelectionOptions{Mode: "auto", CachedFiles: cached})
+		result, err := SelectWithOptions(
+			"main.tex",
+			candidates,
+			SelectionOptions{Engine: "xelatex", Mode: "auto", CachedFiles: cached},
+		)
 		if err != nil {
 			t.Fatal(err)
 		}

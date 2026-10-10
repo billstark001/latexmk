@@ -701,6 +701,7 @@ func (c *Client) selectFiles(entry, engine string, additional []string, hash boo
 		entry,
 		candidates,
 		dependency.SelectionOptions{
+			Engine:        engine,
 			Mode:          c.UploadMode,
 			UnmatchedGlob: c.UnmatchedGlob,
 			ExplicitFiles: explicit,

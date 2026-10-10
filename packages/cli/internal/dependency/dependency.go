@@ -35,6 +35,7 @@ type Result struct {
 
 type SelectionOptions struct {
 	Mode          string
+	Engine        string
 	ExplicitFiles []string
 	CachedFiles   []string
 	UnmatchedGlob string
@@ -75,7 +76,7 @@ func SelectWithOptions(entry string, candidates []projectarchive.File, options S
 	var result Result
 	if mode == "auto" {
 		var err error
-		result, err = Discover(entry, candidates)
+		result, err = Discover(entry, options.Engine, candidates)
 		if err != nil {
 			return Result{}, err
 		}

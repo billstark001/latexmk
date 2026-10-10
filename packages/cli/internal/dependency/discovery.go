@@ -49,12 +49,17 @@ type discoverer struct {
 
 // Discover walks registered literal dependencies exclusively through candidates.
 // Text is cached, but execution is repeated in the caller's path and group context.
-func Discover(entry string, candidates []projectarchive.File) (Result, error) {
+func Discover(entry, engine string, candidates []projectarchive.File) (Result, error) {
 	entry = cleanProjectPath(entry)
 	if entry == "" {
 		return Result{}, errors.New("entry path is outside the project root")
 	}
+	extensions, err := defaultGraphicsExtensions(engine)
+	if err != nil {
+		return Result{}, err
+	}
 	d := discoverer{
+		context:    scanContext{graphicExtensions: extensions},
 		candidates: make(map[string]projectarchive.File), selected: make(map[string]projectarchive.File),
 		visiting: make(map[string]bool), text: make(map[string]string), generated: make(map[string]generatedFile),
 		assets: make(map[string]bool), forwarded: make(map[string][]option), loaded: make(map[string]bool),
@@ -352,7 +357,7 @@ func (d *discoverer) resolveReference(reference string, rule referenceRule) (str
 		search = append(search, d.context.graphicDirs...)
 	}
 	exts := rule.extensions
-	if rule.graphics && len(d.context.graphicExtensions) > 0 && len(rule.extensions) > 1 {
+	if rule.engineGraphics {
 		exts = d.context.graphicExtensions
 	}
 	if rule.suffix != "" {
