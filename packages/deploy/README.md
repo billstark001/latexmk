@@ -93,62 +93,69 @@ For an external database, add `--auth postgres --database postgres
 PostgreSQL concurrency or TLS. See [operations](../../docs/OPERATIONS.md) for
 resource presets, persistent state, and timeout settings.
 
-## Two CI paths
+## Automatic image CI
 
-- `runtime-image.yml` runs on runtime recipes, package lists, font changes, or
-  manual dispatch. Manual runs can select slim, full, or both. It builds and smoke-tests the selected profiles, publishes SHA-tagged
-  images to GHCR, and prints each digest in the job summary.
-- Set repository variables `LATEXMK_RUNTIME_SLIM` and `LATEXMK_RUNTIME_FULL` to
-  the corresponding `ghcr.io/...@sha256:...` references. Runtime adoption is an
-  explicit release choice; changing runtime source does not silently change
-  the application base.
-- `app-image.yml` runs on server/application build changes or manual dispatch.
-  Manual runs can select a single profile to test the slim deployment first.
-  It requires the selected profile's pinned reference and publishes the application without any
-  TeX installation. Dispatch it after updating runtime variables.
+`app-image.yml` runs on main when server, CLI verification, deployment templates,
+or runtime inputs change. For each selected profile it generates the runtime
+context, hashes its actual build inputs plus `linux/amd64`, and looks up
+`ghcr.io/OWNER/REPO-runtime:PROFILE-recipe-HASH`. A verified recipe is reused;
+a missing recipe is built and smoke-tested before the recipe tag is promoted.
+The application always receives the resulting immutable `image@sha256:...`
+reference, then runs realtime compilation tests with both the default database
+and PostgreSQL before its `PROFILE-COMMIT` tag is promoted.
+
+No repository runtime variables or manual adoption step are required. Existing
+`LATEXMK_RUNTIME_SLIM` / `LATEXMK_RUNTIME_FULL` variables are ignored and may be
+deleted. The first run after migration creates recipe tags; old SHA-tagged runtime
+images are not assumed to have the matching recipe. Slim and full have separate
+recipes: changing only the slim package list does not rebuild the full runtime.
+The rendered Dockerfile captures the selected upstream lock pin; generated
+README and app-only Go/Docker CLI lock fields do not invalidate runtime reuse.
+
+`runtime-image.yml` is a manual entry point for the same runtime selection and
+verification, without building the application. Both workflows serialize writes
+for each profile and registry destination, and upload font inventories and
+SHA-256 verification results. A failed verification cannot promote a recipe or
+application tag. Candidate tags are unique to a workflow attempt; they may remain
+in GHCR after a failed publishing run and are not release tags.
 
 ### Testing a feature branch in Actions
 
-Run both runtime builds and their smoke tests without publishing images:
+Manual dispatch defaults to `publish=false`. It builds into a disposable registry
+on the runner, and still tests exact image digests. This writes no GHCR images and
+creates no GitHub releases. Run the complete chain, including an explicit cache
+hit check, with:
+
+```sh
+gh workflow run app-image.yml --ref YOUR_BRANCH \
+  -f profile=both -f publish=false -f verify-reuse=true
+```
+
+For runtime-only smoke tests:
 
 ```sh
 gh workflow run runtime-image.yml --ref YOUR_BRANCH -f profile=both -f publish=false
 ```
 
-The workflow uploads per-profile font inventories and SHA-256 verification
-results. Normal pushes to main and manual runs with `publish=true` publish images.
+The local registry disappears after each job, so recipe reuse across separate
+nonpublishing runs uses BuildKit's layer cache rather than a persistent recipe tag.
+`verify-reuse=true` checks recipe-tag reuse within the same job. Normal pushes to
+main publish to GHCR; manual publication requires `-f publish=true` explicitly.
 The ordinary `ci` workflow also runs on feature-branch pushes.
 
-### Adopting a published runtime
+### Deliberate runtime rebuilds
 
-Repository variables only need updating when adopting a new runtime. Ordinary
-server changes keep using the existing pinned runtime. From the repository root,
-with Node.js 24+ and `gh` authenticated with repository-variable write permissions:
+Upstream base images remain pinned in `runtime/lock.json`; changing an upstream
+tag alone does not update this repository. Commit a new lock digest or runtime
+recipe to rebuild and adopt it automatically. To refresh OS packages without
+changing the recipe, dispatch `app-image.yml` with `-f force-runtime=true` (or
+`runtime-image.yml` with `-f force=true`) and `-f publish=true`. This bypasses
+runtime layer cache and replaces the recipe tag only after verification.
+Applications already published retain their exact runtime digest. When refreshing
+through the runtime-only workflow, dispatch the app workflow afterward to create
+an application using the refreshed digest.
 
-```sh
-# Preview both references from the latest successful runtime-image run on the default branch.
-node scripts/update-runtime-variables.mjs --dry-run
-node scripts/update-runtime-variables.mjs
-
-# Then build the application against the adopted runtime.
-gh workflow run app-image.yml -f profile=both
-```
-
-For a specific publication, pass `--run RUN_ID`. For a runtime workflow that
-published only one profile, also pass `--profile slim` or `--profile full`.
-`--repo OWNER/REPO` selects a different repository; otherwise `gh` resolves the
-current repository. Use `--help` for all options.
-
-The script reads the successful publication step's logs and validates the image
-repository, profile and SHA-256 digest before writing any selected variable. It
-does not combine profiles from different runs or fall back to mutable tags; if
-the selected run lacks a profile or its logs have expired, select another run.
-Matching values are skipped. GitHub updates variables individually, so an API
-failure can leave a partial update; rerun the same `--run` command to finish.
-The script does not dispatch an application build automatically. Variable changes
-alone do not trigger `app-image`; dispatch it explicitly or push an application change.
-
-Both use separate GHA cache scopes with `mode=max`. Registry caches are also
+Runtime and application builds use separate GHA cache scopes with `mode=max`. Registry caches are also
 supported by the CLI. External cache export requires a compatible Buildx
 builder (for example, the `docker-container` driver used by CI). Cache mounts accelerate repeated builds on the same
 builder; their contents are not automatically exported with ordinary layer

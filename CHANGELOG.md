@@ -45,6 +45,16 @@ numbers.
 
 ## [Unreleased]
 
+### Deployment / CI
+
+- Select verified slim/full runtime images automatically by recipe hash and pass
+  immutable digests to application builds; remove repository runtime variables
+  and the variable-adoption script.
+- Rebuild missing or changed recipes, verify runtimes before promoting cache tags,
+  and verify application E2E compilation before promoting application tags.
+- Support complete feature-branch image tests in a disposable local registry,
+  explicit cache-hit checks, and deliberate runtime refreshes without layer cache.
+
 ## @latexmk/cli [0.4.1] - 2026-10-11
 
 ### Added
