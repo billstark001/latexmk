@@ -8,7 +8,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"time"
+
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 const (
@@ -37,7 +40,7 @@ type cacheEntry struct {
 // file absent from the current policy-filtered manifest.
 func LoadCachedInputs(root, entry, engine string) ([]string, bool, error) {
 	entry = cleanProjectPath(entry)
-	if entry == "" {
+	if entry == "" || entry == "." {
 		return nil, false, errors.New("cache entry path escapes the project root")
 	}
 	cache, found, err := readCache(root)
@@ -61,8 +64,11 @@ func LoadCachedInputs(root, entry, engine string) ([]string, bool, error) {
 // successful remote compile.
 func SaveCachedInputs(root, entry, engine string, inputFiles []string) error {
 	entry = cleanProjectPath(entry)
-	if entry == "" {
+	if entry == "" || entry == "." {
 		return errors.New("cache entry path escapes the project root")
+	}
+	if !validCacheEngine(engine) {
+		return errors.New("dependency cache contains an invalid engine")
 	}
 	paths, err := normalizeCachedPaths(inputFiles)
 	if err != nil {
@@ -143,10 +149,10 @@ func readCache(root string) (cacheFile, bool, error) {
 	}
 	for i := range cache.Entries {
 		item := &cache.Entries[i]
-		if cleanProjectPath(item.Entry) != item.Entry {
+		if clean := cleanProjectPath(item.Entry); clean == "" || clean == "." || clean != item.Entry {
 			return cache, false, fmt.Errorf("dependency cache contains invalid entry path %q", item.Entry)
 		}
-		if item.Engine == "" || len(item.Engine) > 64 {
+		if !validCacheEngine(item.Engine) {
 			return cache, false, errors.New("dependency cache contains an invalid engine")
 		}
 		paths, err := normalizeCachedPaths(item.InputFiles)
@@ -219,6 +225,12 @@ func writeCache(root string, cache cacheFile) error {
 	return nil
 }
 
+// Engine keys are opaque registry names. The complete cache size already bounds
+// their length; an arbitrary 64-byte cap would break valid custom drivers.
+func validCacheEngine(name string) bool {
+	return strings.TrimSpace(name) != "" && !strings.ContainsAny(name, "\x00\r\n")
+}
+
 func normalizeCachedPaths(values []string) ([]string, error) {
 	if len(values) > maxCacheItems {
 		return nil, fmt.Errorf("dependency cache contains more than %d input paths", maxCacheItems)
@@ -226,7 +238,7 @@ func normalizeCachedPaths(values []string) ([]string, error) {
 	unique := make(map[string]struct{}, len(values))
 	for _, value := range values {
 		clean := cleanProjectPath(value)
-		if clean == "" {
+		if _, err := safefs.Clean(clean); err != nil {
 			return nil, fmt.Errorf("invalid cached dependency path %q", value)
 		}
 		unique[clean] = struct{}{}

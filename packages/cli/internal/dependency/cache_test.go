@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -59,5 +60,27 @@ func TestDependencyCacheRejectsSymlinkDirectory(t *testing.T) {
 func TestDependencyCacheRejectsOutsidePaths(t *testing.T) {
 	if err := SaveCachedInputs(t.TempDir(), "main.tex", "xelatex", []string{"../secret.tex"}); err == nil {
 		t.Fatal("expected outside cache path to be rejected")
+	}
+}
+
+func TestDependencyCacheAcceptsOpaqueLongEngineNames(t *testing.T) {
+	root := t.TempDir()
+	name := strings.Repeat("custom", 20)
+	if err := SaveCachedInputs(root, "main.tex", name, []string{"main.tex"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := LoadCachedInputs(root, "main.tex", name); err != nil || !found {
+		t.Fatalf("opaque engine did not round-trip: found=%v error=%v", found, err)
+	}
+}
+
+func TestDependencyCacheRejectsInvalidIdentitiesBeforeSaving(t *testing.T) {
+	for _, test := range []struct{ entry, engine string }{
+		{entry: "main.tex"}, {entry: ".", engine: "xelatex"},
+		{entry: "main.tex", engine: "bad\nengine"},
+	} {
+		if err := SaveCachedInputs(t.TempDir(), test.entry, test.engine, []string{"main.tex"}); err == nil {
+			t.Fatalf("accepted entry=%q engine=%q", test.entry, test.engine)
+		}
 	}
 }
