@@ -85,7 +85,13 @@ const (
 	maxNeedsFileBytes  = 64 << 20
 )
 
+// New creates a compiler client for an absolute HTTP(S) server URL. A path
+// prefix is supported, but credentials, queries and fragments are rejected.
+// A zero timeout disables the HTTP deadline; callers still supply contexts.
 func New(baseURL, token string, timeout time.Duration, insecure bool) (*Client, error) {
+	if token != "" && !protocol.ValidBearerToken(token) {
+		return nil, errors.New("bearer token must not contain whitespace or control characters")
+	}
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	parsed, err := url.Parse(baseURL)
 	if err != nil {

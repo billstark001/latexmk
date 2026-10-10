@@ -63,11 +63,15 @@ LATEXMK_AUTH_MODE=none
 
 ### `token`
 
-One shared Bearer token without a database. This is the secure default.
+One shared Bearer token without a database. This is the secure default. Static
+and bootstrap tokens require at least 24 characters and cannot contain whitespace
+or control characters. Generate a separate random value for each deployment. `LATEXMK_API_TOKEN_FILE`
+can select a regular secret file instead of an environment token; symlinked
+secret mounts are supported, and reads are limited to 64 KiB.
 
 ```sh
 LATEXMK_AUTH_MODE=token
-LATEXMK_API_TOKEN='a random value at least 24 characters long'
+LATEXMK_API_TOKEN="$(openssl rand -hex 32)"
 ```
 
 ### `postgres`
@@ -79,7 +83,7 @@ administration.
 LATEXMK_AUTH_MODE=postgres
 LATEXMK_DATABASE_MODE=postgres
 DATABASE_URL='postgres://latexmk:password@postgres:5432/latexmk?sslmode=require'
-LATEXMK_BOOTSTRAP_TOKEN='a random value at least 24 characters long'
+LATEXMK_BOOTSTRAP_TOKEN="$(openssl rand -hex 32)"
 ```
 
 Administration endpoints are `GET/POST /v1/admin/users`,
@@ -98,7 +102,7 @@ pglite-server --db=.latexmk-pglite --host=127.0.0.1 --port=5432
 LATEXMK_AUTH_MODE=postgres \
 LATEXMK_DATABASE_MODE=pglite \
 DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable' \
-LATEXMK_BOOTSTRAP_TOKEN='a random value at least 24 characters long' \
+LATEXMK_BOOTSTRAP_TOKEN="$(openssl rand -hex 32)" \
 ./packages/server/dist/latexmk-server
 ```
 

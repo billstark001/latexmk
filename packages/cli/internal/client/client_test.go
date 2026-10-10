@@ -1292,3 +1292,17 @@ func TestCompileCacheRequiresAdvertisedCapability(t *testing.T) {
 		})
 	}
 }
+
+func TestNewRejectsUnusableBearerToken(t *testing.T) {
+	for _, token := range []string{"secret with-space", "secret\r\nheader", "secret\x00control"} {
+		if _, err := New(
+			"https://compiler.example",
+			token,
+			time.Second,
+			false,
+		); err == nil ||
+			strings.Contains(err.Error(), token) {
+			t.Fatalf("unsafe credential error: %v", err)
+		}
+	}
+}

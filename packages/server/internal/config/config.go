@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/billstark001/latexmk/packages/shared/engine"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
@@ -303,15 +304,19 @@ func (c Config) Validate() error {
 	switch c.AuthMode {
 	case "none":
 	case "token":
-		if len(c.APIToken) < 24 {
-			return fmt.Errorf("LATEXMK_API_TOKEN must contain at least 24 characters for token auth")
+		if len(c.APIToken) < 24 || !protocol.ValidBearerToken(c.APIToken) {
+			return fmt.Errorf(
+				"LATEXMK_API_TOKEN must contain at least 24 characters without whitespace or controls for token auth",
+			)
 		}
 	case "postgres", "database":
 		if c.DatabaseURL == "" {
 			return fmt.Errorf("DATABASE_URL is required for postgres auth")
 		}
-		if len(c.BootstrapToken) < 24 {
-			return fmt.Errorf("LATEXMK_BOOTSTRAP_TOKEN must contain at least 24 characters for postgres auth")
+		if len(c.BootstrapToken) < 24 || !protocol.ValidBearerToken(c.BootstrapToken) {
+			return fmt.Errorf(
+				"LATEXMK_BOOTSTRAP_TOKEN must contain at least 24 characters without whitespace or controls for postgres auth",
+			)
 		}
 	default:
 		return fmt.Errorf("unsupported auth mode %q", c.AuthMode)

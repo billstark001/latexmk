@@ -501,7 +501,7 @@ func readValueFile(path, field string) (string, error) {
 	if token == "" {
 		return "", fmt.Errorf("%s file %s: %w", field, path, errEmptySource)
 	}
-	if strings.ContainsAny(token, "\r\n") {
+	if strings.ContainsAny(token, "\r\n") || field == "token" && !protocol.ValidBearerToken(token) {
 		return "", fmt.Errorf("%s file %s must contain exactly one value", field, path)
 	}
 	return token, nil

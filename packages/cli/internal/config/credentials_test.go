@@ -173,3 +173,25 @@ func TestUserPolicyAndDefaultCredentialsAreDeniedBeforeAuthentication(t *testing
 		}
 	}
 }
+
+func TestAuthenticationRejectsWhitespaceAndControlTokens(t *testing.T) {
+	isolateUserConfig(t)
+	root := t.TempDir()
+	for _, token := range []string{"secret with-space", "secret\twith-tab", "secret\x00with-control"} {
+		cfg, _, err := LoadArgs(root, []string{"--token", token})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = cfg.Authenticate(root)
+		if err == nil || strings.Contains(err.Error(), token) {
+			t.Fatalf("unsafe authentication error: %v", err)
+		}
+		path := filepath.Join(root, "credential")
+		if err := os.WriteFile(path, []byte(token+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ReadTokenFile(path); err == nil || strings.Contains(err.Error(), token) {
+			t.Fatalf("unsafe token file error: %v", err)
+		}
+	}
+}

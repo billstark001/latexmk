@@ -9,6 +9,7 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
@@ -21,6 +22,8 @@ type credentials struct {
 	cliSet                                      bool
 }
 
+// Load resolves configuration and authenticates against the resolved project root.
+// Local-only callers should use LoadArgs to keep credential reads deferred.
 func Load(start string) (Resolved, error) {
 	cfg, err := load(start, nil)
 	if err == nil {
@@ -90,6 +93,8 @@ func LoadArgs(start string, args []string) (Resolved, []string, error) {
 	return cfg, remaining, nil
 }
 
+// Authenticate selects the highest-priority credential for root, opening only
+// files needed by that selection. It clears any prior credential before resolving.
 func (c *Resolved) Authenticate(root string) error {
 	if root == "" {
 		root = c.ProjectRoot
@@ -150,12 +155,10 @@ func (c *Resolved) Authenticate(root string) error {
 			if err != nil {
 				return fmt.Errorf("%s: %w", candidate.name, err)
 			}
-			c.Token, c.TokenSource = token, candidate.name
-			return nil
+			return c.setCredential(token, candidate.name)
 		}
 		if candidate.token != "" {
-			c.Token, c.TokenSource = candidate.token, candidate.name
-			return nil
+			return c.setCredential(candidate.token, candidate.name)
 		}
 		if candidate.file == "" {
 			continue
@@ -170,8 +173,7 @@ func (c *Resolved) Authenticate(root string) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", candidate.name, err)
 		}
-		c.Token, c.TokenSource = token, candidate.name+": "+candidate.file
-		return nil
+		return c.setCredential(token, candidate.name+": "+candidate.file)
 	}
 	return nil
 }
@@ -240,4 +242,12 @@ func loadEnvironment(start, configPath string, configured, override *string) (st
 		return "", nil, fmt.Errorf("parse environment file %s (expected dotenv assignments)", name)
 	}
 	return name, values, nil
+}
+
+func (c *Resolved) setCredential(token, source string) error {
+	if !protocol.ValidBearerToken(token) {
+		return fmt.Errorf("%s must contain one token without whitespace or control characters", source)
+	}
+	c.Token, c.TokenSource = token, source
+	return nil
 }

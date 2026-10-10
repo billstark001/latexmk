@@ -198,6 +198,28 @@ func TestValidateChecksRunnerSettingsWithoutLoad(t *testing.T) {
 	}
 }
 
+func TestTokenAuthRejectsUnusableCredentials(t *testing.T) {
+	t.Setenv("LATEXMK_API_TOKEN_FILE", "")
+	t.Setenv("LATEXMK_API_TOKEN", "a-valid-token-with-enough-characters")
+	t.Setenv("LATEXMK_BOOTSTRAP_TOKEN", "a-valid-token-with-enough-characters")
+	t.Setenv("DATABASE_URL", "postgres://localhost/test")
+	for _, mode := range []string{"token", "postgres"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("LATEXMK_AUTH_MODE", mode)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, token := range []string{strings.Repeat(" ", 24), "long-enough-token-value with-space", "long-enough-token-value\x00control"} {
+				cfg.APIToken, cfg.BootstrapToken = token, token
+				if err := cfg.Validate(); err == nil {
+					t.Fatal("unusable credential accepted")
+				}
+			}
+		})
+	}
+}
+
 func TestDerivedCountLimitsRejectOverflow(t *testing.T) {
 	t.Setenv("LATEXMK_AUTH_MODE", "none")
 	t.Setenv("LATEXMK_API_TOKEN", "")
