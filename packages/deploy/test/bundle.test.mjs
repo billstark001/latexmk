@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -240,6 +240,34 @@ test('force cannot replace the server source directory', async () => {
     assert.equal(await readFile(path.join(source, 'go.mod'), 'utf8'), 'module example.test/server\n');
   } finally {
     await rm(source, { recursive: true, force: true });
+  }
+});
+
+test('force rejects source overlap through a symlinked ancestor', { skip: process.platform === 'win32' }, async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'latexmk-alias-source-test-'));
+  try {
+    const source = path.join(temp, 'real', 'server');
+    await mkdir(source, { recursive: true });
+    await writeFile(path.join(source, 'go.mod'), 'module example.test/server\n');
+    await symlink(path.join(temp, 'real'), path.join(temp, 'alias'));
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.join(root, 'src', 'index.ts'),
+        'bundle',
+        '--server-source',
+        source,
+        '--out',
+        path.join(temp, 'alias', 'server'),
+        '--force',
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /must not overlap/);
+    assert.equal(await readFile(path.join(source, 'go.mod'), 'utf8'), 'module example.test/server\n');
+  } finally {
+    await rm(temp, { recursive: true, force: true });
   }
 });
 

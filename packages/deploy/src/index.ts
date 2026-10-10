@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
@@ -244,8 +244,8 @@ function readPreset(args: string[]): keyof typeof DEPLOYMENT_PRESETS | '' {
 type BundleOptions = ReturnType<typeof parseBundleOptions>;
 
 async function bundle(options: BundleOptions) {
-  assertSeparateOutput(options.out, options.serverSource);
-  assertSeparateOutput(options.out, options.sharedSource);
+  await assertSeparateOutput(options.out, options.serverSource);
+  await assertSeparateOutput(options.out, options.sharedSource);
   await ensureSource(options.serverSource);
   await ensureSource(options.sharedSource);
   await prepareOutput(options.out, options.force);
@@ -444,19 +444,40 @@ async function ensureSource(source: string) {
   if (!goMod?.isFile()) throw new Error(`server source does not contain go.mod: ${source}`);
 }
 
-function assertSeparateOutput(out: string, source: string) {
+// Resolve existing ancestors even for an output directory that has not been
+// created yet. Lexical comparison alone misses aliases through symlinks.
+async function canonicalPath(value: string): Promise<string> {
+  let existing = path.resolve(value);
+  const missing: string[] = [];
+  for (;;) {
+    try {
+      return path.join(await realpath(existing), ...missing.reverse());
+    } catch (error) {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
+      const parent = path.dirname(existing);
+      if (parent === existing) throw error;
+      missing.push(path.basename(existing));
+      existing = parent;
+    }
+  }
+}
+
+async function assertSeparateOutput(out: string, source: string) {
   const inside = (base: string, target: string) => {
     const relative = path.relative(base, target);
     return (
       relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
     );
   };
-  if (inside(out, source) || inside(source, out)) throw new Error('output must not overlap source directories');
+  const outputPath = await canonicalPath(out);
+  const sourcePath = await canonicalPath(source);
+  if (inside(outputPath, sourcePath) || inside(sourcePath, outputPath))
+    throw new Error('output must not overlap source directories');
 }
 
 async function prepareOutput(out: string, force: boolean) {
   for (const directory of ['src', 'runtime', 'templates']) {
-    assertSeparateOutput(out, path.join(packageRoot, directory));
+    await assertSeparateOutput(out, path.join(packageRoot, directory));
   }
   const existing = await stat(out).catch(() => null);
   if (existing) {
