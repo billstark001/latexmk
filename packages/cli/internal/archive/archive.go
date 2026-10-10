@@ -7,6 +7,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 type Options struct {
@@ -43,7 +46,10 @@ type File struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// Create selects, hashes and archives project files under the configured policy.
+// Source changes during creation cause failure; dst may contain partial output.
 func Create(dst io.Writer, opts Options) (Stats, error) {
+	opts.DeferHash = false
 	files, stats, err := Manifest(opts)
 	if err != nil {
 		return stats, err
@@ -54,62 +60,48 @@ func Create(dst io.Writer, opts Options) (Stats, error) {
 	return stats, nil
 }
 
-// CreateFiles writes a previously validated manifest. This keeps preview,
-// incremental upload, and legacy archive upload on the same selected file set.
-func CreateFiles(dst io.Writer, files []File) error {
+// CreateFiles writes an exact content-addressed manifest, verifying both byte
+// count and SHA-256 while copying. Callers needing immutable bytes across editor
+// saves must freeze the manifest first. On error dst may contain partial output.
+func CreateFiles(dst io.Writer, files []File) (err error) {
 	gz := gzip.NewWriter(dst)
 	tw := tar.NewWriter(gz)
+	defer func() { err = errors.Join(err, tw.Close(), gz.Close()) }()
+	seen := make(map[string]bool, len(files))
 	for _, file := range files {
-		f, err := OpenFile(file)
-		if err != nil {
-			_ = tw.Close()
-			_ = gz.Close()
-			return err
+		clean, err := safefs.Clean(file.Path)
+		if err != nil || clean != file.Path || seen[file.Path] {
+			return fmt.Errorf("invalid or duplicate selected path %q", file.Path)
 		}
-		info, err := f.Stat()
-		if err != nil {
-			_ = f.Close()
-			_ = tw.Close()
-			_ = gz.Close()
-			return err
+		seen[file.Path] = true
+		if err := writeSelectedMember(tw, file); err != nil {
+			return fmt.Errorf("archive %s: %w", file.Path, err)
 		}
-		hdr, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			_ = f.Close()
-			_ = tw.Close()
-			_ = gz.Close()
-			return err
-		}
-		hdr.Name = file.Path
-		hdr.Mode = 0o644
-		if err := tw.WriteHeader(hdr); err != nil {
-			_ = f.Close()
-			_ = tw.Close()
-			_ = gz.Close()
-			return err
-		}
-		_, copyErr := io.CopyN(tw, f, info.Size())
-		closeErr := f.Close()
-		if copyErr != nil {
-			_ = tw.Close()
-			_ = gz.Close()
-			return copyErr
-		}
-		if closeErr != nil {
-			_ = tw.Close()
-			_ = gz.Close()
-			return closeErr
-		}
-	}
-	if err := tw.Close(); err != nil {
-		_ = tw.Close()
-		_ = gz.Close()
-		return err
-	}
-	if err := gz.Close(); err != nil {
-		return err
 	}
 	return nil
+}
+
+func writeSelectedMember(tw *tar.Writer, file File) (err error) {
+	f, err := OpenFile(file)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, f.Close()) }()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if file.Size < 0 || file.Size != info.Size() {
+		return errors.New("selected file size changed")
+	}
+	if digest, err := hex.DecodeString(file.SHA256); err != nil || len(digest) != sha256.Size {
+		return errors.New("selected file requires a valid SHA-256 digest")
+	}
+	header := &tar.Header{Name: file.Path, Mode: 0644, Size: file.Size, ModTime: info.ModTime(), Typeflag: tar.TypeReg}
+	if err := tw.WriteHeader(header); err != nil {
+		return err
+	}
+	return safefs.CopyVerified(tw, f, file.Size, strings.ToLower(file.SHA256))
 }
 
 func Manifest(opts Options) ([]File, Stats, error) {

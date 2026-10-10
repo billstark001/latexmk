@@ -47,3 +47,19 @@ func TestReadSelectedFileEnforcesCurrentSize(t *testing.T) {
 		t.Fatal("read trusted stale size metadata")
 	}
 }
+
+func TestCreateFilesRejectsChangedManifestContent(t *testing.T) {
+	for _, changed := range []string{"after!", "longer content"} {
+		root := t.TempDir()
+		name := filepath.Join(root, "main.tex")
+		mustWrite(t, name, "before")
+		files, _, err := Manifest(Options{Root: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustWrite(t, name, changed)
+		if err := CreateFiles(io.Discard, files); err == nil {
+			t.Errorf("archived content changed to %q after manifest capture", changed)
+		}
+	}
+}
