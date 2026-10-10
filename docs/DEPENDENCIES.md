@@ -204,13 +204,13 @@ Unknown formatting commands are silent; recognized dynamic references and Lua
 commands produce diagnostics. `resolved: true` means recognized references
 resolved; it is not proof of a complete dependency set.
 
-Literal `iftrue`/`iffalse` branches are evaluated, including nesting. Other
-registered primitive conditionals are traversed on both sides. Conditional
 Comments and inline `verb`/`lstinline` literals are skipped without changing
 source line numbers. A `%` inside a literal stays literal, so it cannot hide
 dependencies following the closing delimiter. An unfinished inline literal
 stops at its source newline, allowing subsequent lines to be inspected.
 
+Literal `iftrue`/`iffalse` branches are evaluated, including nesting. Other
+registered primitive conditionals are traversed on both sides. Conditional
 changes to module options, search settings or generated contents remain
 unresolved and require explicit manifest selection. `InputIfFileExists` uses
 the allowed manifest to choose its branch; its true hook runs before the input.
