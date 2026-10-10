@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/billstark001/latexmk/packages/server/internal/config"
+
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
 	"github.com/billstark001/latexmk/packages/server/internal/project"
 	"github.com/billstark001/latexmk/packages/server/internal/sandbox"
@@ -130,7 +132,7 @@ func (m *Manager) publishExecution(ctx context.Context, rec record, workspace *c
 			e.cache.Warning = err.Error()
 			return
 		}
-		hash, size, err := safefs.Digest(file, m.cfg.MaxCompileCacheBytes+(1<<20))
+		hash, size, err := safefs.Digest(file, m.cfg.MaxCompileCacheBytes+config.CheckpointArchiveOverheadBytes)
 		err = errors.Join(err, file.Close(), root.Close())
 		if err != nil {
 			e.cache.Warning = err.Error()

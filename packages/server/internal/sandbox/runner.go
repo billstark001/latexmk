@@ -64,7 +64,7 @@ func Run(
 	if err := os.WriteFile(filepath.Join(destination, "request.json"), raw, 0600); err != nil {
 		return compile.Output{}, "", err
 	}
-	metadata, err := describeFile(destination, "request.json", 4<<20)
+	metadata, err := describeFile(destination, "request.json", maxWorkerRequestBytes)
 	if err != nil {
 		return compile.Output{}, "", err
 	}
@@ -87,7 +87,11 @@ func Run(
 		)
 	}
 	if warm {
-		file, err := describeFile(filepath.Dir(checkpoint), filepath.Base(checkpoint), cfg.MaxCompileCacheBytes+(1<<20))
+		file, err := describeFile(
+			filepath.Dir(checkpoint),
+			filepath.Base(checkpoint),
+			cfg.MaxCompileCacheBytes+config.CheckpointArchiveOverheadBytes,
+		)
 		if err != nil {
 			return compile.Output{}, "", err
 		}
@@ -249,7 +253,7 @@ func containerArgs(cfg config.Config, name string) []string {
 		fmt.Sprintf(
 			"/work:rw,nosuid,nodev,noexec,size=%d,nr_inodes=%d,mode=1777",
 			cfg.RunnerWorkspaceBytes,
-			3*cfg.MaxFiles+100,
+			config.RunnerEntryMultiplier*cfg.MaxFiles+config.RunnerExtraEntries,
 		),
 		"--tmpfs",
 		// Biber PAR unpacks its interpreter and shared libraries here. Execution is
@@ -261,7 +265,7 @@ func containerArgs(cfg config.Config, name string) []string {
 		cfg.RunnerImage,
 		"compile-worker",
 		strconv.FormatInt(cfg.RunnerWorkspaceBytes, 10),
-		strconv.Itoa(3*cfg.MaxFiles + 100),
+		strconv.Itoa(config.RunnerEntryMultiplier*cfg.MaxFiles + config.RunnerExtraEntries),
 	}
 }
 

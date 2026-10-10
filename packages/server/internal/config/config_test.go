@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -152,5 +153,64 @@ func TestRunnerRejectsNativeLegacyAndShellEscapeConfiguration(t *testing.T) {
 	t.Setenv("LATEXMK_ALLOW_SHELL_ESCAPE", "true")
 	if _, err := Load(); err == nil {
 		t.Fatal("shell escape was accepted alongside isolated runner")
+	}
+}
+
+func TestDerivedResourceLimitsRejectOverflow(t *testing.T) {
+	t.Setenv("LATEXMK_AUTH_MODE", "none")
+	t.Setenv("LATEXMK_API_TOKEN", "")
+	t.Setenv("LATEXMK_API_TOKEN_FILE", "")
+	for _, name := range []string{"LATEXMK_MAX_COMPILE_CACHE_BYTES", "LATEXMK_RUNNER_WORKSPACE_BYTES"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(name, "9223372036854775807")
+			if _, err := Load(); err == nil {
+				t.Fatal("derived byte budget can overflow")
+			}
+		})
+	}
+}
+
+func TestValidateChecksRunnerSettingsWithoutLoad(t *testing.T) {
+	t.Setenv("LATEXMK_AUTH_MODE", "none")
+	t.Setenv("LATEXMK_API_TOKEN", "")
+	t.Setenv("LATEXMK_API_TOKEN_FILE", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{"mutable image", func(c *Config) { c.RunnerImage = "image:latest"; c.RunnerNamespace = "test-namespace" }},
+		{"missing namespace", func(c *Config) { c.RunnerImage = "image@sha256:" + strings.Repeat("a", 64); c.RunnerNamespace = "" }},
+		{"workspace budget", func(c *Config) { c.RunnerWorkspaceBytes = 0 }},
+		{"revision rate", func(c *Config) { c.MaxRealtimeRevisionRate = 0 }},
+		{"owner sessions", func(c *Config) { c.MaxRealtimeSessionsPerOwner = 0 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bad := cfg
+			test.mutate(&bad)
+			if err := bad.Validate(); err == nil {
+				t.Fatal("invalid runner settings accepted")
+			}
+		})
+	}
+}
+
+func TestDerivedCountLimitsRejectOverflow(t *testing.T) {
+	t.Setenv("LATEXMK_AUTH_MODE", "none")
+	t.Setenv("LATEXMK_API_TOKEN", "")
+	t.Setenv("LATEXMK_API_TOKEN_FILE", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*Config){func(c *Config) { c.MaxQueuedJobs = math.MaxInt }, func(c *Config) { c.MaxFiles = math.MaxInt }} {
+		bad := cfg
+		mutate(&bad)
+		if err := bad.Validate(); err == nil {
+			t.Fatal("accepted an overflowing derived count")
+		}
 	}
 }

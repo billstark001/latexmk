@@ -38,6 +38,8 @@ type workerRequest struct {
 
 const workerProtocolVersion = 2
 
+const maxWorkerRequestBytes = 4 << 20
+
 // Worker runs only inside a dedicated disposable container. Its fixed logical
 // path makes .fdb_latexmk and recorder paths valid across successful checkpoints.
 func Worker(input io.Reader, output io.Writer, maxBytes int64, maxFiles int) error {

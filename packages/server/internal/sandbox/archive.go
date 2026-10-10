@@ -8,9 +8,12 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/billstark001/latexmk/packages/server/internal/config"
 
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
@@ -126,10 +129,15 @@ func ensureDir(path string) error { return os.MkdirAll(path, 0700) }
 
 // ArchiveCheckpoint uses the same bounded transport as full session state for
 // previously verified portable auxiliaries restored by the project manager.
+// Nonnegative limits bound raw files; compressed output gets the configured
+// checkpoint overhead reserve. Invalid or overflowing limits are rejected.
 func ArchiveCheckpoint(root, destination string, maxFiles int, maxBytes int64) error {
+	if maxFiles < 0 || maxBytes < 0 || maxBytes > math.MaxInt64-config.CheckpointArchiveOverheadBytes-1 {
+		return errors.New("invalid checkpoint limits")
+	}
 	members, err := collectState(root, maxFiles, maxBytes)
 	if err != nil {
 		return err
 	}
-	return writeArchiveFile(destination, members, maxBytes+(1<<20), gzip.BestSpeed)
+	return writeArchiveFile(destination, members, maxBytes+config.CheckpointArchiveOverheadBytes, gzip.BestSpeed)
 }

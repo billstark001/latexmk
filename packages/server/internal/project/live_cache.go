@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/billstark001/latexmk/packages/server/internal/config"
+
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
@@ -25,7 +27,7 @@ func (m *Manager) StageLiveCache(
 	size int64,
 	digest string,
 ) (*StatePublication, error) {
-	if size < 0 || size > m.cfg.MaxCompileCacheBytes+(1<<20) {
+	if size < 0 || size > m.cfg.MaxCompileCacheBytes+config.CheckpointArchiveOverheadBytes {
 		return nil, errors.New("live cache exceeds size limit")
 	}
 	path, err := m.LiveCachePath(ownerID, sessionID)

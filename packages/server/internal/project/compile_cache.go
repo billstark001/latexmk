@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
+	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
@@ -89,7 +90,7 @@ func (m *Manager) readCompileCache(path string) (compileCacheRecord, error) {
 		return record, errors.New("cache expired")
 	}
 	// Base64 content and the bounded source manifest are included in this cap.
-	limit := 2*m.cfg.MaxCompileCacheBytes + (16 << 20)
+	limit := 2*m.cfg.MaxCompileCacheBytes + config.CompileCacheMetadataBytes
 	if info.Size() > limit {
 		return record, errors.New("cache exceeds size limit")
 	}

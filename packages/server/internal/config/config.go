@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -60,6 +61,22 @@ type Config struct {
 	CORSOrigins           []string
 }
 
+// CompileCacheMetadataBytes reserves room for the source manifest alongside
+// base64-encoded auxiliary files in a serialized compile-cache record.
+const CompileCacheMetadataBytes = 16 << 20
+
+// RunnerEntryMultiplier budgets source, build and checkpoint entries per file.
+const RunnerEntryMultiplier = 3
+
+// RunnerExtraEntries reserves worker metadata, home and transport directories.
+const RunnerExtraEntries = 100
+
+// CheckpointArchiveOverheadBytes reserves compressed transport space beyond the
+// checkpoint's raw-file budget. Exceeding it produces a cold next attempt.
+const CheckpointArchiveOverheadBytes = 1 << 20
+
+// Load reads startup configuration from the environment, resolves the optional
+// token file, and validates all resource and authentication settings.
 func Load() (Config, error) {
 	allowShellEscape, err := envBool("LATEXMK_ALLOW_SHELL_ESCAPE", false)
 	if err != nil {
@@ -226,16 +243,6 @@ func Load() (Config, error) {
 	if v := os.Getenv("LATEXMK_ADDR"); v != "" {
 		cfg.Addr = v
 	}
-	if cfg.MaxRealtimeSessions < 0 || cfg.RealtimeSessionTTL <= 0 || cfg.RunnerPIDs <= 0 || cfg.RunnerCPUs <= 0 {
-		return Config{}, fmt.Errorf("realtime session and runner limits must be positive")
-	}
-	if cfg.RunnerImage != "" &&
-		(len(cfg.RunnerNamespace) < 8 || len(cfg.RunnerNamespace) > 64 || strings.Trim(cfg.RunnerNamespace, "abcdefghijklmnopqrstuvwxyz0123456789-_") != "") {
-		return Config{}, fmt.Errorf("LATEXMK_RUNNER_NAMESPACE must be a unique 8-64 character lowercase identifier")
-	}
-	if cfg.RunnerImage != "" && !validRunnerImage(cfg.RunnerImage) {
-		return Config{}, fmt.Errorf("LATEXMK_RUNNER_IMAGE must be an immutable sha256 image reference")
-	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -270,7 +277,27 @@ func loadAPIToken() (string, error) {
 	return token, nil
 }
 
+// Validate checks a complete configuration, including isolated-runner settings.
+// Compile-cache bytes and realtime session count may be zero to disable them.
 func (c Config) Validate() error {
+	if c.MaxRealtimeSessions < 0 || c.RealtimeSessionTTL <= 0 || c.RunnerPIDs <= 0 || c.RunnerCPUs <= 0 ||
+		c.RunnerMemoryBytes <= 0 ||
+		c.RunnerWorkspaceBytes <= 0 ||
+		c.MaxRealtimeRevisionRate <= 0 ||
+		c.MaxRealtimeSessionsPerOwner <= 0 {
+		return fmt.Errorf("realtime session and runner limits must be positive")
+	}
+	if c.RunnerImage != "" &&
+		(len(c.RunnerNamespace) < 8 || len(c.RunnerNamespace) > 64 || strings.Trim(c.RunnerNamespace, "abcdefghijklmnopqrstuvwxyz0123456789-_") != "") {
+		return fmt.Errorf("LATEXMK_RUNNER_NAMESPACE must be a unique 8-64 character lowercase identifier")
+	}
+	if c.RunnerImage != "" && !validRunnerImage(c.RunnerImage) {
+		return fmt.Errorf("LATEXMK_RUNNER_IMAGE must be an immutable sha256 image reference")
+	}
+
+	if c.RunnerImage != "" && c.CompileTimeout < time.Millisecond {
+		return fmt.Errorf("isolated runner compile timeout must be at least 1ms")
+	}
 	if c.RunnerImage != "" && (c.EnableLegacyCompile || c.AllowShellEscape) {
 		return fmt.Errorf("isolated runner requires legacy synchronous compilation and shell escape to be disabled")
 	}
@@ -301,6 +328,14 @@ func (c Config) Validate() error {
 	if c.CompileCacheRetention < 0 || c.MaxCompileCacheBytes < 0 {
 		return fmt.Errorf("compile cache limits cannot be negative")
 	}
+	// Derived envelopes double these budgets, and bounded readers need one
+	// additional byte to detect excess content without overflowing int64.
+	if c.MaxCompileCacheBytes > (math.MaxInt64-CompileCacheMetadataBytes-1)/2 {
+		return fmt.Errorf("LATEXMK_MAX_COMPILE_CACHE_BYTES is too large for its serialized envelope")
+	}
+	if c.RunnerWorkspaceBytes > (math.MaxInt64-1)/2 {
+		return fmt.Errorf("LATEXMK_RUNNER_WORKSPACE_BYTES is too large for its transport envelope")
+	}
 	if c.CompileTimeout <= 0 || c.ShutdownTimeout <= 0 || c.MaxUploadBytes <= 0 || c.MaxExpandedBytes <= 0 ||
 		c.MaxArtifactBytes <= 0 ||
 		c.MaxFiles <= 0 ||
@@ -314,6 +349,12 @@ func (c Config) Validate() error {
 		c.BlobRetention <= 0 ||
 		c.StateSweepInterval <= 0 {
 		return fmt.Errorf("resource limits must be positive")
+	}
+	if c.MaxQueuedJobs > math.MaxInt/2 {
+		return fmt.Errorf("LATEXMK_MAX_QUEUED_JOBS is too large for its dispatch queue")
+	}
+	if c.MaxFiles > (math.MaxInt-RunnerExtraEntries)/RunnerEntryMultiplier {
+		return fmt.Errorf("LATEXMK_MAX_FILES is too large for its runner entry budget")
 	}
 	if c.MaxExpandedBytes < c.MaxUploadBytes {
 		return fmt.Errorf("LATEXMK_MAX_EXPANDED_BYTES must be at least LATEXMK_MAX_UPLOAD_BYTES")
@@ -332,6 +373,7 @@ func (c Config) Validate() error {
 	return nil
 }
 
+// EngineAllowed reports whether the exact registered name is enabled.
 func (c Config) EngineAllowed(engine string) bool {
 	for _, e := range c.Engines {
 		if e == engine {
@@ -437,13 +479,6 @@ func validOrigin(value string) bool {
 		return false
 	}
 	return u.Path == ""
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func validRunnerImage(value string) bool {
