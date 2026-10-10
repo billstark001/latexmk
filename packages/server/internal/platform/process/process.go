@@ -29,6 +29,11 @@ type Result struct {
 	Err                              error
 }
 
+// Run executes one command and terminates its process tree when it finishes or
+// ctx is canceled. Captured output is bounded per stream; a zero budget discards
+// output and records truncation. Stdout instead streams to the caller's writer
+// under MaxStreamBytes, canceling the process on a limit or write error.
+// CombinedOutput merges stderr into the same captured buffer or streaming writer.
 func Run(ctx context.Context, spec Spec) Result {
 	if spec.MaxOutputBytes < 0 {
 		return Result{ExitCode: -1, Err: errors.New("negative process output limit")}
@@ -50,7 +55,7 @@ func Run(ctx context.Context, spec Spec) Result {
 		cmd.Stdout = stream
 	}
 	if spec.CombinedOutput {
-		cmd.Stderr = stdout
+		cmd.Stderr = cmd.Stdout
 	}
 	err := cmd.Start()
 	if err == nil {

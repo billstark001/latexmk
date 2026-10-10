@@ -115,3 +115,20 @@ func TestRunCancelsUnboundedStreamBeforeDiskGrowth(t *testing.T) {
 		t.Fatalf("stream bytes=%d result=%+v", stream.Len(), result)
 	}
 }
+
+func TestRunCombinedStreamingIncludesBothStreams(t *testing.T) {
+	var output bytes.Buffer
+	result := Run(
+		context.Background(),
+		Spec{
+			Name:           "sh",
+			Args:           []string{"-c", "printf stdout; printf stderr >&2"},
+			Stdout:         &output,
+			MaxStreamBytes: 128,
+			CombinedOutput: true,
+		},
+	)
+	if result.Err != nil || output.String() != "stdoutstderr" || result.StdoutTruncated {
+		t.Fatalf("combined stream = %q, result=%+v", output.String(), result)
+	}
+}
