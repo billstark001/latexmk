@@ -15,6 +15,9 @@ type cappedBuffer struct {
 func newCappedBuffer(max int64) *cappedBuffer { return &cappedBuffer{max: max} }
 
 func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	original := len(p)
