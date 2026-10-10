@@ -7,10 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/billstark001/latexmk/packages/shared/safefs"
+
 	"github.com/joho/godotenv"
 
 	"github.com/billstark001/latexmk/packages/shared/protocol"
-	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 type credentials struct {
@@ -47,6 +48,9 @@ func LoadArgs(start string, args []string) (Resolved, []string, error) {
 		key, value, inline := strings.Cut(args[i], "=")
 		switch key {
 		case "--no-env-file":
+			if inline {
+				return Resolved{}, nil, fmt.Errorf("--no-env-file does not accept a value")
+			}
 			empty := ""
 			envFile = &empty
 		case "--token", "--token-file", "--token-mode", "--env-file":
@@ -56,6 +60,9 @@ func LoadArgs(start string, args []string) (Resolved, []string, error) {
 					return Resolved{}, nil, fmt.Errorf("%s requires a value", key)
 				}
 				value = args[i]
+			}
+			if value == "" && key != "--env-file" {
+				return Resolved{}, nil, fmt.Errorf("%s requires a nonempty value", key)
 			}
 			switch key {
 			case "--token":

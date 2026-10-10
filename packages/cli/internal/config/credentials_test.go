@@ -196,6 +196,15 @@ func TestAuthenticationRejectsWhitespaceAndControlTokens(t *testing.T) {
 	}
 }
 
+func TestCredentialFlagsRejectEmptyAndUnexpectedValues(t *testing.T) {
+	isolateUserConfig(t)
+	for _, args := range [][]string{{"--token="}, {"--token", ""}, {"--token-mode="}, {"--no-env-file=true"}} {
+		if _, _, err := LoadArgs(t.TempDir(), args); err == nil {
+			t.Errorf("accepted malformed credential flags %q", args)
+		}
+	}
+}
+
 func TestConfigurationRejectsCaseVariantLiteralTokensAndNull(t *testing.T) {
 	isolateUserConfig(t)
 	for _, payload := range []string{`{"Token":"secret"}`, `{"TOKEN":"secret"}`, `{"token":{"env":"TOKEN"},"Token":"secret"}`, `null`} {

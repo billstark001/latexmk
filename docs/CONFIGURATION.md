@@ -170,7 +170,8 @@ JSON environment sources apply in `auto` mode, while `env` mode uses only the
 standard `LATEXMK_TOKEN` / `LATEXMK_TOKEN_FILE` overrides.
 User credentials keep their existing precedence over project credentials.
 Explicit CLI credentials override implicit sources in `auto`, `env`, and `file`;
-`none` disables authentication completely. Automatic files may be absent, but
+`none` disables authentication completely. Explicit `--token`, `--token-file`
+and `--token-mode` values must be nonempty; `--no-env-file` accepts no value. Automatic files may be absent, but
 an explicitly selected file must contain one nonempty token (a final newline is
 accepted). Lower-priority files are never opened after a source is selected.
 
