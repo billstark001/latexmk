@@ -26,7 +26,6 @@ type fileState struct {
 
 type Tracker struct {
 	Refresh func() ([]Target, error)
-	MaxWait time.Duration
 	// RefreshInterval batches native event hints before rediscovering membership.
 	// Zero refreshes selection for every event and poll.
 	RefreshInterval time.Duration
@@ -35,6 +34,7 @@ type Tracker struct {
 	refreshed       time.Time
 	interval        time.Duration
 	debounce        time.Duration
+	maxWait         time.Duration
 }
 
 func New(targets []Target, interval, debounce, maxWait time.Duration) (*Tracker, error) {
@@ -56,7 +56,7 @@ func New(targets []Target, interval, debounce, maxWait time.Duration) (*Tracker,
 		states:   make(map[string]fileState, len(ordered)),
 		interval: interval,
 		debounce: debounce,
-		MaxWait:  maxWait,
+		maxWait:  maxWait,
 	}
 	for _, target := range ordered {
 		tracker.states[target.Path] = statFile(target.Path)
@@ -137,10 +137,7 @@ func (t *Tracker) Wait(ctx context.Context) ([]string, error) {
 		if firstChange.IsZero() {
 			firstChange = now
 		}
-		delay := t.debounce
-		if t.MaxWait > 0 {
-			delay = min(delay, max(0, t.MaxWait-now.Sub(firstChange)))
-		}
+		delay := min(t.debounce, max(0, t.maxWait-now.Sub(firstChange)))
 		settle.Reset(delay)
 	}
 	reconcile := func(eventPath string, refresh bool) (bool, error) {

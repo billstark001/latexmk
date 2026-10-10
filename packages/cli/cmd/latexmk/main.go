@@ -381,10 +381,11 @@ func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOpt
 	}
 	fmt.Fprintf(
 		os.Stderr,
-		"latexmk: watching %d selected files (interval=%s debounce=%s)\n",
+		"latexmk: watching %d selected files (interval=%s debounce=%s maxWait=%s)\n",
 		len(files),
 		opts.watchInterval,
 		opts.watchDebounce,
+		opts.watchMaxWait,
 	)
 	for {
 		refreshed, _, refreshErr := c.Manifest(request.Entry, request.Engine)

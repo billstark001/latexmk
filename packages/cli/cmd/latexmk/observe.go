@@ -59,7 +59,7 @@ func observeSessionLease(
 	id string,
 	interval, timeout time.Duration,
 ) <-chan error {
-	errors := make(chan error, 1)
+	failures := make(chan error, 1)
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -73,14 +73,14 @@ func observeSessionLease(
 				cancel()
 				if err != nil && ctx.Err() == nil {
 					select {
-					case errors <- err:
+					case failures <- err:
 					default:
 					}
 				}
 			}
 		}
 	}()
-	return errors
+	return failures
 }
 
 func observeLive(
