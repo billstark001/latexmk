@@ -101,7 +101,7 @@ func TestLegacyCompileDisabledByDefault(t *testing.T) {
 }
 
 func TestValidOriginRejectsWildcardsAndPaths(t *testing.T) {
-	for _, origin := range []string{"*", "https://console.example.edu/path", "ftp://console.example.edu", "https://user:pass@console.example.edu"} {
+	for _, origin := range []string{"*", "https://console.example.edu?", "https://console.example.edu#", "https://:443", "https://console.example.edu/path", "ftp://console.example.edu", "https://user:pass@console.example.edu"} {
 		if validOrigin(origin) {
 			t.Fatalf("expected invalid origin %q", origin)
 		}

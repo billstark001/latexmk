@@ -97,6 +97,9 @@ func TestNewRejectsUnsafeServerURLs(t *testing.T) {
 		"https://user:pass@example.test",
 		"https://example.test?token=secret",
 		"https://example.test/#fragment",
+		"https://example.test?",
+		"https://example.test#",
+		"https://:443",
 	} {
 		if _, err := New(raw, "", 0, false); err == nil {
 			t.Fatalf("expected URL %q to be rejected", raw)

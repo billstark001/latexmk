@@ -478,7 +478,10 @@ func validOrigin(value string) bool {
 		return false
 	}
 	u, err := url.ParseRequestURI(value)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" ||
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil ||
+		u.ForceQuery ||
+		u.RawQuery != "" ||
+		strings.Contains(value, "#") ||
 		u.Fragment != "" {
 		return false
 	}

@@ -97,10 +97,9 @@ func New(baseURL, token string, timeout time.Duration, insecure bool) (*Client, 
 	if err != nil {
 		return nil, fmt.Errorf("invalid server URL: %w", err)
 	}
-	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.Opaque != "" ||
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.Opaque != "" ||
 		parsed.User != nil ||
-		parsed.RawQuery != "" ||
-		parsed.Fragment != "" {
+		parsed.ForceQuery || parsed.RawQuery != "" || strings.Contains(baseURL, "#") {
 		return nil, errors.New("server URL must be an absolute http(s) URL without credentials, query, or fragment")
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
