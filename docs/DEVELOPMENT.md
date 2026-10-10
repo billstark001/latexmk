@@ -44,6 +44,25 @@ Compiler-specific code belongs in the shared `engine.Driver` registry rather
 than repeated engine-name switches. Keep configuration/protocol names as
 strings. See [driver registration](ENGINES.md#driver-interface-and-registration).
 
+## Focused edge-case checks
+
+Fuzz tests exercise dependency command scanning, literal glob escaping, result
+archive decoding, SSE framing, bounded JSON and exact resource-unit parsing.
+Run one target at a time with a bounded duration, for example:
+
+```sh
+go -C packages/cli test ./internal/dependency -run '^$' -fuzz '^FuzzScanInvocations$' -fuzztime=3m
+go -C packages/cli test ./internal/client -run '^$' -fuzz '^FuzzSessionEventFraming$' -fuzztime=3m
+go -C packages/server test ./internal/resultarchive -run '^$' -fuzz '^FuzzDecode$' -fuzztime=3m
+go -C packages/cli test ./internal/dependency -run '^$' -fuzz '^FuzzExactPattern$' -fuzztime=3m
+go -C packages/shared test ./jsonutil -run '^$' -fuzz '^FuzzDecodeBoundedEnvelope$' -fuzztime=3m
+go -C packages/server test ./internal/config -run '^$' -fuzz '^FuzzParseByteSize$' -fuzztime=3m
+```
+
+Benchmarks beside the tests measure nested ignore evaluation, missing-file log
+extraction and SyncTeX rewriting. Compare them with `go test -bench . -benchmem`
+in the relevant package; timing depends on the host and fixture.
+
 ## Local integration checks
 
 Standard unit checks do not require local TeX or Docker. Optional engine tests

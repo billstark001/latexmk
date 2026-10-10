@@ -65,6 +65,70 @@ numbers.
 
 ### Fixed
 
+- Verify complete tar.gz envelopes after the tar end marker and share bounded
+  zero-padding validation across uploads, checkpoints and CLI result readers.
+- Enforce log budgets after UTF-8 repair, reject duplicate result members, and
+  apply consistent aggregate limits to CLI result, log and diagnostic reads.
+- Preserve dependencies after inline verbatim percent signs, avoid treating
+  escaped commands as literals, and scan inline literals in one linear pass.
+- Use root-confined bounded reads and atomic publication for CLI policy,
+  manifest and dependency-cache files; permit valid opaque long engine names.
+- Reject nonfinite, overflowing and sub-byte server resource settings. Avoid
+  overflow in realtime revision bursts and make subscription release idempotent.
+- Reject duplicate current input paths during auxiliary-cache compatibility
+  checks and compare realtime compile options directly as typed values.
+- Protect deployment source directories from forced output replacement through
+  symlinked ancestor paths.
+- Reject null or trailing JSON API/envelope bodies through a shared bounded
+  decoder while preserving additive metadata fields and strict request schemas.
+- Publish project IDs atomically under concurrent CLI initialization and preserve
+  existing ZIP output when even an empty pack is canceled.
+- Honor cancellation for empty source captures and document private-spool ownership.
+- Accept complete SSE events with LF, CRLF or CR framing, bound multiline event
+  bodies, and avoid delaying CR-terminated events on quiet connections.
+- Bound SyncTeX expansion and rewritten output, preserve record/newline layout,
+  and stream record replacement without allocating a whole line table.
+- Validate whitespace/control-free Bearer credentials, reject ambiguous duplicate
+  authorization headers, and add authentication mode/role regression coverage.
+- Filter terminal control characters from all human CLI output and enforce the
+  terminal helpers with the standard Go lint rule.
+- Cache nested ignore matchers per directory and bound missing-file regex matches,
+  reducing repeated compilation and allocation for large projects and logs.
+- Evaluate nested ignore patterns relative to their literal directory, preserving
+  CRLF/blank-line rules and directory names containing glob metacharacters.
+- Reject directories and special files in upload-policy explanations and cover
+  ignored, missing, tracked and symlink candidates without reading their contents.
+- Share artifact classification between CLI and server so legacy metadata does
+  not discard uppercase PDF/SyncTeX outputs or index/glossary diagnostics.
+- Publish downloaded artifacts and local auxiliaries through one opened root,
+  preventing directory replacement from substituting unverified staging files;
+  preserve old output on failed writes without a Windows delete-before-rename.
+- Detect invalid artifact metadata, overflowed manifest totals and derived archive
+  budgets before reading data; treat empty process writes as non-truncating.
+- Use Node's standard argument parser for deployment options, validate empty and
+  multiline values before replacing output, and retain explicit preset overrides.
+- Confine cleanup-plan I/O to the user cache root, publish complete plans
+  atomically, and reject malformed server URL boundaries consistently.
+- Apply credential rules to case-insensitive JSON keys, reject null/oversized
+  configuration and empty credential flags, and bound actual dotenv/value-file
+  reads while preserving regular-file secret symlinks.
+- Verify gzip trailers before pruning expired result auxiliaries, preserving the
+  original archive on corruption, and include stderr in combined streamed output.
+- Verify selected upload bytes against their manifest during archive creation,
+  reject negative archive/project limits, and guard worker duration, checkpoint
+  and queue/inode arithmetic against overflow.
+- Honor caller deadlines during the initial PostgreSQL handshake instead of
+  GORM's automatic background-context ping; recognize Unicode display-name
+  controls and stabilize job ordering when creation timestamps tie.
+- Require successful toolchain version probes, deduplicate identical commands,
+  and cap concurrent startup probes instead of serially repeating aliases.
+- Reject malformed or repeated job-list limits rather than silently using the
+  default; share page bounds across the CLI and server.
+- Parse decimal resource units exactly with the standard big-number library,
+  avoiding float rounding near one byte and above 2^53, with bounded mantissa
+  and exponent input. Hash selected files against bounded actual byte streams.
+- Preserve missing-file recovery's historical byte watermark after earlier
+  additions grow and shrink, preventing later retries from resetting the budget.
 - Renew realtime leases only through explicit client renewal or new revision
   admission. Reads, subscriptions and SSE heartbeats cannot keep abandoned
   sessions alive; CLI renewal continues during uploads and downloads.
