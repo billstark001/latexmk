@@ -4,71 +4,109 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: Image profile to publish
+        description: Image profile to build
         type: choice
         default: both
         options: [both, slim, full]
+      publish:
+        description: Publish verified images to GHCR (otherwise use a disposable local registry)
+        type: boolean
+        default: false
+      force-runtime:
+        description: Rebuild the runtime without layer cache (for OS updates)
+        type: boolean
+        default: false
+      verify-reuse:
+        description: Exercise a second runtime lookup and assert that it reuses the same digest
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
       - packages/server/**
       - packages/shared/**
+      - packages/cli/**
       - packages/deploy/src/**
-      - packages/deploy/templates/Dockerfile.app
-      - packages/deploy/runtime/lock.json
+      - packages/deploy/templates/**
+      - packages/deploy/runtime/**
+      - scripts/runtime-image.mjs
+      - scripts/realtime-e2e.py
+      - .github/actions/ensure-runtime/**
       - .github/workflows/app-image.yml
 
 permissions:
   contents: read
   packages: write
 
-concurrency:
-  group: app-image-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   app:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
+    concurrency:
+      group: runtime-${{ github.repository }}-${{ matrix.profile }}-${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
         profile: ${{ github.event_name == 'workflow_dispatch' && inputs.profile != 'both' && fromJSON(format('["{0}"]', inputs.profile)) || fromJSON('["slim","full"]') }}
+    services:
+      registry:
+        image: registry:3
+        ports: [5000:5000]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Reclaim space for TeX images
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+      - name: Ensure runtime
+        id: runtime
+        uses: ./.github/actions/ensure-runtime
+        with:
+          profile: ${{ matrix.profile }}
+          publish: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
+          force: ${{ inputs.force-runtime || false }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Exercise runtime cache hit
+        id: reuse
+        if: inputs.verify-reuse
+        uses: ./.github/actions/ensure-runtime
+        with:
+          profile: ${{ matrix.profile }}
+          publish: ${{ inputs.publish }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Assert reuse kept the verified digest
+        if: inputs.verify-reuse
+        env:
+          ORIGINAL: ${{ steps.runtime.outputs.ref }}
+          REUSED: ${{ steps.reuse.outputs.ref }}
+          CACHE_HIT: ${{ steps.reuse.outputs.reused }}
+        run: |
+          test "$CACHE_HIT" = true
+          test "$ORIGINAL" = "$REUSED"
       - name: Prepare application context
         id: context
         env:
           PROFILE: ${{ matrix.profile }}
-          SLIM_RUNTIME: ${{ vars.LATEXMK_RUNTIME_SLIM }}
-          FULL_RUNTIME: ${{ vars.LATEXMK_RUNTIME_FULL }}
+          RUNTIME: ${{ steps.runtime.outputs.ref }}
+          PUBLISH: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
         run: |
-          if [ "$PROFILE" = slim ]; then runtime="$SLIM_RUNTIME"; else runtime="$FULL_RUNTIME"; fi
-          if ! [[ "$runtime" =~ ^[a-zA-Z0-9][a-zA-Z0-9._/:-]*@sha256:[a-f0-9]{64}$ ]]; then
-            echo "Set LATEXMK_RUNTIME_${PROFILE^^} to the digest printed by runtime-image before publishing an application."
-            exit 1
-          fi
-          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          registry=localhost:5000
+          if [ "$PUBLISH" = true ]; then registry=ghcr.io; fi
+          image="$registry/${GITHUB_REPOSITORY,,}"
           echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "candidate=$image:ci-$PROFILE-$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
           echo "build_date=$(date -u +%FT%TZ)" >> "$GITHUB_OUTPUT"
-          node packages/deploy/src/index.ts bundle --profile "$PROFILE" --runtime-image "$runtime" --out dist/app
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and publish application
+          node packages/deploy/src/index.ts bundle --profile "$PROFILE" --runtime-image "$RUNTIME" --out dist/app
+      - name: Build application candidate
         id: build
         uses: docker/build-push-action@v6
         with:
           context: dist/app
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.context.outputs.image }}:${{ matrix.profile }}-${{ github.sha }}
+          tags: ${{ steps.context.outputs.candidate }}
           build-args: |
             COMMIT=${{ github.sha }}
             BUILD_DATE=${{ steps.context.outputs.build_date }}
@@ -89,9 +127,11 @@ jobs:
           docker pull postgres:17-alpine
           database_image=$(docker inspect --format '{{index .RepoDigests 0}}' postgres:17-alpine)
           python3 scripts/realtime-e2e.py --image "$IMAGE@$DIGEST" --database-image "$database_image"
-      - name: Record application image
+      - name: Promote verified application
         env:
           IMAGE: ${{ steps.context.outputs.image }}
           DIGEST: ${{ steps.build.outputs.digest }}
+          PROFILE: ${{ matrix.profile }}
         run: |
+          node scripts/runtime-image.mjs promote --image "$IMAGE" --tag "$PROFILE-$GITHUB_SHA" --ref "$IMAGE@$DIGEST"
           printf 'Application image: `%s@%s`\n' "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
