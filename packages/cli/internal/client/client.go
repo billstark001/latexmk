@@ -12,6 +12,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
+	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -22,10 +25,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
-	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
-	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 type Client struct {
@@ -127,7 +126,7 @@ func (c *Client) Metadata(ctx context.Context) (protocol.Metadata, error) {
 	if resp.StatusCode/100 != 2 {
 		return meta, readHTTPError(resp)
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&meta); err != nil {
+	if err := decodeAPIResponse(resp.Body, 1<<20, &meta, false); err != nil {
 		return meta, fmt.Errorf("decode metadata: %w", err)
 	}
 	return meta, nil
@@ -740,9 +739,7 @@ func (c *Client) jsonRequest(ctx context.Context, method, path string, body any,
 	if output == nil || resp.StatusCode == http.StatusNoContent {
 		return nil
 	}
-	decoder := json.NewDecoder(io.LimitReader(resp.Body, 8<<20))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(output); err != nil {
+	if err := decodeAPIResponse(resp.Body, 8<<20, output, true); err != nil {
 		return fmt.Errorf("decode API response: %w", err)
 	}
 	return nil

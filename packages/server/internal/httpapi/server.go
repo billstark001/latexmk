@@ -2,14 +2,23 @@
 package httpapi
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+	projectarchive "github.com/billstark001/latexmk/packages/server/internal/archive"
+	"github.com/billstark001/latexmk/packages/server/internal/auth"
+	"github.com/billstark001/latexmk/packages/server/internal/compile"
+	"github.com/billstark001/latexmk/packages/server/internal/config"
+	"github.com/billstark001/latexmk/packages/server/internal/jobs"
+	"github.com/billstark001/latexmk/packages/server/internal/project"
+	"github.com/billstark001/latexmk/packages/server/internal/resultarchive"
+	"github.com/billstark001/latexmk/packages/server/internal/store"
+	"github.com/billstark001/latexmk/packages/shared/jsonutil"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/gin-gonic/gin"
 	"io"
 	"log/slog"
 	"mime"
@@ -19,18 +28,6 @@ import (
 	"runtime/debug"
 	"strconv"
 	"time"
-
-	"github.com/gin-gonic/gin"
-
-	projectarchive "github.com/billstark001/latexmk/packages/server/internal/archive"
-	"github.com/billstark001/latexmk/packages/server/internal/auth"
-	"github.com/billstark001/latexmk/packages/server/internal/compile"
-	"github.com/billstark001/latexmk/packages/server/internal/config"
-	"github.com/billstark001/latexmk/packages/server/internal/jobs"
-	"github.com/billstark001/latexmk/packages/server/internal/project"
-	"github.com/billstark001/latexmk/packages/server/internal/resultarchive"
-	"github.com/billstark001/latexmk/packages/server/internal/store"
-	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 // Server owns the Gin engine and exposes the v2 content-addressed upload and
@@ -47,6 +44,9 @@ type Server struct {
 	engine   *gin.Engine
 }
 
+// New wires a validated configuration and initialized service dependencies into
+// an HTTP handler. Starting/stopping workers and closing the database remain the
+// caller's responsibility.
 func New(
 	cfg config.Config,
 	meta protocol.Metadata,
@@ -103,6 +103,7 @@ func New(
 	return s
 }
 
+// Handler returns the configured concurrent HTTP handler.
 func (s *Server) Handler() http.Handler { return s.engine }
 
 func (s *Server) health(c *gin.Context) {
@@ -607,22 +608,7 @@ func validRequestID(value string) bool {
 }
 
 func decodeStrictJSON(r io.Reader, maxBytes int64, dst any) error {
-	data, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
-	if err != nil {
-		return err
-	}
-	if int64(len(data)) > maxBytes {
-		return fmt.Errorf("JSON body exceeds %d bytes", maxBytes)
-	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(dst); err != nil {
-		return err
-	}
-	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("multiple JSON values are not allowed")
-	}
-	return nil
+	return jsonutil.DecodeStrict(r, maxBytes, dst)
 }
 
 func writeError(c *gin.Context, status int, message string) {
