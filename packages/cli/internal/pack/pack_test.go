@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,5 +139,22 @@ func TestGeneratedOutputCannotReplaceSource(t *testing.T) {
 	generated := []projectarchive.File{{Path: "main.bbl", Size: 3, SHA256: "generated"}}
 	if _, err := Merge(source, generated); err == nil {
 		t.Fatal("generated output replaced source")
+	}
+}
+
+func TestCancelledEmptyPackPreservesExistingOutput(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	output := filepath.Join(t.TempDir(), "paper.zip")
+	original := []byte("previous package")
+	if err := os.WriteFile(output, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(ctx, output, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled pack error=%v", err)
+	}
+	data, err := os.ReadFile(output)
+	if err != nil || !bytes.Equal(data, original) {
+		t.Fatalf("output=%q, error=%v", data, err)
 	}
 }

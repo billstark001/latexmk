@@ -21,6 +21,8 @@ import (
 const MaxFiles = 20_000
 const MaxBytes int64 = 2 << 30
 
+const maxZIPOverheadBytes int64 = 32 << 20
+
 func ValidateMode(mode string) error {
 	if mode != "default" && mode != "arxiv" {
 		return errors.New("pack mode must be default or arxiv")
@@ -97,6 +99,9 @@ func Merge(sources, generated []projectarchive.File) ([]projectarchive.File, err
 // Write publishes atomically only after every member passes its captured hash.
 // Sorted paths, fixed timestamps and modes make identical snapshots reproducible.
 func Write(ctx context.Context, output string, files []projectarchive.File) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !strings.EqualFold(filepath.Ext(output), ".zip") {
 		return errors.New("pack output must have a .zip extension")
 	}
@@ -108,23 +113,36 @@ func Write(ctx context.Context, output string, files []projectarchive.File) erro
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	_, err = root.WriteAtomic(filepath.Base(output), MaxBytes+(32<<20), func(dst io.Writer) error {
+	pending, err := root.Stage(filepath.Base(output), MaxBytes+maxZIPOverheadBytes, func(dst io.Writer) error {
 		return writeZIP(ctx, dst, files)
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	defer func() { _ = pending.Close() }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return pending.Commit()
 }
 
 func writeZIP(ctx context.Context, dst io.Writer, files []projectarchive.File) (err error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(files) > MaxFiles {
 		return errors.New("pack exceeds file limit")
 	}
 	files = append([]projectarchive.File(nil), files...)
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	writer := zip.NewWriter(dst)
-	defer func() { err = errors.Join(err, writer.Close()) }()
+	defer func() { err = errors.Join(err, writer.Close(), ctx.Err()) }()
 	seen := make(map[string]bool)
 	var total int64
 	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		clean, err := safefs.Clean(file.Path)
 		if err != nil || clean != file.Path || seen[file.Path] {
 			return fmt.Errorf("unsafe or duplicate pack member %q", file.Path)
