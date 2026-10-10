@@ -95,9 +95,15 @@ type CompileJob struct {
 	FinishedAt       *time.Time `gorm:"index"`
 }
 
+// Open creates a single-connection pool, verifies connectivity and migrates the
+// schema under ctx. It closes the pool if initialization fails. The caller owns
+// the returned store and must Close it when shutdown completes.
 func Open(ctx context.Context, databaseURL string) (*Postgres, error) {
 	db, err := gorm.Open(postgres.Open(databaseURL), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Error),
+		// GORM's automatic Ping uses a background context. Our explicit Ping below
+		// must own the first network handshake so startup deadlines are honored.
+		DisableAutomaticPing: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open PostgreSQL connection: %w", err)
@@ -124,6 +130,7 @@ func Open(ctx context.Context, databaseURL string) (*Postgres, error) {
 	return p, nil
 }
 
+// Close releases the connection pool. It safely accepts a nil receiver.
 func (p *Postgres) Close() {
 	if p == nil || p.db == nil {
 		return
