@@ -2,11 +2,10 @@ module github.com/billstark001/latexmk/packages/server
 
 go 1.27.0
 
-require github.com/billstark001/latexmk/packages/shared v0.0.0
-
 replace github.com/billstark001/latexmk/packages/shared => ../shared
 
 require (
+	github.com/billstark001/latexmk/packages/shared v0.0.0
 	github.com/gin-gonic/gin v1.11.0
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.1
