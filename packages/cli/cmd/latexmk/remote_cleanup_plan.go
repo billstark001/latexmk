@@ -15,13 +15,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/billstark001/latexmk/packages/shared/jsonutil"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 const (
-	cleanupPlanVersion = 1
-	cleanupPlanTTL     = 10 * time.Minute
-	maxCleanupPlans    = 64
+	cleanupPlanVersion   = 1
+	cleanupPlanTTL       = 10 * time.Minute
+	maxCleanupPlans      = 64
+	maxCleanupPlanBytes  = 1 << 20
+	cleanupPlanDirectory = "latexmk/cleanup-plans"
 )
 
 var cleanupPlanIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -82,67 +86,102 @@ func cleanupPlansDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "latexmk", "cleanup-plans"), nil
+	return filepath.Join(base, filepath.FromSlash(cleanupPlanDirectory)), nil
+}
+
+// openCleanupPlanRoot anchors operations at the user cache directory, so both
+// the latexmk parent and plan directory remain confined during actual I/O.
+func openCleanupPlanRoot(create bool) (*safefs.Root, string, error) {
+	dir, err := cleanupPlansDir()
+	if err != nil {
+		return nil, "", err
+	}
+	base := filepath.Dir(filepath.Dir(dir))
+	if create {
+		if err := os.MkdirAll(base, 0700); err != nil {
+			return nil, dir, err
+		}
+	}
+	scoped, err := safefs.Open(base)
+	if err != nil {
+		return nil, dir, err
+	}
+	if create {
+		if err := scoped.MakeDirs(cleanupPlanDirectory, 0700); err != nil {
+			_ = scoped.Close()
+			return nil, dir, err
+		}
+	}
+	return scoped, dir, nil
 }
 
 func saveRemoteCleanupPlan(plan remoteCleanupPlan) error {
-	dir, err := cleanupPlansDir()
+	if !validRemoteCleanupPlan(plan, plan.ID) {
+		return errors.New("remote cleanup plan contents are invalid")
+	}
+	scoped, _, err := openCleanupPlanRoot(true)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	info, err := os.Lstat(dir)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("cleanup plan directory is not a real directory")
-	}
-	entries, err := os.ReadDir(dir)
+	defer func() { _ = scoped.Close() }()
+	directory, err := scoped.Root.OpenRoot(cleanupPlanDirectory)
 	if err != nil {
 		return err
 	}
+	defer func() { _ = directory.Close() }()
+	entries, err := directory.Open(".")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = entries.Close() }()
 	active := 0
-	for _, entry := range entries {
-		id := strings.TrimSuffix(entry.Name(), ".json")
-		if id == entry.Name() || !cleanupPlanIDPattern.MatchString(id) {
-			continue
+	for {
+		batch, readErr := entries.ReadDir(128)
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return readErr
 		}
-		entryInfo, infoErr := entry.Info()
-		if infoErr != nil {
-			return infoErr
-		}
-		if entryInfo.Mode().IsRegular() && time.Since(entryInfo.ModTime()) > cleanupPlanTTL+time.Minute {
-			if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil && !os.IsNotExist(err) {
+		for _, entry := range batch {
+			id := strings.TrimSuffix(entry.Name(), ".json")
+			if id == entry.Name() || !cleanupPlanIDPattern.MatchString(id) {
+				continue
+			}
+			entryInfo, err := entry.Info()
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
 				return err
 			}
-			continue
+			if entryInfo.Mode().IsRegular() && time.Since(entryInfo.ModTime()) > cleanupPlanTTL+time.Minute {
+				if err := directory.Remove(entry.Name()); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+				continue
+			}
+			active++
+			if active >= maxCleanupPlans {
+				return errors.New("too many active cleanup plans; wait for old plans to expire")
+			}
 		}
-		active++
-	}
-	if active >= maxCleanupPlans {
-		return errors.New("too many active cleanup plans; wait for old plans to expire")
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
 	}
 	payload, err := json.MarshalIndent(plan, "", "  ")
 	if err != nil {
 		return err
 	}
 	payload = append(payload, '\n')
-	path := filepath.Join(dir, plan.ID+".json")
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	pending, err := scoped.Stage(
+		cleanupPlanDirectory+"/"+plan.ID+".json",
+		maxCleanupPlanBytes,
+		func(w io.Writer) error { _, err := w.Write(payload); return err },
+	)
 	if err != nil {
 		return err
 	}
-	if _, err := f.Write(payload); err != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
-		return err
-	}
-	return f.Close()
+	defer func() { _ = pending.Close() }()
+	return pending.CommitExclusive()
 }
 
 func loadRemoteCleanupPlan(planID string) (remoteCleanupPlan, string, error) {
@@ -150,32 +189,25 @@ func loadRemoteCleanupPlan(planID string) (remoteCleanupPlan, string, error) {
 	if !cleanupPlanIDPattern.MatchString(planID) {
 		return plan, "", errors.New("cleanup plan ID is invalid")
 	}
-	dir, err := cleanupPlansDir()
-	if err != nil {
-		return plan, "", err
-	}
+	scoped, dir, err := openCleanupPlanRoot(false)
 	path := filepath.Join(dir, planID+".json")
-	info, err := os.Lstat(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return plan, path, errors.New("cleanup plan was not found; create a new preview")
 		}
 		return plan, path, err
 	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > 1<<20 {
-		return plan, path, errors.New("cleanup plan file is invalid")
-	}
-	payload, err := os.ReadFile(path)
+	defer func() { _ = scoped.Close() }()
+	f, err := scoped.OpenRegular(cleanupPlanDirectory + "/" + planID + ".json")
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return plan, path, errors.New("cleanup plan was not found; create a new preview")
+		}
 		return plan, path, err
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(payload)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&plan); err != nil {
+	defer func() { _ = f.Close() }()
+	if err := jsonutil.DecodeStrict(f, maxCleanupPlanBytes, &plan); err != nil {
 		return plan, path, fmt.Errorf("parse cleanup plan: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return plan, path, errors.New("cleanup plan file contains trailing data")
 	}
 	if !validRemoteCleanupPlan(plan, planID) {
 		return plan, path, errors.New("remote cleanup plan contents are invalid")
@@ -191,9 +223,9 @@ func validRemoteCleanupPlan(plan remoteCleanupPlan, id string) bool {
 	parsed, err := url.Parse(plan.Server)
 	if err != nil || plan.Server != strings.TrimRight(strings.TrimSpace(plan.Server), "/") ||
 		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
-		parsed.Host == "" ||
+		parsed.Hostname() == "" ||
 		parsed.User != nil ||
-		parsed.RawQuery != "" ||
+		parsed.RawQuery != "" || parsed.ForceQuery || strings.Contains(plan.Server, "#") ||
 		parsed.Fragment != "" {
 		return false
 	}
@@ -227,8 +259,18 @@ func validCleanupPlanDigest(value string) bool {
 }
 
 func consumeRemoteCleanupPlan(path string) error {
-	if err := os.Remove(path); err != nil {
-		if os.IsNotExist(err) {
+	scoped, dir, err := openCleanupPlanRoot(false)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = scoped.Close() }()
+	name := filepath.Base(path)
+	id := strings.TrimSuffix(name, ".json")
+	if filepath.Dir(path) != dir || name != id+".json" || !cleanupPlanIDPattern.MatchString(id) {
+		return errors.New("cleanup plan path is invalid")
+	}
+	if err := scoped.Remove(cleanupPlanDirectory + "/" + name); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			return errors.New("remote cleanup plan was already consumed")
 		}
 		return err

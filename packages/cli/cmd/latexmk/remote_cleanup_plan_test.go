@@ -63,3 +63,49 @@ func TestParseRemoteCleanupRequiresPlanForApply(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCleanupPlanRejectsSymlinkedDirectoryOnLoad(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	report := protocol.CleanupReport{
+		ProjectID:  "paper",
+		Scope:      "results",
+		DryRun:     true,
+		PlanDigest: strings.Repeat("a", 64),
+	}
+	plan, err := createRemoteCleanupPlan("https://latex.example.edu", "paper", "results", report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := cleanupPlansDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(t.TempDir(), "plans")
+	if err := os.Rename(dir, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(moved, dir); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, _, err := loadRemoteCleanupPlan(plan.ID); err == nil {
+		t.Fatal("loaded a plan through a symlinked directory")
+	}
+	if err := saveRemoteCleanupPlan(plan); err == nil {
+		t.Fatal("saved a plan through a symlinked directory")
+	}
+}
+
+func TestCleanupPlanRejectsMalformedServerURL(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	report := protocol.CleanupReport{
+		ProjectID:  "paper",
+		Scope:      "results",
+		DryRun:     true,
+		PlanDigest: strings.Repeat("a", 64),
+	}
+	for _, server := range []string{"https://example.test?", "https://example.test#", "https://:443"} {
+		if _, err := createRemoteCleanupPlan(server, "paper", "results", report); err == nil {
+			t.Errorf("accepted server %q", server)
+		}
+	}
+}
