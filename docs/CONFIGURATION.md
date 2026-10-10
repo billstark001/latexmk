@@ -31,7 +31,9 @@ LATEXMK_TOKEN_FILE=.latexmk-token
 Supported `LATEXMK_*` settings and variables explicitly named by a value source
 are consumed. Relative token-file paths from
 dotenv are relative to that file. Relative token/env paths declared in JSON
-are relative to the declaring JSON file. Paths passed on the command line or
+are relative to the declaring JSON file. Dotenv and value/credential files are
+limited to 64 KiB based on the bytes actually read. Symlinks to regular files
+are accepted for secret mounts; directories and named pipes are rejected. Paths passed on the command line or
 through the process environment are relative to the current working directory.
 `projectRoot` and `outDir` in JSON are relative to their declaring JSON file.
 Manifest entries, ignore patterns, and `includeFiles` are project-root-relative.

@@ -4,4 +4,5 @@ package safefs
 
 import "syscall"
 
-const regularOpenFlags = syscall.O_NONBLOCK | syscall.O_NOFOLLOW
+const externalRegularOpenFlags = syscall.O_NONBLOCK
+const regularOpenFlags = externalRegularOpenFlags | syscall.O_NOFOLLOW

@@ -6,7 +6,6 @@ import (
 	"math"
 	"net/url"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -258,12 +257,12 @@ func loadAPIToken() (string, error) {
 	if path == "" {
 		return token, nil
 	}
-	root, err := safefs.Open(filepath.Dir(path))
+	f, err := safefs.OpenRegularFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read LATEXMK_API_TOKEN_FILE: %w", err)
 	}
-	defer func() { _ = root.Close() }()
-	data, err := root.ReadLimited(filepath.Base(path), 64<<10)
+	defer func() { _ = f.Close() }()
+	data, err := safefs.ReadLimited(f, 64<<10)
 	if err != nil {
 		return "", fmt.Errorf("read LATEXMK_API_TOKEN_FILE: %w", err)
 	}

@@ -51,3 +51,14 @@ func TestRootRemainsAnchoredAcrossDirectoryReplacement(t *testing.T) {
 		t.Fatalf("write lost confinement: %q %v", data, err)
 	}
 }
+
+func TestOpenRegularFileRejectsFIFOWithoutBlocking(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pipe")
+	if err := syscall.Mkfifo(path, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := OpenRegularFile(path); err == nil {
+		_ = f.Close()
+		t.Fatal("opened FIFO")
+	}
+}

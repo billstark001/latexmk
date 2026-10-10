@@ -81,7 +81,18 @@ func (r *Root) OpenRegular(name string) (*os.File, error) {
 		return nil, err
 	}
 	// Nonblocking open prevents a raced-in FIFO from hanging before fstat.
-	f, err := r.Root.OpenFile(local, os.O_RDONLY|regularOpenFlags, 0)
+	return regularFile(r.Root.OpenFile(local, os.O_RDONLY|regularOpenFlags, 0))
+}
+
+// OpenRegularFile opens an explicitly selected host path, permitting symlinks
+// used by secret mounts. It does not provide root confinement. The actual opened
+// descriptor must be a regular file; a FIFO cannot block the Unix open operation.
+// The caller owns the returned file and must close it.
+func OpenRegularFile(name string) (*os.File, error) {
+	return regularFile(os.OpenFile(name, os.O_RDONLY|externalRegularOpenFlags, 0))
+}
+
+func regularFile(f *os.File, err error) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}

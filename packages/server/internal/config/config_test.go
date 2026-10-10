@@ -214,3 +214,19 @@ func TestDerivedCountLimitsRejectOverflow(t *testing.T) {
 		}
 	}
 }
+
+func TestAPITokenFileSupportsSecretSymlinks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("a-secure-token-value-at-least-24-characters\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "secret")
+	if err := os.Symlink(path, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Setenv("LATEXMK_API_TOKEN", "")
+	t.Setenv("LATEXMK_API_TOKEN_FILE", link)
+	if token, err := loadAPIToken(); err != nil || token != "a-secure-token-value-at-least-24-characters" {
+		t.Fatalf("secret symlink: %q %v", token, err)
+	}
+}

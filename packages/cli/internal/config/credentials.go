@@ -1,12 +1,15 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/joho/godotenv"
+
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 type credentials struct {
@@ -223,14 +226,16 @@ func loadEnvironment(start, configPath string, configured, override *string) (st
 	if name == "" {
 		return "", nil, nil
 	}
-	info, err := os.Stat(name)
+	f, err := safefs.OpenRegularFile(name)
 	if err != nil {
 		return "", nil, err
 	}
-	if !info.Mode().IsRegular() || info.Size() > maxTokenFileSize {
-		return "", nil, fmt.Errorf("invalid environment file %s", name)
+	defer func() { _ = f.Close() }()
+	payload, err := safefs.ReadLimited(f, maxTokenFileSize)
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid environment file %s (maximum %d bytes): %w", name, maxTokenFileSize, err)
 	}
-	values, err := godotenv.Read(name)
+	values, err := godotenv.Parse(bytes.NewReader(payload))
 	if err != nil {
 		return "", nil, fmt.Errorf("parse environment file %s (expected dotenv assignments)", name)
 	}

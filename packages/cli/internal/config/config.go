@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 const FileName = ".latexmk.json"
@@ -488,27 +488,14 @@ func ReadTokenFile(path string) (string, error) {
 }
 
 func readValueFile(path, field string) (string, error) {
-	st, err := os.Stat(path)
-	if err != nil {
-		return "", fmt.Errorf("read %s file %s: %w", field, path, err)
-	}
-	if !st.Mode().IsRegular() {
-		return "", fmt.Errorf("%s file %s is not a regular file", field, path)
-	}
-	if st.Size() > maxTokenFileSize {
-		return "", fmt.Errorf("%s file %s exceeds %d bytes", field, path, maxTokenFileSize)
-	}
-	f, err := os.Open(path)
+	f, err := safefs.OpenRegularFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read %s file %s: %w", field, path, err)
 	}
 	defer func() { _ = f.Close() }()
-	b, err := io.ReadAll(io.LimitReader(f, maxTokenFileSize+1))
+	b, err := safefs.ReadLimited(f, maxTokenFileSize)
 	if err != nil {
-		return "", fmt.Errorf("read %s file %s: %w", field, path, err)
-	}
-	if len(b) > maxTokenFileSize {
-		return "", fmt.Errorf("%s file %s exceeds %d bytes", field, path, maxTokenFileSize)
+		return "", fmt.Errorf("read %s file %s (maximum %d bytes): %w", field, path, maxTokenFileSize, err)
 	}
 	token := strings.TrimSpace(string(b))
 	if token == "" {
