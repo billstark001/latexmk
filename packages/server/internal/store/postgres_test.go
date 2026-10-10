@@ -39,3 +39,24 @@ func TestOpenRespectsDeadlineWhileServerDoesNotHandshake(t *testing.T) {
 		t.Fatalf("deadline error = %v", err)
 	}
 }
+
+func TestUserAndTokenControlValidationIncludesUnicode(t *testing.T) {
+	for _, value := range []string{"a\x00b", "a\tb", "a\nb", "a\x7fb", "a\u0085b", "a\u009bb"} {
+		if !containsControl(value) {
+			t.Errorf("accepted control characters in %q", value)
+		}
+		// Validation must complete before any database access.
+		p := &Postgres{}
+		if _, err := p.CreateUser(context.Background(), value, "", "member"); err == nil {
+			t.Errorf("accepted user name %q", value)
+		}
+		if _, _, err := p.CreateToken(context.Background(), "user", value); err == nil {
+			t.Errorf("accepted token name %q", value)
+		}
+	}
+	for _, value := range []string{"普通用户", "O'Connor", "Lab member"} {
+		if containsControl(value) {
+			t.Errorf("rejected ordinary display name %q", value)
+		}
+	}
+}

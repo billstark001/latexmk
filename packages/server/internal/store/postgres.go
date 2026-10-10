@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -182,6 +183,8 @@ func (p *Postgres) AuthenticateToken(ctx context.Context, token string) (User, e
 	return user, nil
 }
 
+// CreateUser normalizes the role and trims display fields; an omitted role is
+// member. Names/emails are byte-bounded and cannot contain control characters.
 func (p *Postgres) CreateUser(ctx context.Context, name, email, role string) (User, error) {
 	name = strings.TrimSpace(name)
 	email = strings.TrimSpace(email)
@@ -231,6 +234,8 @@ func (p *Postgres) SetUserEnabled(ctx context.Context, id string, enabled bool) 
 	return nil
 }
 
+// CreateToken stores a new random token hash for an existing user and returns
+// the plaintext once. An empty display name becomes "default".
 func (p *Postgres) CreateToken(ctx context.Context, userID, name string) (TokenInfo, string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -472,7 +477,7 @@ func (p *Postgres) DeleteTerminalJobsBefore(ctx context.Context, cutoff time.Tim
 
 func containsControl(value string) bool {
 	for _, r := range value {
-		if r < 0x20 || r == 0x7f {
+		if unicode.IsControl(r) {
 			return true
 		}
 	}
