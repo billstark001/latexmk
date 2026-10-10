@@ -469,6 +469,9 @@ func (c *Client) compileQueued(
 	if err := unpackResponseWithPolicy(resp.Body, outputRoot, &out, request, c.ProjectRoot); err != nil {
 		return out, err
 	}
+	if out.Result.RequestID != job.ID {
+		return out, errors.New("result archive does not match the requested job")
+	}
 	// Cache publication happens after the immutable result archive is durable.
 	if job.Result != nil {
 		out.Result.CompileCache = job.Result.CompileCache

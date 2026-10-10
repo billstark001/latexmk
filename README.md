@@ -86,19 +86,20 @@ has several targets, set `defaultTarget` in `.latexmk.json` or pass
 
 ## Documentation
 
-| Topic                                                      | Guide                                       |
-| ---------------------------------------------------------- | ------------------------------------------- |
-| Installing the CLI and shell registration                  | [Installation](docs/INSTALLATION.md)        |
-| Configuration, credentials, dotenv and build targets       | [Configuration](docs/CONFIGURATION.md)      |
-| Git ignore rules, manifests, glob and dependency discovery | [File selection](docs/DEPENDENCIES.md)      |
-| Local/server auxiliary retention and compilation reuse     | [Auxiliary files](docs/AUXILIARY.md)        |
-| Deployment, authentication modes and database options      | [Deployment](docs/DEPLOYMENT.md)            |
-| Runtime images and deployment bundles                      | [Deploy package](packages/deploy/README.md) |
-| Jobs, monitoring and storage                               | [Operations](docs/OPERATIONS.md)            |
-| JSON CLI integration                                       | [Agent CLI](docs/AGENT_CLI.md)              |
-| HTTP API                                                   | [API](docs/API.md)                          |
-| Isolation and limitations                                  | [Security](docs/SECURITY.md)                |
-| Toolchain, formatting and validation commands              | [Development](docs/DEVELOPMENT.md)          |
+| Topic                                                       | Guide                                       |
+| ----------------------------------------------------------- | ------------------------------------------- |
+| Installing the CLI and shell registration                   | [Installation](docs/INSTALLATION.md)        |
+| Configuration, credentials, dotenv and build targets        | [Configuration](docs/CONFIGURATION.md)      |
+| Git ignore rules, manifests, glob and dependency discovery  | [File selection](docs/DEPENDENCIES.md)      |
+| Local/server auxiliary retention and compilation reuse      | [Auxiliary files](docs/AUXILIARY.md)        |
+| Portable source ZIPs and verified arXiv submission packages | [Packing](docs/PACKING.md)                  |
+| Deployment, authentication modes and database options       | [Deployment](docs/DEPLOYMENT.md)            |
+| Runtime images and deployment bundles                       | [Deploy package](packages/deploy/README.md) |
+| Jobs, monitoring and storage                                | [Operations](docs/OPERATIONS.md)            |
+| JSON CLI integration                                        | [Agent CLI](docs/AGENT_CLI.md)              |
+| HTTP API                                                    | [API](docs/API.md)                          |
+| Isolation and limitations                                   | [Security](docs/SECURITY.md)                |
+| Toolchain, formatting and validation commands               | [Development](docs/DEVELOPMENT.md)          |
 
 ## Packages
 

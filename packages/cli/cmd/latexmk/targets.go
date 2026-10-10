@@ -118,3 +118,72 @@ func exportPDF(opts compileOptions, out client.CompileOutput) error {
 	}
 	return client.ExportArtifact(opts.outDir, opts.projectRoot, opts.pdfExport, *chosen)
 }
+
+func optionsFromConfig(cfg config.Resolved, dryRun bool) compileOptions {
+	return compileOptions{
+		ignoreFiles: cfg.IgnoreFiles, denyFiles: cfg.DenyFiles, unmatchedGlob: cfg.UnmatchedGlob,
+		auxiliary:     cfg.Auxiliary,
+		server:        cfg.Server,
+		token:         cfg.Token,
+		projectRoot:   cfg.ProjectRoot,
+		projectID:     cfg.ProjectID,
+		rootMode:      cfg.RootMode,
+		uploadMode:    cfg.UploadMode,
+		manifestFile:  cfg.ManifestFile,
+		includeFiles:  append([]string(nil), cfg.IncludeFiles...),
+		gitIgnore:     cfg.RespectGitIgnore,
+		engine:        cfg.Engine,
+		outDir:        cfg.OutDir,
+		timeout:       cfg.Timeout,
+		interaction:   "nonstopmode",
+		synctex:       true,
+		haltOnError:   true,
+		fileLineError: true,
+		insecure:      cfg.InsecureSkipVerify,
+		exclude:       cfg.Exclude,
+		configPath:    cfg.ConfigPath,
+		dryRun:        dryRun,
+		watchInterval: cfg.Watch.Interval,
+		watchDebounce: cfg.Watch.Debounce,
+		watchMaxWait:  cfg.Watch.MaxWait,
+	}
+}
+
+func requestFromOptions(opts compileOptions) protocol.CompileRequest {
+	return protocol.CompileRequest{
+		Auxiliary:       opts.auxiliary,
+		ProtocolVersion: protocol.Version,
+		Entry:           opts.entry,
+		Engine:          opts.engine,
+		Interaction:     opts.interaction,
+		Synctex:         opts.synctex,
+		HaltOnError:     opts.haltOnError,
+		FileLineError:   opts.fileLineError,
+		ShellEscape:     opts.shellEscape,
+		JobName:         opts.jobName,
+		Force:           opts.force,
+		Quiet:           opts.quiet,
+	}
+}
+
+func applyBuildTarget(opts *compileOptions, cfg config.Resolved, args []string) error {
+	target, ok := cfg.Targets[opts.target]
+	if !ok {
+		return fmt.Errorf("unknown target %q", opts.target)
+	}
+	if opts.entry != "" {
+		return errors.New("--target cannot be combined with an entry")
+	}
+	opts.entry, opts.pdfExport = target.Entry, target.PDF
+	if cfg.ConfigPath != "" && !filepath.IsAbs(opts.entry) {
+		opts.entry = filepath.Join(filepath.Dir(cfg.ConfigPath), opts.entry)
+	}
+	if target.Engine != "" && !hasOption(args, "--engine") {
+		opts.engine = target.Engine
+	}
+	if target.OutDir != "" && !hasOption(args, "--out-dir") && !hasOption(args, "-output-directory") {
+		opts.outDir = target.OutDir
+	}
+	opts.includeFiles = append(opts.includeFiles, target.IncludeFiles...)
+	return nil
+}

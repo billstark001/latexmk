@@ -50,6 +50,11 @@ numbers.
 - Configure shared ordinary-watch and realtime timing through
   `watch.interval`, `watch.debounce`, and `watch.maxWait`, with environment and
   CLI overrides. The default maximum wait is independently fixed at 2.5 seconds.
+- Add `pack --mode default|arxiv` with immutable source capture, deterministic
+  ZIP output, selection previews, and optional cold verification. arXiv packages
+  collect bibliography/index/glossary/nomenclature artifacts from the captured
+  build and verify the final bundle before replacing an existing archive.
+- Return generated `.nls` nomenclature files as compilation artifacts.
 
 ### Fixed
 

@@ -1,7 +1,7 @@
 # Agent-facing CLI contract
 
 Status: version 1 draft implemented for detached compile, jobs, logs,
-diagnostics, and artifacts.
+diagnostics, artifacts, and pack.
 
 This contract is for local agents and scripts. The CLI uses the same token,
 timeout, and TLS configuration as interactive commands. It never prints the
@@ -72,6 +72,14 @@ Stable error codes currently include:
 - `result_not_ready`;
 - `result_unavailable`;
 - `artifact_not_found`.
+
+## Pack
+
+`latexmk pack --json` returns command `pack`, with mode, output, entry, engine,
+files, `requiresBuild`, `verified`, optional `buildJobId`, and warnings in `data`.
+Dry-run previews of arXiv/verified packages report pending build work explicitly;
+see [source packages](PACKING.md). Both pack modes preserve the same envelope and
+error/exit-status contract.
 
 ## Detached compile
 

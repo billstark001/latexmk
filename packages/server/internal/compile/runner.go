@@ -517,7 +517,7 @@ func recordedPath(root, base, value string) (string, bool) {
 func allowedArtifact(path string) bool {
 	name := strings.ToLower(filepath.Base(path))
 	for _, suffix := range []string{
-		".pdf", ".log", ".aux", ".bbl", ".bcf", ".blg", ".fdb_latexmk", ".fls", ".out", ".run.xml", ".synctex.gz", ".toc", ".xdv", ".lof", ".lot", ".idx", ".ind", ".ilg", ".nav", ".snm", ".vrb", ".glg", ".glo", ".gls", ".ist",
+		".pdf", ".log", ".aux", ".bbl", ".bcf", ".blg", ".fdb_latexmk", ".fls", ".out", ".run.xml", ".synctex.gz", ".toc", ".xdv", ".lof", ".lot", ".idx", ".ind", ".ilg", ".nav", ".snm", ".vrb", ".glg", ".glo", ".gls", ".ist", ".nls",
 	} {
 		if strings.HasSuffix(name, suffix) {
 			return true
