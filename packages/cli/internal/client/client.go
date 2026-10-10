@@ -16,7 +16,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -25,6 +24,7 @@ import (
 	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
 	"github.com/billstark001/latexmk/packages/shared/jsonutil"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 type Client struct {
@@ -922,71 +922,30 @@ func unpackResponseWithPolicy(
 	return nil
 }
 
+// Verify into a sibling stage and publish through one opened root. Resolving
+// host paths again after copying allows concurrent directory replacement to
+// substitute an unverified staged file or move publication outside the root.
 func writeArtifact(root, rel string, r io.Reader, size int64, expectedSHA256 string) error {
-	clean := filepath.Clean(filepath.FromSlash(rel))
-	if clean == "." || filepath.IsAbs(clean) || clean == ".." ||
-		strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("unsafe artifact path %q", rel)
+	artifact := protocol.Artifact{Path: rel, Size: size, SHA256: expectedSHA256}
+	if err := validateArtifactMetadata(artifact); err != nil {
+		return err
 	}
-	rootAbs, err := filepath.Abs(root)
+	scoped, err := safefs.Open(root)
 	if err != nil {
 		return err
 	}
-	rootAbs, err = filepath.EvalSymlinks(rootAbs)
+	defer func() { _ = scoped.Close() }()
+	pending, err := scoped.Stage(rel, size, func(out io.Writer) error {
+		return safefs.CopyVerified(out, r, size, strings.ToLower(expectedSHA256))
+	})
 	if err != nil {
-		return fmt.Errorf("resolve output root: %w", err)
+		return fmt.Errorf("verify artifact %q: %w", rel, err)
 	}
-	dstAbs := filepath.Join(rootAbs, clean)
-	if dstAbs != rootAbs && !strings.HasPrefix(dstAbs, rootAbs+string(filepath.Separator)) {
-		return fmt.Errorf("artifact escaped output root: %q", rel)
-	}
-	parent, err := ensureSafeParent(rootAbs, filepath.Dir(clean))
-	if err != nil {
-		return fmt.Errorf("prepare artifact %q: %w", rel, err)
-	}
-	dstAbs = filepath.Join(parent, filepath.Base(clean))
-	if info, err := os.Lstat(dstAbs); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("artifact destination is a symbolic link: %q", rel)
-	} else if err != nil && !os.IsNotExist(err) {
+	defer func() { _ = pending.Close() }()
+	if err := pending.Chmod(0o644); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(parent, ".latexmk-artifact-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	hash := sha256.New()
-	n, copyErr := io.CopyN(io.MultiWriter(tmp, hash), r, size)
-	if copyErr != nil {
-		_ = tmp.Close()
-		return copyErr
-	}
-	if n != size {
-		_ = tmp.Close()
-		return io.ErrUnexpectedEOF
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	digest := hex.EncodeToString(hash.Sum(nil))
-	if !strings.EqualFold(digest, expectedSHA256) {
-		return fmt.Errorf("artifact %q SHA-256 mismatch", rel)
-	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
-		return err
-	}
-	if runtime.GOOS == "windows" {
-		_ = os.Remove(dstAbs)
-	}
-	if err := os.Rename(tmpName, dstAbs); err != nil {
-		return err
-	}
-	return nil
+	return pending.Commit()
 }
 
 func ensureSafeParent(root, relativeDir string) (string, error) {

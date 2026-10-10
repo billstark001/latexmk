@@ -97,8 +97,14 @@ func TestAtomicPublicationPreservesPreviousOnFailure(t *testing.T) {
 	if data, _ := root.ReadLimited("result", 10); string(data) != "old" {
 		t.Fatal("published before commit")
 	}
+	if err := pending.Chmod(0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := pending.Commit(); err != nil {
 		t.Fatal(err)
+	}
+	if err := pending.Chmod(0o600); err == nil {
+		t.Fatal("modified an already published file")
 	}
 	if err := pending.Close(); err != nil {
 		t.Fatal(err)

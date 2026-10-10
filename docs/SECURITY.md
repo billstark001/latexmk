@@ -90,6 +90,15 @@ Unix regular-file opens are nonblocking so a replaced FIFO cannot hang a reader.
 Uploads, snapshot materialization, archive extraction, auxiliary caches, artifact
 collection and token-file reads use these primitives. Artifact contents are
 checked again against their collected size and hash during result packaging.
+CLI policy files, explicit manifests and dependency caches use bounded reads
+under the project root; dependency-cache publication uses the same staged writes.
+Downloaded artifacts and local auxiliary-cache files are verified and atomically
+published through an opened root, without resolving host paths again after the
+copy. Failed writes preserve existing output.
+Complete tar.gz reads verify gzip checksums and truncation after the tar end
+marker, permitting at most 1 MiB of zero padding and rejecting hidden trailing
+content. Individual artifact downloads may stop after verifying that artifact's
+declared size and SHA-256, without reading the remainder of the archive.
 The shared recorder parser applies the same `PWD` and root-boundary handling to
 both input and output records, with a bounded recorder-file size.
 

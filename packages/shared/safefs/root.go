@@ -295,6 +295,15 @@ func (p *Pending) Commit() error {
 	return nil
 }
 
+// Chmod sets the staged file's publication mode without resolving the Root's
+// original host path again. It must run before Commit or CommitExclusive.
+func (p *Pending) Chmod(mode os.FileMode) error {
+	if p.temp == "" || p.target == "" {
+		return errors.New("staged file is already closed")
+	}
+	return p.root.Root.Chmod(p.temp, mode)
+}
+
 // CommitExclusive publishes the complete staged file only if its destination
 // does not exist. A hard link makes creation atomic without exposing a partially
 // written file. Close removes the staging link, including after publication.
