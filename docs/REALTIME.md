@@ -71,7 +71,10 @@ prints both the published and wanted revisions; an intermediate success may be
 shown while a newer revision is pending. SyncTeX source records within the remote
 project are rewritten to the local project root after verifying the original
 artifact. The publication manifest hashes the transformed local copy. Unrelated
-absolute system paths and paths escaping the project are not remapped.
+absolute system paths and paths escaping the project are not remapped. Both the
+expanded original and transformed SyncTeX are limited to 64 MiB; path expansion
+cannot exceed that budget. Project paths containing line breaks are rejected
+because they cannot be represented in SyncTeX input records.
 
 Status uses replayable SSE with a bounded event ring, a resync event when history
 is lost, and polling as recovery. Slow subscribers cannot block workers. Connections
