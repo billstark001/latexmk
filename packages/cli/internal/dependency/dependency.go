@@ -211,77 +211,65 @@ func skipSpace(text string, at int) int {
 	return at
 }
 
+// sanitize masks comments and inline literals in one pass, preserving byte
+// offsets and newlines. A percent inside a verbatim literal is not a comment;
+// commands inside comments or escaped control symbols cannot start literals.
 func sanitize(text string) string {
-	bytes := []byte(text)
-	for i := 0; i < len(bytes); i++ {
-		if bytes[i] != '%' {
-			continue
-		}
-		backslashes := 0
-		for j := i - 1; j >= 0 && bytes[j] == '\\'; j-- {
-			backslashes++
-		}
-		if backslashes%2 == 1 {
-			continue
-		}
-		for i < len(bytes) && bytes[i] != '\n' {
-			bytes[i] = '\x00'
-			i++
-		}
-		if i < len(bytes) {
-			for j := i + 1; j < len(bytes) && (bytes[j] == ' ' || bytes[j] == '\t'); j++ {
-				bytes[j] = '\x00'
+	masked := []byte(text)
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case '\\':
+			name, next := controlSequence(text, i)
+			if name == "verb" || name == "lstinline" {
+				end := inlineVerbEnd(text, next, name == "lstinline")
+				for cursor := i; cursor < end; cursor++ {
+					if masked[cursor] != '\n' && masked[cursor] != '\r' {
+						masked[cursor] = ' '
+					}
+				}
+				i = end - 1
+			} else {
+				i = next - 1
+			}
+		case '%':
+			for i < len(masked) && masked[i] != '\n' {
+				masked[i] = '\x00'
+				i++
+			}
+			if i < len(masked) {
+				for cursor := i + 1; cursor < len(masked) && (masked[cursor] == ' ' || masked[cursor] == '\t'); cursor++ {
+					masked[cursor] = '\x00'
+				}
 			}
 		}
 	}
-	text = string(bytes)
-	text = maskInlineVerb(text, "\\lstinline")
-	text = maskInlineVerb(text, "\\verb")
-	return text
+	return string(masked)
 }
 
-func maskInlineVerb(text, token string) string {
-	for search := 0; ; {
-		relative := strings.Index(text[search:], token)
-		if relative < 0 {
-			return text
-		}
-		start := search + relative
-		cursor := start + len(token)
-		if cursor < len(text) &&
-			((text[cursor] >= 'A' && text[cursor] <= 'Z') || (text[cursor] >= 'a' && text[cursor] <= 'z')) {
-			search = cursor
-			continue
-		}
-		if cursor < len(text) && text[cursor] == '*' {
-			cursor++
-		}
-		if token == "\\lstinline" && cursor < len(text) && text[cursor] == '[' {
-			_, next, ok := balanced(text, cursor, '[', ']')
-			if !ok {
-				return text
-			}
-			cursor = next
-		}
-		if cursor >= len(text) || text[cursor] == '\n' || text[cursor] == '\r' {
-			search = cursor
-			continue
-		}
-		delimiter := text[cursor]
-		endRelative := strings.IndexByte(text[cursor+1:], delimiter)
-		if endRelative < 0 {
-			return text
-		}
-		end := cursor + 1 + endRelative + 1
-		masked := []byte(text)
-		for i := start; i < end; i++ {
-			if masked[i] != '\n' {
-				masked[i] = ' '
-			}
-		}
-		text = string(masked)
-		search = end
+// inlineVerbEnd never consumes the next source line, even while an editor has
+// left the literal unfinished. Listings may put one option group before it.
+func inlineVerbEnd(text string, cursor int, listings bool) int {
+	if cursor < len(text) && text[cursor] == '*' {
+		cursor++
 	}
+	if listings && cursor < len(text) && text[cursor] == '[' {
+		_, next, ok := balanced(text, cursor, '[', ']')
+		if !ok {
+			return cursor
+		}
+		cursor = next
+	}
+	if cursor >= len(text) || text[cursor] == '\n' || text[cursor] == '\r' {
+		return cursor
+	}
+	end := len(text)
+	if newline := strings.IndexAny(text[cursor:], "\r\n"); newline >= 0 {
+		end = cursor + newline
+	}
+	if delimiter := strings.IndexByte(text[cursor+1:end], text[cursor]); delimiter >= 0 {
+		return cursor + delimiter + 2
+	}
+	return end
 }
 
 func bracedList(value string) ([]string, bool) {
