@@ -72,8 +72,16 @@ absolute system paths and paths escaping the project are not remapped.
 Status uses replayable SSE with a bounded event ring, a resync event when history
 is lost, and polling as recovery. Slow subscribers cannot block workers. Connections
 have write deadlines, periodic authentication checks and a four-stream limit per
-session. Closing the CLI releases its session. A disconnected session expires
-unless renewed; a missing session is recreated from current local sources.
+session. Closing the CLI attempts to release its session with a five-second
+deadline and reports unsuccessful closure. The CLI explicitly renews its lease
+in a separate loop, including during uploads and downloads. State reads and SSE
+subscriptions/heartbeats do not renew it, so a proxy holding a stream open cannot
+keep an abandoned session alive. A disconnected session expires unless the client
+renews it; a missing session is recreated from current local sources.
+
+This changes the 0.4.0 session API: clients must use `POST /v1/sessions/:id/lease`
+or submit new revisions to renew. Upgrade the CLI and server together; there is
+no implicit renewal or older-server renewal fallback.
 
 Session creation uses an owner-scoped idempotency key retained for the live
 session's lifetime. A lost creation response is retried with the same key and

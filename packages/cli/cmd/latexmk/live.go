@@ -80,7 +80,12 @@ func runLive(c *client.Client, request protocol.CompileRequest, opts compileOpti
 		fmt.Fprintf(os.Stderr, "latexmk: realtime session %s (%s workspace)\n", session.ID, mode)
 		code := runLiveSession(ctx, c, request, opts, meta, session, observation)
 		cleanup, finish := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = c.CloseSession(cleanup, session.ID)
+		if err := c.CloseSession(cleanup, session.ID); err != nil {
+			var failure *client.HTTPError
+			if !errors.As(err, &failure) || failure.StatusCode != http.StatusNotFound {
+				fmt.Fprintln(os.Stderr, "latexmk: session closure failed; waiting for lease expiry:", err)
+			}
+		}
 		finish()
 		if code != -1 {
 			return code
@@ -112,6 +117,7 @@ func runLiveSession(
 	}
 	poll := time.NewTicker(pollInterval)
 	defer poll.Stop()
+	leaseErrors := observeSessionLease(ctx, c, session.ID, pollInterval, opts.timeout)
 	verify := time.NewTicker(30 * time.Second)
 	defer verify.Stop()
 	// A buffered signal coalesces changes while snapshot capture/upload is active.
@@ -300,6 +306,10 @@ func runLiveSession(
 		select {
 		case <-ctx.Done():
 			return 0
+		case err := <-leaseErrors:
+			if code := handle(err); code != -2 {
+				return code
+			}
 		case <-observation.reload:
 			fmt.Fprintln(os.Stderr, "latexmk: settings changed; rebuilding the session")
 			return reloadLiveSettings

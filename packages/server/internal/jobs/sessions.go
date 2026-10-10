@@ -140,6 +140,19 @@ func (m *Manager) GetSession(ctx context.Context, ownerID, id string) (protocol.
 	if err != nil {
 		return protocol.Session{}, err
 	}
+	return s.state, nil
+}
+
+// RenewSession extends the lease only in response to an explicit client request.
+// Reading state or keeping an SSE transport open is not evidence of client activity.
+func (m *Manager) RenewSession(ctx context.Context, ownerID, id string) (protocol.Session, error) {
+	m.admissionMu.Lock()
+	defer m.admissionMu.Unlock()
+	m.expireSessionsLocked(ctx)
+	s, err := m.sessionLocked(ownerID, id)
+	if err != nil {
+		return protocol.Session{}, err
+	}
 	s.state.ExpiresAt = time.Now().UTC().Add(m.cfg.RealtimeSessionTTL)
 	return s.state, nil
 }

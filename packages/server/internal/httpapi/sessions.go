@@ -54,6 +54,16 @@ func (s *Server) closeSession(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+func (s *Server) renewSession(c *gin.Context) {
+	principal, _ := auth.FromContext(c.Request.Context())
+	session, err := s.jobs.RenewSession(c.Request.Context(), principal.ID, c.Param("id"))
+	if err != nil {
+		writeError(c, http.StatusNotFound, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, session)
+}
+
 func (s *Server) submitRevision(c *gin.Context) {
 	var req protocol.RevisionRequest
 	if err := decodeStrictJSON(c.Request.Body, 4096, &req); err != nil {

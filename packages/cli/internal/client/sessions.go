@@ -31,6 +31,12 @@ func (c *Client) CloseSession(ctx context.Context, id string) error {
 	return c.jsonRequest(ctx, http.MethodDelete, "/v1/sessions/"+url.PathEscape(id), nil, nil)
 }
 
+func (c *Client) RenewSession(ctx context.Context, id string) (protocol.Session, error) {
+	var session protocol.Session
+	err := c.jsonRequest(ctx, http.MethodPost, "/v1/sessions/"+url.PathEscape(id)+"/lease", nil, &session)
+	return session, err
+}
+
 // CapturedSnapshot owns the immutable source spool and its selection diagnostics.
 type CapturedSnapshot struct {
 	*projectarchive.Frozen

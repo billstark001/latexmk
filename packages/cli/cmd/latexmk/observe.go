@@ -51,6 +51,38 @@ type liveObservation struct {
 	errors  chan error
 }
 
+// Lease renewal must continue while capture, upload or result downloads block
+// the revision loop. SSE is a read-only subscriber and never renews the lease.
+func observeSessionLease(
+	ctx context.Context,
+	c *client.Client,
+	id string,
+	interval, timeout time.Duration,
+) <-chan error {
+	errors := make(chan error, 1)
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				operation, cancel := context.WithTimeout(ctx, min(timeout, interval))
+				_, err := c.RenewSession(operation, id)
+				cancel()
+				if err != nil && ctx.Err() == nil {
+					select {
+					case errors <- err:
+					default:
+					}
+				}
+			}
+		}
+	}()
+	return errors
+}
+
 func observeLive(
 	ctx context.Context,
 	c *client.Client,

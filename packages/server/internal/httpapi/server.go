@@ -84,6 +84,7 @@ func New(
 	engine.POST("/v1/uploads/:uploadID/commit", compileAuth, s.commitUpload)
 	engine.POST("/v1/sessions", compileAuth, s.createSession)
 	engine.GET("/v1/sessions/:id", compileAuth, s.getSession)
+	engine.POST("/v1/sessions/:id/lease", compileAuth, s.renewSession)
 	engine.DELETE("/v1/sessions/:id", compileAuth, s.closeSession)
 	engine.POST("/v1/sessions/:id/revisions", compileAuth, s.submitRevision)
 	engine.GET("/v1/sessions/:id/events", compileAuth, s.sessionEvents)

@@ -281,6 +281,46 @@ func TestSessionExpiryReclaimsPinsAndCancelsPending(t *testing.T) {
 	}
 }
 
+func TestOnlyExplicitClientActivityRenewsSessionLease(t *testing.T) {
+	m, req := sessionManager(t)
+	ctx := context.Background()
+	s, err := m.CreateSession(ctx, "owner", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := m.sessions[s.ID]
+	original := time.Now().Add(10 * time.Second)
+	live.state.ExpiresAt = original
+	if _, err := m.GetSession(ctx, "owner", s.ID); err != nil {
+		t.Fatal(err)
+	}
+	release, err := m.SubscribeSession("owner", s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if _, _, err := m.SessionEvents("owner", s.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if !live.state.ExpiresAt.Equal(original) {
+		t.Fatal("read-only status/subscription renewed the lease")
+	}
+	if _, err := m.RenewSession(ctx, "other", s.ID); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("foreign renewal: %v", err)
+	}
+	renewed, err := m.RenewSession(ctx, "owner", s.ID)
+	if err != nil || !renewed.ExpiresAt.After(original) {
+		t.Fatalf("explicit renewal: %+v, %v", renewed, err)
+	}
+	live.state.ExpiresAt = time.Now().Add(-time.Second)
+	if _, err := m.RenewSession(ctx, "owner", s.ID); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("renewal resurrected expired session: %v", err)
+	}
+	if len(m.sessions) != 0 {
+		t.Fatal("expired subscribed session retained a slot")
+	}
+}
+
 func TestSessionOwnerQuotaAndAlreadyCancelledPendingClosure(t *testing.T) {
 	m, req := sessionManager(t)
 	m.cfg.MaxRealtimeSessionsPerOwner = 1

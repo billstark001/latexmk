@@ -228,8 +228,11 @@ Session availability is advertised by `realtimeSessions`, `isolatedWorkspaces`,
   Replaying the same key and payload returns the same live session, including
   when the first response was lost. Keys are scoped to the owner and retained
   for the session lifetime; different payloads with the same key return 400.
-- `GET /v1/sessions/:id`: renews the idle lease and returns revision, latest/running/
+- `GET /v1/sessions/:id`: reads state without renewing the lease; returns revision, latest/running/
   pending job IDs, last successful job ID, event sequence and expiration.
+- `POST /v1/sessions/:id/lease`: explicitly renews an unexpired owner's lease and
+  returns the session state. Expired/closed/foreign sessions return 404 and cannot
+  be resurrected. Successful new revision admission also renews the lease.
 - `DELETE /v1/sessions/:id`: cancels pending/running work and releases checkpoint
   and source pins. Closed/expired/foreign sessions return 404.
 - `POST /v1/sessions/:id/revisions`: strict JSON `{ "uploadId": "upl_...", "baseRevision": 0, "idempotencyKey": "16-to-64-byte-key" }`.
@@ -243,7 +246,8 @@ Session availability is advertised by `realtimeSessions`, `isolatedWorkspaces`,
   compact JSON `{ "sequence": 1, "type": "submitted", "revision": 1, "jobId": "job_...", "status": "queued" }`.
   `Last-Event-ID` enables replay of the latest 64 events. Lost or invalid history
   emits `type: resync`; fetch session state to reconcile. Heartbeats are comments,
-  sent every 15 seconds with lease renewal and credential revalidation. Four active
+  sent every 15 seconds with credential revalidation; neither subscribing nor
+  receiving heartbeats renews the lease. Four active
   streams per session are allowed. Request cancellation and server shutdown end
   the subscription.
 

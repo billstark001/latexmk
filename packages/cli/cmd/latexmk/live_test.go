@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -248,12 +249,17 @@ func TestRealtimeUploadPolicyChangesCancelInFlightOperations(t *testing.T) {
 	}
 }
 
-func TestRealtimeShortLeaseRenewsWhenEventStreamingIsUnavailable(t *testing.T) {
-	var reads atomic.Int64
+func TestRealtimeShortLeaseRenewsDuringBlockedUploadWithoutEvents(t *testing.T) {
+	var renewals atomic.Int64
 	var renewed atomic.Int64
 	renewed.Store(time.Now().UnixNano())
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/sessions/ses_short" {
+		if r.URL.Path == "/v1/uploads/plans" {
+			_, _ = io.Copy(io.Discard, r.Body)
+			<-r.Context().Done()
+			return
+		}
+		if r.URL.Path != "/v1/sessions/ses_short" && r.URL.Path != "/v1/sessions/ses_short/lease" {
 			http.Error(w, "event streaming unavailable", http.StatusServiceUnavailable)
 			return
 		}
@@ -261,8 +267,13 @@ func TestRealtimeShortLeaseRenewsWhenEventStreamingIsUnavailable(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		renewed.Store(time.Now().UnixNano())
-		reads.Add(1)
+		if r.URL.Path == "/v1/sessions/ses_short/lease" {
+			if r.Method != http.MethodPost {
+				t.Error("lease renewal must be explicit POST")
+			}
+			renewed.Store(time.Now().UnixNano())
+			renewals.Add(1)
+		}
 		_ = json.NewEncoder(w).Encode(protocol.Session{ID: "ses_short"})
 	}))
 	defer server.Close()
@@ -270,20 +281,21 @@ func TestRealtimeShortLeaseRenewsWhenEventStreamingIsUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Missing local input keeps this fixture focused on lease recovery instead
-	// of upload/admission. The disconnected observation still must renew.
 	c.ProjectRoot, c.UploadMode = t.TempDir(), "all"
+	if err := os.WriteFile(filepath.Join(c.ProjectRoot, "main.tex"), []byte("source"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 850*time.Millisecond)
 	defer cancel()
 	var code int
 	_, _, _ = captureCommandOutput(t, func() int {
-		code = runLiveSession(ctx, c, protocol.CompileRequest{Entry: "missing.tex", Engine: "xelatex"},
+		code = runLiveSession(ctx, c, protocol.CompileRequest{Entry: "main.tex", Engine: "xelatex"},
 			compileOptions{timeout: time.Second},
 			protocol.Metadata{Capabilities: protocol.Capabilities{SessionTTLMS: 450}},
 			protocol.Session{ID: "ses_short"}, liveObservation{})
 		return code
 	})
-	if code != 0 || reads.Load() < 3 {
-		t.Fatalf("short lease expired without fallback renewal: code=%d, renewals=%d", code, reads.Load())
+	if code != 0 || renewals.Load() < 3 {
+		t.Fatalf("short lease expired during upload: code=%d, renewals=%d", code, renewals.Load())
 	}
 }
