@@ -49,6 +49,31 @@ func TestInvalidLimitFailsFast(t *testing.T) {
 	}
 }
 
+func TestByteLimitsRejectNonfiniteOverflowAndSubByteValues(t *testing.T) {
+	for _, value := range []string{"NaNMiB", "+InfKB", "1e30GiB", "0.0001KB", "9223372036854775808"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("TEST_BYTE_LIMIT", value)
+			if size, err := envBytes("TEST_BYTE_LIMIT", 1024); err == nil {
+				t.Fatalf("accepted %q as %d bytes", value, size)
+			}
+		})
+	}
+}
+
+func TestByteLimitsSupportDecimalAndBinaryUnits(t *testing.T) {
+	for value, want := range map[string]int64{
+		"1.5MiB": 1572864, " 2 mb ": 2000000, "0.001KB": 1,
+		"1GiB": 1 << 30, "42": 42, "9223372036854775807": 9223372036854775807,
+	} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("TEST_BYTE_LIMIT", value)
+			if size, err := envBytes("TEST_BYTE_LIMIT", 1024); err != nil || size != want {
+				t.Fatalf("size=%d want=%d error=%v", size, want, err)
+			}
+		})
+	}
+}
+
 func TestTokenMustBeLong(t *testing.T) {
 	t.Setenv("LATEXMK_AUTH_MODE", "token")
 	t.Setenv("LATEXMK_API_TOKEN", "short")
@@ -251,4 +276,30 @@ func TestAPITokenFileSupportsSecretSymlinks(t *testing.T) {
 	if token, err := loadAPIToken(); err != nil || token != "a-secure-token-value-at-least-24-characters" {
 		t.Fatalf("secret symlink: %q %v", token, err)
 	}
+}
+
+func TestByteUnitsPreserveDecimalBoundaryPrecision(t *testing.T) {
+	for value, want := range map[string]int64{"0.001999999999999999999KB": 1, "9223372036854775.807KB": math.MaxInt64, "9007199254740.993KB": 9007199254740993, "1e-3KB": 1} {
+		t.Setenv("TEST_BYTE_LIMIT", value)
+		got, err := envBytes("TEST_BYTE_LIMIT", 1)
+		if err != nil || got != want {
+			t.Errorf("%s: got %d, want %d, error %v", value, got, want, err)
+		}
+	}
+	t.Setenv("TEST_BYTE_LIMIT", "0.000999999999999999999KB")
+	if got, err := envBytes("TEST_BYTE_LIMIT", 1); err == nil {
+		t.Fatalf("accepted sub-byte value as %d", got)
+	}
+}
+
+func FuzzParseByteSize(f *testing.F) {
+	for _, value := range []string{"1.5MiB", "0.000999999999999999999KB", "9223372036854775.807KB", "1e100000000GB", "1/2MiB", "NaNMiB", "42", "+1KB"} {
+		f.Add(value)
+	}
+	f.Fuzz(func(t *testing.T, value string) {
+		size, ok := parseByteSize(value)
+		if ok && size <= 0 {
+			t.Fatalf("accepted nonpositive size %d for %q", size, value)
+		}
+	})
 }

@@ -4,8 +4,10 @@ package config
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"net/url"
 	"os"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -430,34 +432,63 @@ func envDuration(name string, fallback time.Duration) (time.Duration, error) {
 	return parsed, nil
 }
 
+// A bounded decimal mantissa/exponent avoids excessive big-number allocation.
+const maxByteValueDigits = 128
+
+var decimalByteValue = regexp.MustCompile(`^[+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$`)
+
+var byteUnits = [...]struct {
+	suffix     string
+	multiplier int64
+}{
+	{"gib", 1 << 30}, {"gb", 1000 * 1000 * 1000}, {"mib", 1 << 20}, {"mb", 1000 * 1000}, {"kib", 1 << 10}, {"kb", 1000},
+}
+
 func envBytes(name string, fallback int64) (int64, error) {
-	v := strings.TrimSpace(os.Getenv(name))
-	if v == "" {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
 		return fallback, nil
 	}
-	units := []struct {
-		suffix     string
-		multiplier int64
-	}{
-		{"gib", 1 << 30}, {"gb", 1000 * 1000 * 1000},
-		{"mib", 1 << 20}, {"mb", 1000 * 1000},
-		{"kib", 1 << 10}, {"kb", 1000},
-	}
-	lower := strings.ToLower(v)
-	for _, unit := range units {
-		if strings.HasSuffix(lower, unit.suffix) {
-			n, err := strconv.ParseFloat(strings.TrimSpace(lower[:len(lower)-len(unit.suffix)]), 64)
-			if err != nil || n <= 0 {
-				return 0, fmt.Errorf("%s must be a positive byte size", name)
-			}
-			return int64(n * float64(unit.multiplier)), nil
-		}
-	}
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil || n <= 0 {
+	size, ok := parseByteSize(value)
+	if !ok {
 		return 0, fmt.Errorf("%s must be a positive byte size", name)
 	}
-	return n, nil
+	return size, nil
+}
+
+func parseByteSize(value string) (int64, bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, unit := range byteUnits {
+		if strings.HasSuffix(value, unit.suffix) {
+			return decimalBytes(strings.TrimSpace(strings.TrimSuffix(value, unit.suffix)), unit.multiplier)
+		}
+	}
+	size, err := strconv.ParseInt(value, 10, 64)
+	return size, err == nil && size > 0
+}
+
+// Scale an exact decimal before discarding fractional bytes. Float64 rounding
+// can otherwise admit a sub-byte value or change integer budgets above 2^53.
+func decimalBytes(value string, multiplier int64) (int64, bool) {
+	if len(value) > maxByteValueDigits || !decimalByteValue.MatchString(value) {
+		return 0, false
+	}
+	if i := strings.IndexAny(value, "eE"); i >= 0 {
+		exponent, err := strconv.Atoi(value[i+1:])
+		if err != nil || exponent < -maxByteValueDigits || exponent > maxByteValueDigits {
+			return 0, false
+		}
+	}
+	amount, ok := new(big.Rat).SetString(value)
+	if !ok {
+		return 0, false
+	}
+	amount.Mul(amount, big.NewRat(multiplier, 1))
+	if amount.Cmp(big.NewRat(1, 1)) < 0 || amount.Cmp(big.NewRat(math.MaxInt64, 1)) > 0 {
+		return 0, false
+	}
+	whole := new(big.Int).Quo(amount.Num(), amount.Denom())
+	return whole.Int64(), true
 }
 
 func splitCSV(value string) []string {

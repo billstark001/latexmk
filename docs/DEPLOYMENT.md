@@ -136,6 +136,18 @@ realtime session. Session/checkpoint ownership is process-local; restarts
 require cold sessions. See [realtime deployment](REALTIME.md#runner-configuration).
 The state directory never stores plaintext API tokens.
 
+Byte limits accept positive integer byte counts or decimal values with
+case-insensitive `KB`, `MB`, `GB` (powers of 1000) and `KiB`, `MiB`, `GiB`
+(powers of 1024). For example, `1.5MiB` is 1,572,864 bytes. Fractional byte
+remainders are truncated after exact decimal scaling; values below one byte, nonfinite numbers and overflow
+are rejected. Feature-specific documented zero values, such as
+`LATEXMK_MAX_COMPILE_CACHE_BYTES=0`, disable that feature.
+
+Compiler-cache and runner workspace limits also reserve space for derived
+archive budgets. Values that overflow those budgets are rejected during
+configuration validation, before the server starts. Queue dispatch and runner entry counts also reject
+overflow. Isolated runners require a compile timeout of at least 1 ms.
+
 ## Dashboard
 
 ```sh
