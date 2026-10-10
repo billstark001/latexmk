@@ -195,3 +195,39 @@ func TestAuthenticationRejectsWhitespaceAndControlTokens(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigurationRejectsCaseVariantLiteralTokensAndNull(t *testing.T) {
+	isolateUserConfig(t)
+	for _, payload := range []string{`{"Token":"secret"}`, `{"TOKEN":"secret"}`, `{"token":{"env":"TOKEN"},"Token":"secret"}`, `null`} {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, FileName), []byte(payload), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := LoadArgs(root, nil); err == nil {
+			t.Errorf("accepted configuration %s", payload)
+		}
+	}
+}
+
+func TestCaseVariantSourceKeysAndSecretSymlinks(t *testing.T) {
+	isolateUserConfig(t)
+	root := t.TempDir()
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte("secret-token\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(tokenFile, filepath.Join(root, "secret")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(root, FileName),
+		[]byte(`{"Token":{"file":"secret"},"SERVER":"https://test.example"}`),
+		0600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(root)
+	if err != nil || cfg.Token != "secret-token" || cfg.Server != "https://test.example" {
+		t.Fatalf("case variant sources: cfg=%+v err=%v", cfg, err)
+	}
+}

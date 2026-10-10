@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/billstark001/latexmk/packages/shared/jsonutil"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
@@ -21,6 +22,8 @@ const EnvFileName = ".env.latexmk"
 const TokenFileName = ".latexmk-token"
 
 const maxTokenFileSize = 64 << 10
+
+const maxConfigFileSize = 1 << 20
 
 type Target struct {
 	Entry        string   `json:"entry"`
@@ -379,20 +382,31 @@ func resolveWatch(cfg *WatchConfig, get func(string) string) (WatchSettings, err
 }
 
 func mergeFile(path string, cfg *FileConfig) error {
-	b, err := os.ReadFile(path)
+	f, err := safefs.OpenRegularFile(path)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(b, &fields); err != nil {
-		return fmt.Errorf("parse %s: invalid JSON configuration", path)
+	defer func() { _ = f.Close() }()
+	var rawFields map[string]json.RawMessage
+	if err := jsonutil.Decode(f, maxConfigFileSize, &rawFields); err != nil {
+		return fmt.Errorf("parse %s: invalid or oversized JSON configuration", path)
+	}
+	// encoding/json matches tagged names case-insensitively. Apply the same rule
+	// to validation and presence checks, rather than letting Token bypass policy.
+	fields := make(map[string]json.RawMessage, len(rawFields))
+	for key, raw := range rawFields {
+		lower := strings.ToLower(key)
+		if _, duplicate := fields[lower]; duplicate {
+			return fmt.Errorf("parse %s: duplicate configuration field %q", path, key)
+		}
+		fields[lower] = raw
 	}
 	if raw, ok := fields["token"]; ok {
 		source, err := parseValueSource(raw, "token", filepath.Dir(path))
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", path, err)
 		}
-		if _, exists := fields["tokenFile"]; exists {
+		if _, exists := fields["tokenfile"]; exists {
 			return errors.New("token and tokenFile are mutually exclusive")
 		}
 		cfg.tokenSource = source
@@ -422,10 +436,10 @@ func mergeFile(path string, cfg *FileConfig) error {
 			cfg.Auxiliary.Server = "retain"
 		}
 	}
-	if _, ok := fields["outDir"]; ok && cfg.OutDir != "" && !filepath.IsAbs(cfg.OutDir) {
+	if _, ok := fields["outdir"]; ok && cfg.OutDir != "" && !filepath.IsAbs(cfg.OutDir) {
 		cfg.OutDir = filepath.Join(filepath.Dir(path), cfg.OutDir)
 	}
-	if _, ok := fields["projectRoot"]; ok && cfg.ProjectRoot != "" && !filepath.IsAbs(cfg.ProjectRoot) {
+	if _, ok := fields["projectroot"]; ok && cfg.ProjectRoot != "" && !filepath.IsAbs(cfg.ProjectRoot) {
 		cfg.ProjectRoot = filepath.Join(filepath.Dir(path), cfg.ProjectRoot)
 	}
 	if raw, ok := fields["targets"]; ok {
@@ -444,10 +458,10 @@ func mergeFile(path string, cfg *FileConfig) error {
 			cfg.Targets[name] = target
 		}
 	}
-	if _, ok := fields["tokenFile"]; ok && cfg.TokenFile != "" && !filepath.IsAbs(cfg.TokenFile) {
+	if _, ok := fields["tokenfile"]; ok && cfg.TokenFile != "" && !filepath.IsAbs(cfg.TokenFile) {
 		cfg.TokenFile = filepath.Join(filepath.Dir(path), cfg.TokenFile)
 	}
-	if _, ok := fields["envFile"]; ok && cfg.EnvFile != nil && *cfg.EnvFile != "" && !filepath.IsAbs(*cfg.EnvFile) {
+	if _, ok := fields["envfile"]; ok && cfg.EnvFile != nil && *cfg.EnvFile != "" && !filepath.IsAbs(*cfg.EnvFile) {
 		value := filepath.Join(filepath.Dir(path), *cfg.EnvFile)
 		cfg.EnvFile = &value
 	}

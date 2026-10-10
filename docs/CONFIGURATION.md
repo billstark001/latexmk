@@ -11,7 +11,10 @@ and credentials.
 The CLI merges `$XDG_CONFIG_HOME/latexmk/config.json` (otherwise the platform user
 configuration directory), then the nearest `.latexmk.json` above the working
 directory. Process environment variables override dotenv values, which override
-JSON; command-line flags override those settings.
+JSON; command-line flags override those settings. Configuration files must be
+non-null JSON objects of at most 1 MiB. Top-level field names are matched without
+regard to case, including credential validation; conflicting case variants of
+the same key are rejected.
 
 The default dotenv filename is **`.env.latexmk`**. Discovery starts beside the
 project JSON, or at the working directory when no JSON is found, and stops at
@@ -139,7 +142,7 @@ Existing `tokenFile`, environment overrides, and CLI credential flags remain
 supported. Replace every JSON `"token":"…"` with `"token":{"env":"MY_TOKEN"}` or
 `"token":{"file":"token.txt"}`, moving the credential to that variable/file.
 Inline tokens, including empty strings and `{"value":"…"}`, are prohibited in
-both user and project JSON. Do not declare `token` and `tokenFile` together.
+both user and project JSON, including case variants such as `Token`. Do not declare `token` and `tokenFile` together.
 
 ## Authentication
 
