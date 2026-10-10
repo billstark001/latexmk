@@ -32,6 +32,7 @@ type Registry struct {
 	drivers map[string]Driver
 }
 
+// NewRegistry returns an empty registry; callers register the desired drivers.
 func NewRegistry() *Registry {
 	return &Registry{drivers: make(map[string]Driver)}
 }
@@ -59,6 +60,8 @@ func (r *Registry) Register(name string, driver Driver) error {
 	return nil
 }
 
+// Lookup resolves an exact, case-sensitive name. The returned driver is shared
+// and must follow the immutable, concurrent-safe Driver contract.
 func (r *Registry) Lookup(name string) (Driver, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -69,6 +72,7 @@ func (r *Registry) Lookup(name string) (Driver, error) {
 	return driver, nil
 }
 
+// Names returns a sorted, caller-owned snapshot of registered keys.
 func (r *Registry) Names() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

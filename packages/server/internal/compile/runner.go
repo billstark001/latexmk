@@ -39,10 +39,14 @@ type File struct {
 	SHA256       string
 }
 
+// NewRunner creates a bounded local compiler. Production callers must validate
+// cfg first; MaxConcurrentCompiles defines the number of simultaneous processes.
 func NewRunner(cfg config.Config) *Runner {
 	return &Runner{Config: cfg, sem: make(chan struct{}, cfg.MaxConcurrentCompiles)}
 }
 
+// Validate checks request policy and opens the entry as a confined regular file.
+// It does not compile the entry or scan its dependencies.
 func (r *Runner) Validate(workspace string, req protocol.CompileRequest) error {
 	if err := r.ValidateRequest(req); err != nil {
 		return err
@@ -59,6 +63,8 @@ func (r *Runner) Validate(workspace string, req protocol.CompileRequest) error {
 	return entry.Close()
 }
 
+// ValidateRequest checks protocol, registered engine and server policy without
+// filesystem access, allowing admission to fail before materializing sources.
 func (r *Runner) ValidateRequest(req protocol.CompileRequest) error {
 	if req.Auxiliary.Local != "" && req.Auxiliary.Local != "none" && req.Auxiliary.Local != "cache" &&
 		req.Auxiliary.Local != "output" {
@@ -111,10 +117,15 @@ type RunOptions struct {
 	PreserveRecorder bool
 }
 
+// Run compiles in workspace with normal recorder cleanup. The caller owns the
+// workspace and must keep it alive until returned File handles have been consumed.
 func (r *Runner) Run(parent context.Context, workspace string, req protocol.CompileRequest, requestID string) Output {
 	return r.RunWithOptions(parent, workspace, req, requestID, RunOptions{})
 }
 
+// RunWithOptions validates policy and entry, waits for local capacity, then runs
+// a bounded compiler process. RunOptions controls recorder preservation and the
+// isolated build directory; failure and cancellation are returned in Output.Result.
 func (r *Runner) RunWithOptions(
 	parent context.Context,
 	workspace string,

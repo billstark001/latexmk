@@ -57,12 +57,15 @@ func (m *Manager) stageState(path string, size int64, write func(io.Writer) erro
 	return publication, nil
 }
 
+// Commit atomically publishes the staged file and updates the storage quota.
+// The caller must still call Close, including after a failed commit.
 func (p *StatePublication) Commit() error {
 	p.manager.mu.Lock()
 	defer p.manager.mu.Unlock()
 	return p.commitLocked()
 }
 
+// Path returns the final destination, which is not published until Commit succeeds.
 func (p *StatePublication) Path() string { return p.path }
 
 func (p *StatePublication) commitLocked() error {
@@ -90,6 +93,9 @@ func (p *StatePublication) commitLocked() error {
 	return nil
 }
 
+// Close releases handles and deletes any unpublished temporary file. It is
+// idempotent after success; a cleanup failure retains the quota for a later retry.
+// A publication must not be committed or closed concurrently.
 func (p *StatePublication) Close() error {
 	var err error
 	if p.pending != nil {
