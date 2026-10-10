@@ -1,8 +1,6 @@
 package client
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -15,8 +13,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 type ResultStateError struct {
@@ -143,6 +143,9 @@ func (c *Client) DownloadArtifact(
 	}, nil
 }
 
+// Logs returns the requested tails within a shared UTF-8 byte budget, including
+// replacement characters for invalid compiler output. All selected compiler
+// logs are checksum verified and the complete archive envelope is validated.
 func (c *Client) Logs(ctx context.Context, jobID, source string, tailLines int, maxBytes int64) (LogsOutput, error) {
 	if source != "all" && source != "stdout" && source != "stderr" && source != "compiler" {
 		return LogsOutput{}, errors.New("log source must be all, stdout, stderr, or compiler")
@@ -213,10 +216,8 @@ func artifactID(path string) string {
 }
 
 func validateArtifactMetadata(artifact protocol.Artifact) error {
-	clean := filepath.Clean(filepath.FromSlash(artifact.Path))
-	if artifact.Path == "" || clean == "." || filepath.IsAbs(clean) || clean == ".." ||
-		strings.HasPrefix(clean, ".."+string(filepath.Separator)) ||
-		filepath.ToSlash(clean) != artifact.Path {
+	clean, err := safefs.Clean(artifact.Path)
+	if err != nil || clean != artifact.Path {
 		return fmt.Errorf("job declares unsafe artifact path %q", artifact.Path)
 	}
 	if artifact.Size < 0 || len(artifact.SHA256) != 64 {
@@ -239,14 +240,12 @@ func artifactMIMEType(path string) string {
 }
 
 func extractSelectedArtifact(r io.Reader, outputRoot string, selected ArtifactInfo) error {
-	gz, err := gzip.NewReader(r)
+	tarReader, err := newResultReader(r)
 	if err != nil {
-		return fmt.Errorf("open result gzip: %w", err)
+		return err
 	}
-	defer func() { _ = gz.Close() }()
-	tarReader := tar.NewReader(gz)
+	defer func() { _ = tarReader.Close() }()
 	target := "artifacts/" + selected.Path
-	entries := 0
 	for {
 		header, err := tarReader.Next()
 		if errors.Is(err, io.EOF) {
@@ -254,13 +253,6 @@ func extractSelectedArtifact(r io.Reader, outputRoot string, selected ArtifactIn
 		}
 		if err != nil {
 			return fmt.Errorf("read result tar: %w", err)
-		}
-		entries++
-		if entries > 20_000 || header.Size < 0 || header.Size > 512<<20 {
-			return errors.New("result archive exceeds safety limits")
-		}
-		if header.Typeflag != tar.TypeReg {
-			return fmt.Errorf("unexpected result entry type for %q", header.Name)
 		}
 		if header.Name != target {
 			continue
@@ -284,12 +276,11 @@ func readBoundedLogs(
 	selectedLogs int,
 	declared map[string]protocol.Artifact,
 ) ([]LogEntry, int64, error) {
-	gz, err := gzip.NewReader(r)
+	tarReader, err := newResultReader(r)
 	if err != nil {
-		return nil, 0, fmt.Errorf("open result gzip: %w", err)
+		return nil, 0, err
 	}
-	defer func() { _ = gz.Close() }()
-	tarReader := tar.NewReader(gz)
+	defer func() { _ = tarReader.Close() }()
 	entries := make([]LogEntry, 0, 4)
 	var perEntry int64
 	var extra int64
@@ -298,7 +289,6 @@ func readBoundedLogs(
 		extra = maxBytes % int64(selectedLogs)
 	}
 	var returnedTotal int64
-	archiveEntries := 0
 	selectedEntries := 0
 	for {
 		header, err := tarReader.Next()
@@ -308,19 +298,12 @@ func readBoundedLogs(
 		if err != nil {
 			return nil, 0, fmt.Errorf("read result tar: %w", err)
 		}
-		archiveEntries++
-		if archiveEntries > 20_000 || header.Size < 0 || header.Size > 512<<20 {
-			return nil, 0, errors.New("result archive exceeds safety limits")
-		}
-		if header.Typeflag != tar.TypeReg {
-			return nil, 0, fmt.Errorf("unexpected result entry type for %q", header.Name)
-		}
 		entrySource, path, expected, selected := classifyLogEntry(header.Name, source, declared)
 		if !selected {
 			continue
 		}
 		selectedEntries++
-		if selectedEntries > 32 {
+		if selectedEntries > maxSelectedLogs {
 			return nil, 0, errors.New("result archive contains too many selected log files")
 		}
 		limit := perEntry
@@ -345,7 +328,7 @@ func readBoundedLogs(
 			}
 		}
 		content := tailLinesBytes(buffer.Bytes(), tailLines)
-		content = []byte(strings.ToValidUTF8(string(content), "�"))
+		content = utf8Tail(content, int(limit))
 		returned := int64(len(content))
 		returnedTotal += returned
 		entries = append(entries, LogEntry{
@@ -354,6 +337,17 @@ func readBoundedLogs(
 		})
 	}
 	return entries, returnedTotal, nil
+}
+
+// utf8Tail applies the budget after repair because replacement characters may
+// occupy more bytes than the invalid input. Trim at a rune boundary.
+func utf8Tail(data []byte, limit int) []byte {
+	text := strings.ToValidUTF8(string(data), "�")
+	start := max(0, len(text)-limit)
+	for start < len(text) && !utf8.RuneStart(text[start]) {
+		start++
+	}
+	return []byte(text[start:])
 }
 
 func classifyLogEntry(

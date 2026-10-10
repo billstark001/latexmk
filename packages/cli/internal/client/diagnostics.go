@@ -1,9 +1,7 @@
 package client
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -113,16 +111,14 @@ func (c *Client) Diagnostics(ctx context.Context, jobID string) (DiagnosticsOutp
 }
 
 func readDiagnostics(r io.Reader, declared map[string]protocol.Artifact) ([]Diagnostic, []DiagnosticLog, bool, error) {
-	gz, err := gzip.NewReader(r)
+	tarReader, err := newResultReader(r)
 	if err != nil {
-		return nil, nil, false, fmt.Errorf("open result gzip: %w", err)
+		return nil, nil, false, err
 	}
-	defer func() { _ = gz.Close() }()
-	tarReader := tar.NewReader(gz)
+	defer func() { _ = tarReader.Close() }()
 	raw := make([]rawDiagnostic, 0, 16)
 	logs := make([]DiagnosticLog, 0, 4)
 	incomplete := false
-	archiveEntries := 0
 	selectedEntries := 0
 	selectedPaths := make(map[string]struct{}, 4)
 	for {
@@ -133,19 +129,12 @@ func readDiagnostics(r io.Reader, declared map[string]protocol.Artifact) ([]Diag
 		if err != nil {
 			return nil, nil, false, fmt.Errorf("read result tar: %w", err)
 		}
-		archiveEntries++
-		if archiveEntries > 20_000 || header.Size < 0 || header.Size > 512<<20 {
-			return nil, nil, false, errors.New("result archive exceeds safety limits")
-		}
-		if header.Typeflag != tar.TypeReg {
-			return nil, nil, false, fmt.Errorf("unexpected result entry type for %q", header.Name)
-		}
 		source, path, expected, selected := classifyLogEntry(header.Name, "all", declared)
 		if !selected {
 			continue
 		}
 		selectedEntries++
-		if selectedEntries > 32 {
+		if selectedEntries > maxSelectedLogs {
 			return nil, nil, false, errors.New("result archive contains too many selected log files")
 		}
 		logKey := source + "\x00" + path

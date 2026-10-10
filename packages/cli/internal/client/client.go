@@ -2,9 +2,7 @@
 package client
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -12,9 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
-	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
-	"github.com/billstark001/latexmk/packages/shared/protocol"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -25,6 +20,11 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
+	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
+	"github.com/billstark001/latexmk/packages/shared/jsonutil"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 type Client struct {
@@ -815,19 +815,16 @@ func unpackResponseWithPolicy(
 	request protocol.CompileRequest,
 	root string,
 ) error {
-	gz, err := gzip.NewReader(r)
+	tr, err := newResultReader(r)
 	if err != nil {
-		return fmt.Errorf("open result gzip: %w", err)
+		return err
 	}
-	defer func() { _ = gz.Close() }()
-	tr := tar.NewReader(gz)
+	defer func() { _ = tr.Close() }()
 	var resultSeen bool
 	var stdoutSeen bool
 	var stderrSeen bool
 	expected := map[string]protocol.Artifact{}
 	seen := map[string]bool{}
-	var totalBytes int64
-	entries := 0
 	for {
 		h, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -835,20 +832,6 @@ func unpackResponseWithPolicy(
 		}
 		if err != nil {
 			return fmt.Errorf("read result tar: %w", err)
-		}
-		entries++
-		if entries > 20_000 {
-			return errors.New("result archive contains too many entries")
-		}
-		if h.Typeflag != tar.TypeReg {
-			return fmt.Errorf("unexpected result entry type for %q", h.Name)
-		}
-		if h.Size < 0 || h.Size > 512<<20 {
-			return fmt.Errorf("result entry %q is too large", h.Name)
-		}
-		totalBytes += h.Size
-		if totalBytes > 1<<30 {
-			return errors.New("result archive expands beyond 1 GiB")
 		}
 		switch h.Name {
 		case "result.json":
@@ -858,25 +841,16 @@ func unpackResponseWithPolicy(
 			if h.Size > 1<<20 {
 				return errors.New("result.json is too large")
 			}
-			payload, err := io.ReadAll(io.LimitReader(tr, h.Size))
-			if err != nil {
-				return fmt.Errorf("read result: %w", err)
-			}
-			decoder := json.NewDecoder(bytes.NewReader(payload))
-			decoder.DisallowUnknownFields()
-			if err := decoder.Decode(&out.Result); err != nil {
+			if err := jsonutil.DecodeStrict(tr, 1<<20, &out.Result); err != nil {
 				return fmt.Errorf("decode result: %w", err)
-			}
-			if decoder.Decode(&struct{}{}) != io.EOF {
-				return errors.New("result.json contains trailing data")
 			}
 			if out.Result.ProtocolVersion != 1 && out.Result.ProtocolVersion != protocol.Version {
 				return fmt.Errorf("unsupported response protocol version %d", out.Result.ProtocolVersion)
 			}
 			resultSeen = true
 			for _, artifact := range out.Result.Artifacts {
-				if artifact.Path == "" || artifact.Size < 0 || artifact.SHA256 == "" {
-					return errors.New("result contains invalid artifact metadata")
+				if err := validateArtifactMetadata(artifact); err != nil {
+					return err
 				}
 				if _, duplicate := expected[artifact.Path]; duplicate {
 					return fmt.Errorf("result declares duplicate artifact %q", artifact.Path)

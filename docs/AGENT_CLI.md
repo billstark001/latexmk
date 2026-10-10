@@ -129,7 +129,11 @@ latexmk artifacts get JOB_ID ARTIFACT_ID --out-dir ./build --json
 Logs distinguish `stdout`, `stderr`, and TeX-generated `compiler` logs. The
 byte limit applies across all returned entries and is capped at 4 MiB. Content
 is streamed through a bounded tail buffer; large PDFs and unrelated artifacts
-are not loaded into memory. Compiler logs are checked against job metadata.
+are not loaded into memory. The budget counts returned UTF-8 bytes, including
+replacement characters for invalid compiler output; a very small budget can
+return an empty tail when a complete character does not fit. Compiler logs are
+checked against job metadata. Duplicate archive members and corrupt or truncated
+gzip envelopes are rejected.
 
 `diagnostics.get` scans the complete raw log streams without retaining them in
 memory. It returns at most 100 deduplicated common TeX errors and warnings.
