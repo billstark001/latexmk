@@ -3,7 +3,7 @@ package resultarchive
 import (
 	"archive/tar"
 	"compress/gzip"
-	"encoding/json"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -11,10 +11,16 @@ import (
 	"strings"
 
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
+	"github.com/billstark001/latexmk/packages/shared/archiveutil"
+	"github.com/billstark001/latexmk/packages/shared/jsonutil"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
+const maxResultMetadataBytes = 4 << 20
+
+// Limits bounds artifacts as a group and each log independently. Zero allows
+// only empty content; negative values are invalid.
 type Limits struct {
 	MaxFiles     int
 	MaxArtifacts int64
@@ -23,8 +29,12 @@ type Limits struct {
 
 // Decode verifies every declared artifact before returning host filesystem
 // references. The compiler container's output is always treated as untrusted.
+// On failure, destination may contain artifacts already verified and extracted.
 func Decode(reader io.Reader, destination string, limits Limits) (compile.Output, error) {
 	var out compile.Output
+	if limits.MaxFiles < 0 || limits.MaxArtifacts < 0 || limits.MaxLogs < 0 {
+		return out, errors.New("invalid result limits")
+	}
 	scoped, err := safefs.Open(destination)
 	if err != nil {
 		return out, err
@@ -37,16 +47,13 @@ func Decode(reader io.Reader, destination string, limits Limits) (compile.Output
 	defer func() { _ = gz.Close() }()
 	tr := tar.NewReader(gz)
 	first, err := tr.Next()
-	if err != nil || first.Name != "result.json" || first.Typeflag != tar.TypeReg || first.Size > 4<<20 ||
+	if err != nil || first.Name != "result.json" || first.Typeflag != tar.TypeReg ||
+		first.Size > maxResultMetadataBytes ||
 		first.Size < 0 {
 		return out, errors.New("invalid result envelope")
 	}
-	raw, err := safefs.ReadLimited(tr, 4<<20)
-	if err != nil {
-		return out, err
-	}
-	if err := json.Unmarshal(raw, &out.Result); err != nil {
-		return out, err
+	if err := jsonutil.Decode(tr, maxResultMetadataBytes, &out.Result); err != nil {
+		return out, fmt.Errorf("invalid result metadata: %w", err)
 	}
 	declared := make(map[string]protocol.Artifact)
 	var total int64
@@ -55,13 +62,16 @@ func Decode(reader io.Reader, destination string, limits Limits) (compile.Output
 		if err != nil || clean != artifact.Path || artifact.Size < 0 || len(artifact.SHA256) != 64 {
 			return out, errors.New("invalid result artifact metadata")
 		}
+		if _, err := hex.DecodeString(artifact.SHA256); err != nil {
+			return out, errors.New("invalid result artifact metadata")
+		}
 		if _, exists := declared[artifact.Path]; exists {
 			return out, errors.New("duplicate result artifact")
 		}
-		total += artifact.Size
-		if total > limits.MaxArtifacts || len(declared) >= limits.MaxFiles {
+		if artifact.Size > limits.MaxArtifacts-total || len(declared) >= limits.MaxFiles {
 			return out, errors.New("result exceeds artifact limits")
 		}
+		total += artifact.Size
 		declared[artifact.Path] = artifact
 	}
 	seen := map[string]bool{"result.json": true}
@@ -79,6 +89,9 @@ func Decode(reader io.Reader, destination string, limits Limits) (compile.Output
 		seen[header.Name] = true
 		switch header.Name {
 		case "stdout.log", "stderr.log":
+			if header.Size > limits.MaxLogs {
+				return out, errors.New("result exceeds log limit")
+			}
 			data, err := safefs.ReadLimited(tr, limits.MaxLogs)
 			if err != nil {
 				return out, err
@@ -118,8 +131,8 @@ func Decode(reader io.Reader, destination string, limits Limits) (compile.Output
 	if !seen["stdout.log"] || !seen["stderr.log"] || len(out.Files) != len(declared) {
 		return out, errors.New("incomplete result archive")
 	}
-	if tail, err := safefs.ReadLimited(gz, 1024); err != nil || len(tail) != 0 {
-		return out, errors.New("unexpected result archive trailer")
+	if err := archiveutil.VerifyTrailer(gz); err != nil {
+		return out, err
 	}
 	return out, nil
 }

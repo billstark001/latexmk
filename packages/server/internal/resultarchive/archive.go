@@ -7,6 +7,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"io"
+	"math"
 	"path/filepath"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
+// Write publishes an encoded result exclusively. An existing destination is
+// never replaced, and failed encoding removes the temporary output.
 func Write(path string, output compile.Output) error {
 	fs, err := safefs.Open(filepath.Dir(path))
 	if err != nil {
@@ -22,7 +25,7 @@ func Write(path string, output compile.Output) error {
 	defer func() { _ = fs.Close() }()
 	return fs.WriteExclusive(
 		filepath.Base(path),
-		int64(^uint64(0)>>1),
+		math.MaxInt64,
 		func(w io.Writer) error { return Encode(w, output) },
 	)
 }
