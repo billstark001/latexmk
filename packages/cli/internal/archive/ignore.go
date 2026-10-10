@@ -13,7 +13,11 @@ type ignoreRule struct {
 	negate, directory, anchored bool
 }
 
-type ignoreMatcher struct{ rules []ignoreRule }
+type ignoreMatcher struct {
+	rules []ignoreRule
+	// base is a literal project-relative directory, not part of a glob pattern.
+	base string
+}
 
 func compileIgnoreLines(lines ...string) *ignoreMatcher {
 	matcher := &ignoreMatcher{}
@@ -50,6 +54,13 @@ func (m *ignoreMatcher) MatchesPath(value string) bool {
 // Parent directories are evaluated by the walker before their contents. A
 // directory-only negation must not accidentally re-include all its descendants.
 func (m *ignoreMatcher) MatchesPathHow(value string) (bool, *ignoreRule) {
+	if m.base != "" {
+		var inside bool
+		value, inside = strings.CutPrefix(value, m.base+"/")
+		if !inside {
+			return false, nil
+		}
+	}
 	directory := strings.HasSuffix(value, "/")
 	name := strings.TrimSuffix(value, "/")
 	matched := false

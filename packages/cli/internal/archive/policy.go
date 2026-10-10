@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -107,65 +108,49 @@ func (p *filePolicy) excluded(rel string, directory bool) (bool, string, error) 
 	if matched, rule := p.local.MatchesPathHow(value); matched {
 		return true, rule.Line, nil
 	}
-	dirKey := filepath.Dir(rel)
 	if !p.nested {
-		dirKey = "."
-	}
-	if matcher, exists := p.matchers[dirKey]; exists {
-		matched, rule := matcher.MatchesPathHow(value)
-		if matched && rule != nil {
-			return true, rule.Line, nil
-		}
 		return false, "", nil
 	}
-	var patterns []string
-	if p.nested {
-		// Apply nested rules in parent-to-child order, preserving Git's parent pruning.
-		dir := filepath.ToSlash(filepath.Dir(rel))
-		bases := []string{"."}
-		if dir != "." {
-			current := ""
-			for _, part := range strings.Split(dir, "/") {
-				if current != "" {
-					current += "/"
-				}
-				current += part
-				bases = append(bases, current)
-			}
-		}
-		for _, base := range bases {
-			name := filepath.Join(base, ".gitignore")
-			data, err := readPolicy(p.root, name)
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			if err != nil {
-				return false, "", err
-			}
-			for _, line := range strings.Split(string(data), "\n") {
-				if base == "." || line == "" || strings.HasPrefix(line, "#") {
-					patterns = append(patterns, line)
-					continue
-				}
-				prefix := ""
-				if strings.HasPrefix(line, "!") {
-					prefix = "!"
-					line = line[1:]
-				}
-				anchored := strings.Contains(strings.TrimSuffix(line, "/"), "/")
-				line = strings.TrimPrefix(line, "/")
-				if !anchored {
-					line = "**/" + line
-				}
-				patterns = append(patterns, prefix+"/"+base+"/"+line)
-			}
+	// Evaluate cached per-directory layers in parent-to-child order. Compiling a
+	// combined matcher for every leaf repeatedly reads and duplicates root rules.
+	matched := false
+	var last *ignoreRule
+	bases := []string{"."}
+	dir := path.Dir(rel)
+	if dir != "." {
+		current := ""
+		for _, part := range strings.Split(dir, "/") {
+			current = path.Join(current, part)
+			bases = append(bases, current)
 		}
 	}
-	matcher := compileIgnoreLines(patterns...)
-	p.matchers[dirKey] = matcher
-	matched, rule := matcher.MatchesPathHow(value)
-	if matched && rule != nil {
-		return true, rule.Line, nil
+	for _, base := range bases {
+		matcher, err := p.nestedMatcher(base)
+		if err != nil {
+			return false, "", err
+		}
+		if valueMatched, rule := matcher.MatchesPathHow(value); rule != nil {
+			matched, last = valueMatched, rule
+		}
+	}
+	if matched {
+		return true, last.Line, nil
 	}
 	return false, "", nil
+}
+
+func (p *filePolicy) nestedMatcher(base string) (*ignoreMatcher, error) {
+	if matcher, exists := p.matchers[base]; exists {
+		return matcher, nil
+	}
+	data, err := readPolicy(p.root, path.Join(base, ".gitignore"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	matcher := compileIgnoreLines(strings.Split(string(data), "\n")...)
+	if base != "." {
+		matcher.base = base
+	}
+	p.matchers[base] = matcher
+	return matcher, nil
 }
