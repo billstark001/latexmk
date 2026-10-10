@@ -2,7 +2,6 @@ package jobs
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -91,10 +90,8 @@ func (m *Manager) CreateSession(
 		if s.ownerID != ownerID || s.creationKey != req.IdempotencyKey {
 			continue
 		}
-		expected, _ := json.Marshal(s.request)
-		actual, _ := json.Marshal(req.Request)
 		if s.state.ProjectID != req.ProjectID || s.state.Workspace != req.Workspace ||
-			string(expected) != string(actual) {
+			s.request != req.Request {
 			return protocol.Session{}, errors.New("idempotency key was used for a different session")
 		}
 		return s.state, nil
@@ -190,7 +187,7 @@ func (m *Manager) SubmitRevision(
 		return m.Get(ctx, ownerID, receipt.jobID)
 	}
 	defer m.admissionMu.Unlock()
-	if req.BaseRevision != s.state.Revision || s.state.Revision >= 1<<31 {
+	if req.BaseRevision != s.state.Revision || s.state.Revision >= maxSessionRevision {
 		return protocol.Job{}, ErrRevisionConflict
 	}
 	if !m.allowRevisionLocked(ownerID) {
@@ -206,9 +203,7 @@ func (m *Manager) SubmitRevision(
 			m.projects.ReleaseSnapshot(snapshot.ID)
 		}
 	}()
-	expected, _ := json.Marshal(s.request)
-	actual, _ := json.Marshal(request)
-	if snapshot.ProjectID != s.state.ProjectID || string(expected) != string(actual) {
+	if snapshot.ProjectID != s.state.ProjectID || s.request != request {
 		return protocol.Job{}, errors.New("upload project or compile options do not match the session")
 	}
 	if err := sandbox.ValidateSourcePaths(snapshot.Files); err != nil {
@@ -273,7 +268,7 @@ func (m *Manager) SubmitRevision(
 	s.state.ExpiresAt = time.Now().UTC().Add(m.cfg.RealtimeSessionTTL)
 	s.receipts[req.IdempotencyKey] = revisionReceipt{request: req, jobID: jobID}
 	s.receiptOrder = append(s.receiptOrder, req.IdempotencyKey)
-	if len(s.receiptOrder) > 128 {
+	if len(s.receiptOrder) > maxSessionReceipts {
 		delete(s.receipts, s.receiptOrder[0])
 		s.receiptOrder = s.receiptOrder[1:]
 	}
@@ -377,8 +372,8 @@ func (m *Manager) publishSessionLocked(s *liveSession, kind string, job protocol
 			Status:   job.Status,
 		},
 	)
-	if len(s.events) > 64 {
-		s.events = s.events[len(s.events)-64:]
+	if len(s.events) > maxSessionEvents {
+		s.events = s.events[len(s.events)-maxSessionEvents:]
 	}
 	close(s.changed)
 	s.changed = make(chan struct{})
