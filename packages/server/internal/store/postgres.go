@@ -162,6 +162,8 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 	return nil
 }
 
+// AuthenticateToken resolves a hashed token to an enabled user and records last
+// use on a best-effort basis. Token plaintext is never stored in the database.
 func (p *Postgres) AuthenticateToken(ctx context.Context, token string) (User, error) {
 	hash := sha256.Sum256([]byte(token))
 	var record apiToken
@@ -354,9 +356,11 @@ func (p *Postgres) GetJob(ctx context.Context, id string) (CompileJob, error) {
 	return job, err
 }
 
+// ListJobs returns the newest jobs, with ID as the stable tie-breaker. A blank
+// ownerID selects all owners and is intended only for trusted administrative code.
 func (p *Postgres) ListJobs(ctx context.Context, ownerID string, limit int) ([]CompileJob, error) {
 	var jobs []CompileJob
-	query := p.db.WithContext(ctx).Order("created_at DESC").Limit(limit)
+	query := p.db.WithContext(ctx).Order("created_at DESC").Order("id ASC").Limit(limit)
 	if ownerID != "" {
 		query = query.Where("owner_id = ?", ownerID)
 	}
