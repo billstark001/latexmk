@@ -436,7 +436,6 @@ func envDuration(name string, fallback time.Duration) (time.Duration, error) {
 const maxByteValueDigits = 128
 
 var decimalByteValue = regexp.MustCompile(`^[+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$`)
-
 var byteUnits = [...]struct {
 	suffix     string
 	multiplier int64

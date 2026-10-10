@@ -22,7 +22,6 @@ const EnvFileName = ".env.latexmk"
 const TokenFileName = ".latexmk-token"
 
 const maxTokenFileSize = 64 << 10
-
 const maxConfigFileSize = 1 << 20
 
 type Target struct {

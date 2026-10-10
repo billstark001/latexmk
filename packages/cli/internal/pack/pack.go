@@ -20,7 +20,6 @@ import (
 
 const MaxFiles = 20_000
 const MaxBytes int64 = 2 << 30
-
 const maxZIPOverheadBytes int64 = 32 << 20
 
 // ValidateMode checks the supported source-packaging policies.
