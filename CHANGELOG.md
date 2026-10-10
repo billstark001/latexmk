@@ -52,6 +52,8 @@ numbers.
   and the variable-adoption script.
 - Rebuild missing or changed recipes, verify runtimes before promoting cache tags,
   and verify application E2E compilation before promoting application tags.
+- Update the lint parser dependencies to read Go 1.27.2 export data, fixing
+  typecheck failures in Actions that did not occur with Go 1.27.1 locally.
 - Support complete feature-branch image tests in a disposable local registry,
   explicit cache-hit checks, and deliberate runtime refreshes without layer cache.
 
