@@ -17,12 +17,20 @@ type Frozen struct {
 	root        string
 }
 
+const minReusableCaptureBytes = 256 << 10
+
+// Close removes this private spool. Hard links owned by later captures survive.
 func (f *Frozen) Close() error { return os.RemoveAll(f.root) }
 
 // Freeze captures policy-approved sources in a private spool. Previous large
 // captures can be linked after hashing current content; changed files are copied
 // and hashed together so an editor save cannot change uploaded snapshot bytes.
+// Limits must be positive; cancellation fails even for an empty selection.
+// The caller owns the returned spool and must Close it after use.
 func Freeze(ctx context.Context, files []File, maxFiles int, maxBytes int64, previous *Frozen) (_ *Frozen, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(files) > maxFiles || maxFiles <= 0 || maxBytes <= 0 {
 		return nil, errors.New("snapshot exceeds file or byte limits")
 	}
@@ -42,7 +50,7 @@ func Freeze(ctx context.Context, files []File, maxFiles int, maxBytes int64, pre
 	reusable := make(map[string]File)
 	if previous != nil {
 		for _, file := range previous.Files {
-			if file.Size >= 256<<10 {
+			if file.Size >= minReusableCaptureBytes {
 				reusable[file.Path] = file
 			}
 		}
@@ -98,6 +106,9 @@ func Freeze(ctx context.Context, files []File, maxFiles int, maxBytes int64, pre
 		}
 		file.Source, file.Size, file.SHA256 = destination, size, hash
 		frozen.Files = append(frozen.Files, file)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	complete = true
 	return frozen, nil

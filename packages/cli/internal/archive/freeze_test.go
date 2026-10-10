@@ -3,10 +3,23 @@ package archive
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestFreezeHonorsCanceledContextForEmptySelection(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	frozen, err := Freeze(ctx, nil, 1, 1, nil)
+	if frozen != nil {
+		_ = frozen.Close()
+	}
+	if !errors.Is(err, context.Canceled) || frozen != nil {
+		t.Fatalf("canceled capture returned snapshot=%v err=%v", frozen, err)
+	}
+}
 
 func TestFreezeKeepsHashedBytesAfterEditorReplacement(t *testing.T) {
 	root := t.TempDir()
