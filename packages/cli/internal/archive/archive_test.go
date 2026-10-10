@@ -92,6 +92,22 @@ func TestManifestCanDisableGitIgnore(t *testing.T) {
 	}
 }
 
+func TestManifestPreservesWhitespaceInGitRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repository ")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, root, "git", "init", "--quiet")
+	mustWrite(t, filepath.Join(root, "main.tex"), "main")
+	files, _, err := Manifest(Options{Root: root, RespectGitIgnore: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Path != "main.tex" {
+		t.Fatalf("manifest = %#v", files)
+	}
+}
+
 func TestManifestRespectsGitIgnoreFromNestedProjectRoot(t *testing.T) {
 	repo := t.TempDir()
 	mustRun(t, repo, "git", "init", "--quiet")

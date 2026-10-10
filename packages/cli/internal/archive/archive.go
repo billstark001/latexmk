@@ -222,7 +222,8 @@ func loadGitSelection(root string, enabled bool) (gitSelection, error) {
 	if err != nil {
 		return selection, fmt.Errorf("resolve Git root for %s: %w", root, err)
 	}
-	repoRoot := strings.TrimSpace(string(repoOutput))
+	// Git terminates the path with a newline; other whitespace belongs to it.
+	repoRoot := strings.TrimSuffix(string(repoOutput), "\n")
 	repoRoot, err = filepath.EvalSymlinks(repoRoot)
 	if err != nil {
 		return selection, fmt.Errorf("resolve Git root path: %w", err)
