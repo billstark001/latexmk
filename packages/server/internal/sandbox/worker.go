@@ -3,15 +3,17 @@ package sandbox
 import (
 	"compress/gzip"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/billstark001/latexmk/packages/shared/jsonutil"
 
 	projectarchive "github.com/billstark001/latexmk/packages/server/internal/archive"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
@@ -37,7 +39,6 @@ type workerRequest struct {
 }
 
 const workerProtocolVersion = 2
-
 const maxWorkerRequestBytes = 4 << 20
 
 // Worker runs only inside a dedicated disposable container. Its fixed logical
@@ -54,6 +55,9 @@ func runWorker(
 	maxBytes int64,
 	maxFiles int,
 ) error {
+	if maxBytes <= 0 || maxFiles <= 0 {
+		return errors.New("worker transport limits must be positive")
+	}
 	inbox := filepath.Join(root, "inbox")
 	if err := ensureDir(inbox); err != nil {
 		return err
@@ -70,22 +74,31 @@ func runWorker(
 		return err
 	}
 	defer func() { _ = scoped.Close() }()
-	raw, err := scoped.ReadLimited("request.json", 4<<20)
+	request, err := scoped.OpenRegular("request.json")
 	if err != nil {
 		return err
 	}
 	var req workerRequest
-	if err := json.Unmarshal(raw, &req); err != nil {
+	decodeErr := jsonutil.DecodeStrict(request, maxWorkerRequestBytes, &req)
+	if err := errors.Join(decodeErr, request.Close()); err != nil {
 		return err
 	}
-	if req.Version != workerProtocolVersion || req.Request.ShellEscape || req.MaxFiles <= 0 ||
-		req.MaxSourceBytes <= 0 ||
-		req.MaxArtifactBytes <= 0 ||
-		req.MaxStateBytes < 0 ||
-		((req.Warm || req.ExportCheckpoint) && req.MaxStateBytes == 0) ||
-		req.MaxLogBytes <= 0 ||
-		req.TimeoutMS <= 0 {
-		return errors.New("invalid worker protocol or limits")
+	if err := req.validateLimits(); err != nil {
+		return err
+	}
+	cfg := config.Config{
+		Engines:               []string{req.Request.Engine},
+		MaxConcurrentCompiles: 1,
+		CompileTimeout:        time.Duration(req.TimeoutMS) * time.Millisecond,
+		MaxLogBytes:           req.MaxLogBytes,
+		MaxArtifactBytes:      req.MaxArtifactBytes,
+		CompileCacheRetention: time.Hour,
+		MaxCompileCacheBytes:  req.MaxStateBytes,
+	}
+	runner := compile.NewRunner(cfg)
+
+	if err := runner.ValidateRequest(req.Request); err != nil {
+		return err
 	}
 	project := filepath.Join(root, "project")
 	if err := os.Rename(filepath.Join(inbox, "sources"), project); err != nil {
@@ -108,10 +121,10 @@ func runWorker(
 			return errors.New("invalid source manifest")
 		}
 		expected[file.Path] = true
-		total += file.Size
-		if file.Size < 0 || total > req.MaxSourceBytes || len(expected) > req.MaxFiles {
+		if file.Size < 0 || file.Size > req.MaxSourceBytes-total || len(expected) > req.MaxFiles {
 			return errors.New("source manifest exceeds limit")
 		}
+		total += file.Size
 		f, err := sourceFS.OpenRegular(file.Path)
 		if err != nil {
 			return err
@@ -180,16 +193,6 @@ func runWorker(
 	}); err != nil {
 		return err
 	}
-	cfg := config.Config{
-		Engines:               []string{req.Request.Engine},
-		MaxConcurrentCompiles: 1,
-		CompileTimeout:        time.Duration(req.TimeoutMS) * time.Millisecond,
-		MaxLogBytes:           req.MaxLogBytes,
-		MaxArtifactBytes:      req.MaxArtifactBytes,
-		CompileCacheRetention: time.Hour,
-		MaxCompileCacheBytes:  req.MaxStateBytes,
-	}
-	runner := compile.NewRunner(cfg)
 	result := runner.RunWithOptions(
 		ctx,
 		project,
@@ -216,10 +219,14 @@ func runWorker(
 			if err := writeArchiveFile(
 				checkpointPath,
 				state,
-				req.MaxStateBytes+(1<<20),
+				req.MaxStateBytes+config.CheckpointArchiveOverheadBytes,
 				gzip.BestSpeed,
 			); err == nil {
-				checkpoint, err := describeFile(root, "checkpoint.tar.gz", req.MaxStateBytes+(1<<20))
+				checkpoint, err := describeFile(
+					root,
+					"checkpoint.tar.gz",
+					req.MaxStateBytes+config.CheckpointArchiveOverheadBytes,
+				)
 				if err == nil {
 					members = append(members, archiveMember{name: "checkpoint.tar.gz", file: checkpoint})
 				}
@@ -232,3 +239,17 @@ func runWorker(
 }
 
 func workerError(err error) error { return fmt.Errorf("isolated compiler: %w", err) }
+
+func (req workerRequest) validateLimits() error {
+	if req.Version != workerProtocolVersion || req.Request.ShellEscape || req.MaxFiles <= 0 ||
+		req.MaxSourceBytes <= 0 ||
+		req.MaxArtifactBytes <= 0 ||
+		req.MaxStateBytes < 0 ||
+		((req.Warm || req.ExportCheckpoint) && req.MaxStateBytes == 0) ||
+		req.MaxLogBytes <= 0 ||
+		req.TimeoutMS <= 0 || req.TimeoutMS > math.MaxInt64/int64(time.Millisecond) ||
+		req.MaxStateBytes > math.MaxInt64-config.CheckpointArchiveOverheadBytes-1 {
+		return errors.New("invalid worker protocol or limits")
+	}
+	return nil
+}

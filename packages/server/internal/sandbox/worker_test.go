@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -241,5 +242,27 @@ func TestFreshWorkerExportsStateOnlyWhenRequested(t *testing.T) {
 				t.Fatal("unrequested checkpoint exported:", err)
 			}
 		})
+	}
+}
+
+func TestWorkerLimitsRejectDerivedOverflow(t *testing.T) {
+	valid := workerRequest{
+		Version:          workerProtocolVersion,
+		MaxFiles:         1,
+		MaxSourceBytes:   1,
+		MaxStateBytes:    1,
+		MaxArtifactBytes: 1,
+		MaxLogBytes:      1,
+		TimeoutMS:        1,
+	}
+	if err := valid.validateLimits(); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*workerRequest){func(r *workerRequest) { r.TimeoutMS = math.MaxInt64 }, func(r *workerRequest) { r.MaxStateBytes = math.MaxInt64 }} {
+		bad := valid
+		mutate(&bad)
+		if err := bad.validateLimits(); err == nil {
+			t.Fatalf("accepted overflowing worker limits %+v", bad)
+		}
 	}
 }
