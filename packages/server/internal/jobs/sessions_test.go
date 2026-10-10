@@ -83,6 +83,14 @@ func TestSessionSubscriptionReleaseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestRevisionRateDoesNotOverflowBurst(t *testing.T) {
+	m, _ := sessionManager(t)
+	m.cfg.MaxRealtimeRevisionRate = int(^uint(0) >> 1)
+	if !m.allowRevisionLocked("owner") {
+		t.Fatal("a large positive rate overflowed into an exhausted budget")
+	}
+}
+
 func planRevision(
 	t *testing.T,
 	m *Manager,

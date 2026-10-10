@@ -558,7 +558,7 @@ func (m *Manager) allowRevisionLocked(owner string) bool {
 		return true
 	}
 	now := time.Now()
-	burst := float64(rate * 2)
+	burst := float64(rate) * revisionBurstSeconds
 	budget := m.revisionBudgets[owner]
 	if budget == nil {
 		budget = &revisionBudget{tokens: burst, updated: now}
