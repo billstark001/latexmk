@@ -282,7 +282,7 @@ func (r *Root) Stage(name string, max int64, write func(io.Writer) error) (_ *Pe
 }
 
 func (p *Pending) Commit() error {
-	if p.temp == "" {
+	if p.temp == "" || p.target == "" {
 		return errors.New("staged file is already closed")
 	}
 	if _, err := p.root.check(filepath.ToSlash(p.target), true); err != nil {
@@ -294,6 +294,24 @@ func (p *Pending) Commit() error {
 	p.temp = ""
 	return nil
 }
+
+// CommitExclusive publishes the complete staged file only if its destination
+// does not exist. A hard link makes creation atomic without exposing a partially
+// written file. Close removes the staging link, including after publication.
+func (p *Pending) CommitExclusive() error {
+	if p.temp == "" || p.target == "" {
+		return errors.New("staged file is already closed")
+	}
+	if _, err := p.root.check(filepath.ToSlash(p.target), true); err != nil {
+		return err
+	}
+	if err := p.root.Root.Link(p.temp, p.target); err != nil {
+		return err
+	}
+	p.target = ""
+	return nil
+}
+
 func (p *Pending) Close() error {
 	if p.temp == "" {
 		return nil

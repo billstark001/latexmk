@@ -120,7 +120,8 @@ be temporarily enabled with `LATEXMK_ENABLE_LEGACY_COMPILE=true` for v1 clients.
 
 Each project receives a random identity stored in
 `.latexmk-cache/project-id`, avoiding collisions when unrelated projects share
-the same container mount path. Run `latexmk cache ignore` in Git projects.
+the same container mount path. Concurrent CLI processes publish one complete ID
+atomically; this requires filesystem support for hard links. Run `latexmk cache ignore` in Git projects.
 `--legacy-project-id` exists only to clean data created by older path-derived
 identities. Remote deletion always uses a preview, a short-lived local plan that
 contains no credentials, and a server-validated digest.

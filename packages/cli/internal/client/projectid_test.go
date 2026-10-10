@@ -82,3 +82,42 @@ func TestCacheIgnoreCoversNegatedEntry(t *testing.T) {
 		t.Fatal("expected an explicit trailing cache rule")
 	}
 }
+
+func TestConcurrentProjectIDCreation(t *testing.T) {
+	// Several independent CLI processes may initialize the same project together.
+	for round := 0; round < 10; round++ {
+		root := t.TempDir()
+		start := make(chan struct{})
+		results := make(chan ProjectIDResolution, 32)
+		errors := make(chan error, 32)
+		for i := 0; i < 32; i++ {
+			go func() {
+				<-start
+				result, err := ResolveProjectIDWithStatus(root, true)
+				results <- result
+				errors <- err
+			}()
+		}
+		close(start)
+		id := ""
+		created := 0
+		for i := 0; i < 32; i++ {
+			result := <-results
+			if err := <-errors; err != nil {
+				t.Fatal(err)
+			}
+			if id == "" {
+				id = result.ID
+			}
+			if result.ID != id {
+				t.Fatalf("identities differ: %q / %q", id, result.ID)
+			}
+			if result.Created {
+				created++
+			}
+		}
+		if created != 1 {
+			t.Fatalf("created=%d; want one initializer", created)
+		}
+	}
+}

@@ -253,3 +253,49 @@ func TestDigestRejectsUnboundedAndOversizedStreams(t *testing.T) {
 		t.Fatalf("bounded digest = %s, %d, %v", hash, size, err)
 	}
 }
+
+func TestCommitExclusivePublishesOnce(t *testing.T) {
+	root, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	stage := func(value string) *Pending {
+		t.Helper()
+		pending, err := root.Stage(
+			"identity",
+			100,
+			func(w io.Writer) error { _, err := io.WriteString(w, value); return err },
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pending
+	}
+	first := stage("complete")
+	defer func() { _ = first.Close() }()
+	second := stage("replacement")
+	defer func() { _ = second.Close() }()
+	if _, err := root.ReadLimited("identity", 100); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("uncommitted identity exists: %v", err)
+	}
+	if err := first.CommitExclusive(); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Commit(); err == nil {
+		t.Fatal("published stage can be committed twice")
+	}
+	if err := second.CommitExclusive(); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("replacement error=%v", err)
+	}
+	actual, err := root.ReadLimited("identity", 100)
+	if err != nil || string(actual) != "complete" {
+		t.Fatalf("identity=%q, error=%v", actual, err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

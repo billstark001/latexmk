@@ -12,6 +12,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 const projectIDRelativePath = ".latexmk-cache/project-id"
@@ -47,61 +49,50 @@ func ResolveProjectID(root string, create bool) (string, error) {
 
 // ResolveProjectIDWithStatus persists a random per-project identity. This is
 // intentionally not derived from an absolute path: container mounts commonly
-// place unrelated projects at the same path.
+// place unrelated projects at the same path. Concurrent initializers observe
+// the same fully written identity; exactly one reports Created.
 func ResolveProjectIDWithStatus(root string, create bool) (ProjectIDResolution, error) {
 	resolved, err := resolvedProjectRoot(root)
 	if err != nil {
 		return ProjectIDResolution{}, err
 	}
-	path := filepath.Join(resolved, filepath.FromSlash(projectIDRelativePath))
-	cacheDir := filepath.Dir(path)
-	if info, statErr := os.Lstat(cacheDir); statErr == nil {
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return ProjectIDResolution{}, errors.New(".latexmk-cache must be a real directory")
-		}
-	} else if !os.IsNotExist(statErr) {
-		return ProjectIDResolution{}, statErr
+	scoped, err := safefs.Open(resolved)
+	if err != nil {
+		return ProjectIDResolution{}, err
 	}
-	id, err := readProjectID(path)
+	defer func() { _ = scoped.Close() }()
+	id, err := readProjectID(scoped)
 	if err == nil {
 		return ProjectIDResolution{ID: id}, nil
 	}
-	if !os.IsNotExist(err) {
+	if !errors.Is(err, os.ErrNotExist) {
 		return ProjectIDResolution{}, err
 	}
 	if !create {
 		return ProjectIDResolution{}, ErrProjectIDNotFound
 	}
-	if err := ensurePrivateCacheDir(cacheDir); err != nil {
-		return ProjectIDResolution{}, err
-	}
+
 	random := make([]byte, 16)
 	if _, err := rand.Read(random); err != nil {
 		return ProjectIDResolution{}, fmt.Errorf("generate project ID: %w", err)
 	}
 	id = "project-" + hex.EncodeToString(random)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if os.IsExist(err) {
-		id, readErr := readProjectID(path)
-		return ProjectIDResolution{ID: id}, readErr
-	}
+	pending, err := scoped.Stage(
+		projectIDRelativePath,
+		maxProjectIDBytes,
+		func(w io.Writer) error { _, err := io.WriteString(w, id+"\n"); return err },
+	)
 	if err != nil {
+		return ProjectIDResolution{}, fmt.Errorf("stage project ID: %w", err)
+	}
+	defer func() { _ = pending.Close() }()
+	if err := pending.CommitExclusive(); errors.Is(err, os.ErrExist) {
+		id, readErr := readProjectID(scoped)
+		return ProjectIDResolution{ID: id}, readErr
+	} else if err != nil {
 		return ProjectIDResolution{}, fmt.Errorf("create project ID: %w", err)
 	}
-	if _, err := io.WriteString(f, id+"\n"); err != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
-		return ProjectIDResolution{}, fmt.Errorf("write project ID: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
-		return ProjectIDResolution{}, fmt.Errorf("sync project ID: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(path)
-		return ProjectIDResolution{}, fmt.Errorf("close project ID: %w", err)
-	}
+
 	return ProjectIDResolution{ID: id, Created: true}, nil
 }
 
@@ -272,18 +263,10 @@ func LegacyProjectID(root string) (string, error) {
 	return "project-" + hex.EncodeToString(digest[:16]), nil
 }
 
-func readProjectID(path string) (string, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return "", err
-	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return "", errors.New("project ID must be a regular file")
-	}
-	if info.Size() > 256 {
-		return "", errors.New("project ID file is too large")
-	}
-	payload, err := os.ReadFile(path)
+const maxProjectIDBytes = 256
+
+func readProjectID(scoped *safefs.Root) (string, error) {
+	payload, err := scoped.ReadLimited(projectIDRelativePath, maxProjectIDBytes)
 	if err != nil {
 		return "", err
 	}
@@ -292,23 +275,6 @@ func readProjectID(path string) (string, error) {
 		return "", errors.New("project ID file contains an invalid identifier")
 	}
 	return id, nil
-}
-
-func ensurePrivateCacheDir(path string) error {
-	info, err := os.Lstat(path)
-	if err == nil {
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return errors.New(".latexmk-cache must be a real directory")
-		}
-		return nil
-	}
-	if !os.IsNotExist(err) {
-		return err
-	}
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		return fmt.Errorf("create .latexmk-cache: %w", err)
-	}
-	return nil
 }
 
 func resolvedProjectRoot(root string) (string, error) {
