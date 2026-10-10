@@ -112,16 +112,14 @@ node packages/deploy/dist/index.js bundle \
 Replace the placeholder with the published digest. The application Dockerfile
 only compiles/copies the server binary. A cold PaaS builder pulls the runtime;
 it does not install thousands of TeX packages. See the [deployment guide](../packages/deploy/README.md)
-for runtime publishing, CI variables, cache import/export, and measurement.
+for runtime publishing, automatic CI selection, cache import/export, and measurement.
 
-After a successful `runtime-image` publication, run
-`node scripts/update-runtime-variables.mjs --dry-run` from the repository root
-to preview the new CI pins, then run it without `--dry-run` to update them.
-Use `--run RUN_ID` to adopt a specific publication and `--profile slim` or
-`--profile full` for a single profile. Finally dispatch `app-image.yml` to build
-against the new runtime. See [adopting a published runtime](../packages/deploy/README.md#adopting-a-published-runtime)
-for prerequisites and failure recovery. Server-only updates do not require
-changing the runtime variables.
+CI selects runtimes automatically from the hash of each profile's actual build
+inputs. Missing recipes are built and verified before the application uses their
+immutable digests; server-only updates reuse the verified recipe. Repository
+runtime variables and the old variable-update script are no longer needed.
+See [automatic image CI](../packages/deploy/README.md#automatic-image-ci) for
+branch testing without publication, deliberate OS refreshes, and failure behavior.
 
 Use `latexmk meta` to verify the remote toolchain actually running the image.
 

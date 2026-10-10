@@ -1,0 +1,123 @@
+name: Ensure a verified runtime
+description: Reuse a verified recipe digest or build and verify it before promotion
+inputs:
+  profile:
+    description: Runtime profile (slim or full)
+    required: true
+  publish:
+    description: Use GHCR instead of the runner-local registry
+    default: 'false'
+  force:
+    description: Rebuild even when the recipe has a verified image
+    default: 'false'
+  token:
+    description: GitHub token for GHCR publication
+    required: true
+outputs:
+  ref:
+    description: Verified immutable runtime reference
+    value: ${{ steps.verify.outputs.ref }}
+  reused:
+    description: Whether an existing verified recipe was reused
+    value: ${{ steps.context.outputs.reused }}
+  recipe:
+    description: Hash of the actual runtime context and platform
+    value: ${{ steps.context.outputs.recipe }}
+runs:
+  using: composite
+  steps:
+    - uses: docker/setup-buildx-action@v3
+      with:
+        driver-opts: network=host
+        buildkitd-config-inline: |
+          [registry."localhost:5000"]
+            http = true
+            insecure = true
+    - uses: docker/login-action@v3
+      if: inputs.publish == 'true'
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.token }}
+    - name: Select runtime by recipe
+      id: context
+      shell: bash
+      env:
+        PROFILE: ${{ inputs.profile }}
+        PUBLISH: ${{ inputs.publish }}
+        FORCE: ${{ inputs.force }}
+      run: |
+        node packages/deploy/src/index.ts runtime-bundle --profile "$PROFILE" --out dist/runtime --force
+        registry=localhost:5000
+        if [ "$PUBLISH" = true ]; then registry=ghcr.io; fi
+        image="$registry/${GITHUB_REPOSITORY,,}-runtime"
+        recipe=$(node scripts/runtime-image.mjs fingerprint --context dist/runtime)
+        tag="$PROFILE-recipe-$recipe"
+        ref=''
+        if [ "$FORCE" != true ]; then
+          ref=$(node scripts/runtime-image.mjs resolve --image "$image" --tag "$tag")
+        fi
+        echo "image=$image" >> "$GITHUB_OUTPUT"
+        echo "recipe=$recipe" >> "$GITHUB_OUTPUT"
+        echo "tag=$tag" >> "$GITHUB_OUTPUT"
+        echo "ref=$ref" >> "$GITHUB_OUTPUT"
+        echo "reused=$([ -n "$ref" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        echo "candidate=$image:ci-$PROFILE-$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+    - name: Build runtime candidate and run embedded smoke tests
+      id: build
+      if: steps.context.outputs.reused != 'true'
+      uses: docker/build-push-action@v6
+      with:
+        context: dist/runtime
+        platforms: linux/amd64
+        push: true
+        tags: ${{ steps.context.outputs.candidate }}
+        no-cache: ${{ inputs.force == 'true' }}
+        cache-from: type=gha,scope=runtime-${{ inputs.profile }}
+        cache-to: type=gha,scope=runtime-${{ inputs.profile }},mode=max
+    - name: Verify immutable runtime and collect inventory
+      id: verify
+      shell: bash
+      env:
+        IMAGE: ${{ steps.context.outputs.image }}
+        CACHED_REF: ${{ steps.context.outputs.ref }}
+        DIGEST: ${{ steps.build.outputs.digest }}
+        PROFILE: ${{ inputs.profile }}
+      run: |
+        ref="$CACHED_REF"
+        if [ -z "$ref" ]; then ref="$IMAGE@$DIGEST"; fi
+        docker pull --platform linux/amd64 "$ref"
+        test "$(docker image inspect "$ref" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+        expected_profile=texlive-full
+        if [ "$PROFILE" = slim ]; then expected_profile=xelatex-cjk-slim; fi
+        test "$(docker run --rm --entrypoint printenv "$ref" LATEXMK_IMAGE_PROFILE)" = "$expected_profile"
+        docker run --rm --entrypoint sh "$ref" /usr/local/lib/latexmk/smoke.sh
+        mkdir -p dist/font-inventory
+        printf '%s\n' "$ref" > dist/font-inventory/image.txt
+        docker run --rm --entrypoint sh "$ref" -c 'sha256sum -c /usr/local/lib/latexmk/fonts.sha256' > dist/font-inventory/verification.txt
+        for file in fonts.tsv fonts.sha256 debian-packages.txt texlive.tlpdb texlive-repository.txt; do
+          docker run --rm --entrypoint cat "$ref" "/usr/local/lib/latexmk/$file" > "dist/font-inventory/$file"
+        done
+        echo "ref=$ref" >> "$GITHUB_OUTPUT"
+    - name: Promote verified runtime recipe
+      if: steps.context.outputs.reused != 'true'
+      shell: bash
+      env:
+        IMAGE: ${{ steps.context.outputs.image }}
+        TAG: ${{ steps.context.outputs.tag }}
+        REF: ${{ steps.verify.outputs.ref }}
+      run: node scripts/runtime-image.mjs promote --image "$IMAGE" --tag "$TAG" --ref "$REF"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: font-inventory-${{ inputs.profile }}
+        path: dist/font-inventory/
+        overwrite: true
+    - name: Record runtime selection
+      shell: bash
+      env:
+        REF: ${{ steps.verify.outputs.ref }}
+        RECIPE: ${{ steps.context.outputs.recipe }}
+        REUSED: ${{ steps.context.outputs.reused }}
+        PROFILE: ${{ inputs.profile }}
+      run: |
+        printf 'Runtime (%s): `%s`\n\nRecipe: `%s`; reused: `%s`.\n' "$PROFILE" "$REF" "$RECIPE" "$REUSED" >> "$GITHUB_STEP_SUMMARY"

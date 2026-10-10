@@ -152,6 +152,16 @@ numbers.
 
 ## @latexmk/deploy [0.4.1] - 2026-10-11
 
+### Added
+
+- Select verified slim/full runtime images automatically by recipe hash and pass
+  immutable digests to application builds; remove repository runtime variables
+  and the variable-adoption script.
+- Rebuild missing or changed recipes, verify runtimes before promoting cache tags,
+  and verify application E2E compilation before promoting application tags.
+- Support complete feature-branch image tests in a disposable local registry,
+  explicit cache-hit checks, and deliberate runtime refreshes without layer cache.
+
 ### Fixed
 
 - Reject forced output replacement through symlinked source ancestors, including
@@ -162,12 +172,15 @@ numbers.
 - Align the deploy command's version with its package metadata and embed the
   server component version in generated application builds.
 
+- Update the lint parser dependencies to read Go 1.27.2 export data, fixing
+  typecheck failures in Actions that did not occur with Go 1.27.1 locally.
+
 ### Changed
 
 - Reconcile CLI, API, configuration, deployment, operations and security guides
   with current behavior. Document focused fuzz/benchmark checks and add opt-in
   Docker checks for real engines, packing, caches and lease expiry without changing
-  runtime recipes. No images or GitHub release are published by this version bump.
+  runtime recipes.
 
 ## [0.4.0] - 2026-10-07
 
