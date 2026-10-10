@@ -29,7 +29,8 @@ image and instance size.
 The server still enforces `LATEXMK_MAX_STATE_BYTES` synchronously. The periodic
 sweeper bounds normal cache growth: result archives expire first, project
 snapshots expire next, and blobs are deleted only when no live upload, current
-project snapshot, or queued/running job snapshot refers to them. A result whose
+project snapshot, queued/running job snapshot or realtime session refers to them.
+Session checkpoints count toward the same state quota. A result whose
 retention period has elapsed remains in job history but can no longer be
 downloaded.
 
@@ -124,20 +125,22 @@ changing the runtime variables.
 
 Use `latexmk meta` to verify the remote toolchain actually running the image.
 
-## Compose watcher
+## Continuous clients
 
-The root Compose file includes an optional long-running client:
+Run the host CLI against the deployed API:
 
 ```sh
-docker compose --profile watch up -d client-watch
-docker compose logs -f client-watch
+latexmk --realtime --server-cache reuse --target paper
+# Ordinary independent jobs, including servers without realtime support:
+latexmk watch --target paper
 ```
 
-Set `LATEXMK_PROJECT_DIR`, `LATEXMK_CLIENT_ENTRY`,
-`LATEXMK_CLIENT_WATCH_INTERVAL`, and `LATEXMK_CLIENT_WATCH_DEBOUNCE` in `.env`.
-On Linux, also set `LATEXMK_CLIENT_UID` and `LATEXMK_CLIENT_GID` so returned
-artifacts are writable by the host user. Restart `client-watch` after changing
-client configuration or environment variables.
+Configure both modes through `watch.{interval,debounce,maxWait}` in the user
+or project JSON, or through `LATEXMK_WATCH_*` and CLI flags. See
+[watch configuration](CONFIGURATION.md#watching-changes). Realtime workspace
+reuse requires the isolated runner; fresh realtime sessions can use the native
+compiler. [Realtime deployment](REALTIME.md#runner-configuration) documents
+runner/session limits, explicit lease renewal and restart behavior.
 
 ## PostgreSQL and PGlite
 
@@ -169,7 +172,7 @@ Collect at least:
 - `duration_ms` distribution and timeouts;
 - upload and queue rejection reasons;
 - temporary-disk, state-volume, and memory use;
-- active compiles, queued jobs, and PaaS queue time;
+- active compiles, queued jobs, realtime sessions and PaaS queue time;
 - cache sweep errors and reclaimed bytes.
 
 Logs are JSON and include `request_id`; they do not log project content, tokens,

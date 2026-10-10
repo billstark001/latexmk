@@ -25,8 +25,8 @@ and rc registration. Requires curl and either `sha256sum` or `shasum`.
 Release assets are `latexmk_linux_amd64`, `latexmk_linux_arm64`,
 `latexmk_darwin_amd64`, `latexmk_darwin_arm64`, `SHA256SUMS`, and
 `install-cli.sh`. See [release publishing](DEVELOPMENT.md#cli-releases).
-The curl command becomes available after this script is pushed; binary installs
-also require a release containing these assets.
+Release installation uses published assets, rather than current `main` source.
+Use a local build for features listed under [Unreleased](../CHANGELOG.md#unreleased).
 
 ## Local build
 

@@ -3,7 +3,12 @@
 A remote LaTeX compiler for small research groups. A Go CLI selects project
 dependencies and sends an immutable source snapshot to a Go server. Each job
 compiles in an isolated workspace and returns PDF, SyncTeX and diagnostics.
-Optional server auxiliary caches reduce repeated compilation passes.
+Optional server auxiliary caches reduce repeated compilation passes. Realtime
+sessions provide continuous previews, and `pack` exports portable source ZIPs.
+
+This documentation follows `main`. Features listed under
+[Unreleased](CHANGELOG.md#unreleased) may require local CLI/server builds from
+the same revision until their release is published.
 
 ## Install the CLI
 
@@ -31,7 +36,8 @@ registration. See [installation](docs/INSTALLATION.md) for examples and shell de
 ## Development quick start
 
 Requirements: Go 1.27+, Node.js 24+, pnpm 12. Local end-to-end testing also
-requires TeX Live and latexmk.
+requires TeX Live and latexmk, or a prebuilt Docker TeX image; see
+[local integration checks](docs/DEVELOPMENT.md#local-integration-checks).
 
 ```sh
 pnpm install --frozen-lockfile
@@ -86,29 +92,32 @@ has several targets, set `defaultTarget` in `.latexmk.json` or pass
 
 ## Documentation
 
-| Topic                                                       | Guide                                       |
-| ----------------------------------------------------------- | ------------------------------------------- |
-| Installing the CLI and shell registration                   | [Installation](docs/INSTALLATION.md)        |
-| Configuration, credentials, dotenv and build targets        | [Configuration](docs/CONFIGURATION.md)      |
-| Git ignore rules, manifests, glob and dependency discovery  | [File selection](docs/DEPENDENCIES.md)      |
-| Local/server auxiliary retention and compilation reuse      | [Auxiliary files](docs/AUXILIARY.md)        |
-| Portable source ZIPs and verified arXiv submission packages | [Packing](docs/PACKING.md)                  |
-| Deployment, authentication modes and database options       | [Deployment](docs/DEPLOYMENT.md)            |
-| Runtime images and deployment bundles                       | [Deploy package](packages/deploy/README.md) |
-| Jobs, monitoring and storage                                | [Operations](docs/OPERATIONS.md)            |
-| JSON CLI integration                                        | [Agent CLI](docs/AGENT_CLI.md)              |
-| HTTP API                                                    | [API](docs/API.md)                          |
-| Isolation and limitations                                   | [Security](docs/SECURITY.md)                |
-| Toolchain, formatting and validation commands               | [Development](docs/DEVELOPMENT.md)          |
+| Topic                                                            | Guide                                       |
+| ---------------------------------------------------------------- | ------------------------------------------- |
+| Installing the CLI and shell registration                        | [Installation](docs/INSTALLATION.md)        |
+| Configuration, credentials, dotenv and build targets             | [Configuration](docs/CONFIGURATION.md)      |
+| Git ignore rules, manifests, glob and dependency discovery       | [File selection](docs/DEPENDENCIES.md)      |
+| Local/server auxiliary retention and compilation reuse           | [Auxiliary files](docs/AUXILIARY.md)        |
+| Continuous editing, session leases and isolated checkpoint reuse | [Realtime](docs/REALTIME.md)                |
+| Engine registration, behavior and supported toolchains           | [Engines](docs/ENGINES.md)                  |
+| Portable source ZIPs and verified arXiv submission packages      | [Packing](docs/PACKING.md)                  |
+| Deployment, authentication modes and database options            | [Deployment](docs/DEPLOYMENT.md)            |
+| Runtime images and deployment bundles                            | [Deploy package](packages/deploy/README.md) |
+| Jobs, monitoring and storage                                     | [Operations](docs/OPERATIONS.md)            |
+| JSON CLI integration                                             | [Agent CLI](docs/AGENT_CLI.md)              |
+| HTTP API                                                         | [API](docs/API.md)                          |
+| Isolation and limitations                                        | [Security](docs/SECURITY.md)                |
+| Toolchain, formatting and validation commands                    | [Development](docs/DEVELOPMENT.md)          |
 
 ## Packages
 
-| Package              | Implementation | Purpose                                                   |
-| -------------------- | -------------- | --------------------------------------------------------- |
-| `@latexmk/cli`       | Go             | File selection, upload, watch and result downloads        |
-| `@latexmk/server`    | Go, Gin, GORM  | Compilation, queue, snapshots, authentication and storage |
-| `@latexmk/dashboard` | Preact, Vite   | Jobs, capabilities, users and API tokens                  |
-| `@latexmk/deploy`    | TypeScript     | Runtime/application images and deployment bundles         |
+| Package              | Implementation | Purpose                                                          |
+| -------------------- | -------------- | ---------------------------------------------------------------- |
+| `@latexmk/cli`       | Go             | Selection, upload, watch/realtime, packs and downloads           |
+| `@latexmk/server`    | Go, Gin, GORM  | Compilation, queue, snapshots, authentication and storage        |
+| `@latexmk/dashboard` | Preact, Vite   | Jobs, capabilities, users and API tokens                         |
+| `@latexmk/shared`    | Go             | Protocol, safe filesystem/recorder operations and engine drivers |
+| `@latexmk/deploy`    | TypeScript     | Runtime/application images and deployment bundles                |
 
 Source snapshots, result archives and auxiliary reuse are independently managed.
 Shell escape is disabled by default; project latexmkrc files are not executed.

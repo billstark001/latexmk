@@ -55,8 +55,10 @@ content-addressed blobs; revision admission uses compare-and-swap plus an exact
 idempotency receipt. Ambiguous responses replay the same operation.
 
 Successful downloads are verified into a new directory beneath
-`OUT/.latexmk-live/TARGET/generation-*`. The authoritative `current.json` names
-the generation and includes session, revision, job, snapshot, source roots and artifact hashes.
+`OUT/.latexmk-live/KEY/generation-*`, where `KEY` is the first 16 hexadecimal
+characters of SHA-256 over `entry + NUL + engine + NUL + jobName`. The authoritative
+`current.json` names the generation and includes session, revision, job, snapshot,
+source roots and artifact hashes.
 On Unix, `current` is an atomically replaced convenience symlink. Readers needing
 an entire consistent bundle must read `current.json` once and open its named
 generation; resolving the convenience symlink separately for several files can
@@ -221,3 +223,9 @@ Add `--database-image postgres@sha256:DIGEST` to run with a disposable PostgreSQ
 database and verify terminal snapshot identity and controller crash recovery.
 GitHub's application-image workflow runs both storage modes before reporting a newly
 published image as successful. See [HTTP API](API.md) for session endpoints.
+
+Native engine, pack and short-lease checks are also available through
+[scripts/engine-e2e.py](../scripts/engine-e2e.py) (Python 3 and a prebuilt
+local TeX image). They use no Docker socket inside the controller and do not
+exercise isolated checkpoint reuse. See
+[local integration checks](DEVELOPMENT.md#local-integration-checks).

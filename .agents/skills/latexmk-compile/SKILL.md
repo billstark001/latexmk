@@ -59,13 +59,16 @@ Preserve configured engine, output and auxiliary policies unless the user asks
 to change them. `outDir` / `--out-dir` controls returned outputs; target `pdf`
 exports a verified PDF inside the project root. `--target all` builds configured
 targets in name order and reports failure if any fails. Use `--json` for results,
-`watch` for continuous builds, and the documented jobs interface for detached work.
+`--realtime` for continuous builds and consistent preview bundles, or ordinary
+`watch` when independent jobs are desired. Use the documented jobs interface
+for detached work. Both continuous modes share `watch.{interval,debounce,maxWait}`.
 
 PDF, SyncTeX and diagnostics are independent of auxiliary retention. Local
 `none|cache|output` and server `none|retain|reuse` policies are separate;
 `serverTTL` bounds auxiliary retention. No-config defaults are `none`, while
 legacy JSON may retain its previous `output` behavior. Server `reuse` restores
-compatible portable state into a fresh workspace and requires server capability;
+compatible portable state for ordinary jobs, or an isolated full checkpoint
+for realtime sessions, and requires the corresponding server capabilities;
 `--force` starts cold. Local caching never implicitly uploads cached files.
 
 `cache clean` removes local auxiliary cache contents while preserving project
@@ -86,4 +89,7 @@ Read only the guide needed for the current issue:
   scanner limitations and missing-file retry boundaries.
 - [Auxiliary files](../../../docs/AUXILIARY.md): retention, transfer expiry,
   reuse compatibility and cleanup.
+- [Realtime](../../../docs/REALTIME.md): lease renewal, previews and isolated checkpoints.
+- [Packing](../../../docs/PACKING.md): offline source ZIPs and verified arXiv packages.
+- [Engines](../../../docs/ENGINES.md): registered driver names and engine-specific behavior.
 - [Agent CLI](../../../docs/AGENT_CLI.md): job IDs, JSON results and detached operations.

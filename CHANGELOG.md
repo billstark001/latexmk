@@ -43,34 +43,53 @@ numbers.
   its first commit's date. These historical version entries do not assert that
   an untagged version was published.
 
-## Unreleased
+## [Unreleased]
 
 ### Added
 
-- Configure shared ordinary-watch and realtime timing through
-  `watch.interval`, `watch.debounce`, and `watch.maxWait`, with environment and
-  CLI overrides. The default maximum wait is independently fixed at 2.5 seconds.
-- Add `pack --mode default|arxiv` with immutable source capture, deterministic
-  ZIP output, selection previews, and optional cold verification. arXiv packages
-  collect bibliography/index/glossary/nomenclature artifacts from the captured
-  build and verify the final bundle before replacing an existing archive.
+- Configure ordinary watch and realtime through shared `watch.interval`,
+  `watch.debounce` and `watch.maxWait`, with dotenv/process and CLI overrides.
+  Defaults are 500 ms, 500 ms and 2.5 seconds respectively; maxWait is independent
+  of debounce and bounds continuous save bursts.
+- Add `pack --mode default|arxiv`, immutable capture, deterministic ZIP output,
+  credential-free source previews and optional cold verification. arXiv mode
+  collects `.bbl`, `.ind`, `.gls` and `.nls` from the captured build and verifies
+  the exact final bundle before atomic publication; failure preserves the old ZIP.
 - Return generated `.nls` nomenclature files as compilation artifacts.
+- Introduce the shared engine behavior interface and registry. Engine names
+  remain strings; trusted registration defines latexmk options, graphics
+  suffix order and version probes, without a closed engine-name enum or
+  command inference. Existing three built-ins and public CLI options remain.
+- Add opt-in local Docker checks for real pdfLaTeX/XeLaTeX, packing, cache
+  behavior and realtime lease expiry, without changing runtime recipes.
 
 ### Fixed
 
-- Automatic graphics selection follows the selected pdfLaTeX/LuaLaTeX/XeLaTeX
-  driver’s default extension order, including uppercase suffixes and
-  engine-specific formats, while preserving declared extension scopes.
-
 - Renew realtime leases only through explicit client renewal or new revision
-  admission. Read-only state and SSE heartbeats cannot keep abandoned sessions
-  alive. CLI renewal continues independently during uploads and downloads.
+  admission. Reads, subscriptions and SSE heartbeats cannot keep abandoned
+  sessions alive; CLI renewal continues during uploads and downloads.
 - Report failed realtime closure instead of silently ignoring it.
+- Follow each engine's default graphics extension order, including case-sensitive
+  suffixes and supported formats; preserve scoped `\DeclareGraphicsExtensions`.
+- Preserve explicit CLI engine flags over target defaults for compilation,
+  file previews and packing, and executable-name engine selection for compilation.
+- Preserve case in configured engine names instead of lowercasing registry keys.
+- Keep validated watcher timing internal rather than exposing an unchecked
+  mutable maxWait field or a zero-value fallback.
+- Declare CLI's directly imported fsnotify dependency as direct and normalize
+  Go module manifests with the standard tidy command. No dependency versions change.
+- Align README, CLI/API, auxiliary, operations, installation and skill guides
+  with realtime cancellation, preview paths, source packs and current test tooling.
+  Remove instructions for the nonexistent Compose watcher.
 
 ### Changed
 
-- Session state reads no longer renew leases; clients use the new
-  `POST /v1/sessions/:id/lease` endpoint. Upgrade CLI and server together.
+- Session state reads no longer renew leases. Clients must use
+  `POST /v1/sessions/:id/lease` or submit new revisions; upgrade CLI/server
+  together. No older-server renewal fallback is provided.
+- Unregistered engines fail explicitly; new implementations register behavior
+  rather than relying on latexmk's default engine. Profiles/DSL remain deferred
+  in [issue #6](https://github.com/billstark001/latexmk/issues/6).
 
 ## [0.4.0] - 2026-10-07
 

@@ -302,8 +302,7 @@ selected dependency set. The default interval and debounce are both 500 ms and
 can be changed with `--watch-interval` and `--watch-debounce`. `--watch-max-wait`
 bounds continuous save bursts, defaulting to 2.5 seconds independently of debounce.
 All three also use the shared [`watch` configuration](CONFIGURATION.md#watching-changes).
-Native notification
-hints are backed by polling for paths and Docker bind mounts that do not deliver
+Native notification hints are backed by polling for paths and Docker bind mounts that do not deliver
 reliable events.
 
 The watch set contains:
@@ -334,17 +333,15 @@ excludes file is watched, including its default path before the file exists.
 ## Engine-specific graphics
 
 For extensionless `\includegraphics`, automatic selection uses the ordered
-defaults of `pdftex.def`, `luatex.def`, or `xetex.def` for the selected engine.
+graphics extensions supplied by the selected registered engine driver. The
+built-ins mirror `pdftex.def`, `luatex.def` and `xetex.def`; see
+[engine registration](ENGINES.md).
 For example, pdfLaTeX and LuaLaTeX choose `plot.png` before `plot.PDF`, while
 XeLaTeX chooses `plot.PDF` first. Suffix case is preserved for the Linux server.
 `\DeclareGraphicsExtensions` overrides these defaults within its TeX scope.
 Custom drivers or conversion packages that change graphics rules still require
 explicit selection when static discovery cannot model their behavior.
 
-The opt-in `scripts/engine-e2e.py` checks a local, prebuilt Docker TeX image,
-a matching Linux controller binary and a host CLI. It exercises actual pdfLaTeX
-and XeLaTeX with nested entries, driver selection, BibTeX, indexes, cache reuse,
-SyncTeX, custom job names, error propagation, verified packages and realtime
-lease expiry. It never pulls an image or reads deployment credentials. Run it
-with `--image IMAGE --controller-binary PATH --cli PATH`; it removes the
-container and temporary projects it creates.
+Real pdfLaTeX/XeLaTeX driver checks, including a case-sensitive competing-image
+fixture, are available through the opt-in
+[local integration checks](DEVELOPMENT.md#local-integration-checks).

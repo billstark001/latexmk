@@ -19,7 +19,10 @@ explicit `--output` is relative to the working directory. The output must end in
 `.zip` and is excluded from its own selection. Existing outputs are replaced
 atomically only after all members pass their captured size and SHA-256 checks.
 Sorted paths, fixed timestamps, and regular-file modes make identical packages
-reproducible. Failed builds, verification, or writes preserve the previous ZIP.
+reproducible within the same CLI/compression implementation. Failed builds,
+verification, or writes preserve the previous ZIP. Local capture/packing is
+bounded to 20,000 files and 2 GiB of expanded contents; verified builds must
+also satisfy the server’s advertised source and artifact limits.
 
 ## Default mode
 
@@ -58,7 +61,8 @@ See [arXiv's source requirements](https://info.arxiv.org/help/submit_tex.html).
 Successful verification proves that this exact bundle builds on your server;
 arXiv's own TeX Live, fonts, bibliography backend and `.bbl` version must still be
 compatible. This command does not submit the paper or transform arbitrary TeX
-macros, fonts, or image formats.
+macros, fonts, or image formats. The `engine` value is a registered driver
+name, with the same behavior as ordinary compilation; see [engines](ENGINES.md).
 
 ## Preview and automation
 
@@ -76,4 +80,5 @@ paths or credentials.
 Only one entry/target is supported; `--target all`, watch, realtime, and detach
 are rejected. Verification owns its cold-build and auxiliary policy, so cache,
 force, and SyncTeX flags are rejected. No profile syntax or profile fallback is
-provided.
+provided. Profiles remain deferred in
+[issue #6](https://github.com/billstark001/latexmk/issues/6).

@@ -2,7 +2,9 @@
 
 No project-specific file is required. The defaults use the entry's directory as
 the project root, respect Git ignore rules, discover dependencies automatically,
-and run XeLaTeX. A shared user configuration can provide the server and credentials.
+and run XeLaTeX. `engine` is a string key for a registered driver; see
+[engine behavior](ENGINES.md). A shared user configuration can provide the server
+and credentials.
 
 ## Sources and paths
 
@@ -48,6 +50,8 @@ Ordinary `watch` / `--watch` and `--realtime` share the same timing configuratio
 zero disables that wait. `maxWait` bounds the wait during continuous edits and
 can be shorter than `debounce`. Interval and maxWait must be positive Go durations.
 The values above are the defaults; maxWait is independent of debounce.
+`watch` must be an object; `null`, empty duration strings and negative durations
+are rejected. Omit individual fields to inherit them.
 
 User/project JSON merges these fields individually. `LATEXMK_WATCH_INTERVAL`,
 `LATEXMK_WATCH_DEBOUNCE`, and `LATEXMK_WATCH_MAX_WAIT` override JSON through the
@@ -165,7 +169,9 @@ Explicit CLI credentials override implicit sources in `auto`, `env`, and `file`;
 an explicitly selected file must contain one nonempty token (a final newline is
 accepted). Lower-priority files are never opened after a source is selected.
 
-`files`, `--dry-run`, and local cache operations do not open token files.
+`files`, `--dry-run`, default `pack` without `--verify`, and local cache
+operations do not open token files. arXiv packing and explicit verification
+authenticate before their remote builds.
 `doctor` reports the selected source without printing its value. Credential
 files and policy files are excluded from upload even if ordinary excludes are
 replaced or Git filtering is disabled.
@@ -244,20 +250,26 @@ latexmk
 latexmk --target ehk
 latexmk --target all
 latexmk files --target all
-latexmk watch --target theory
+latexmk --realtime --target theory
+latexmk pack --mode arxiv --target theory
 ```
 
-With no entry or `--target`, `latexmk` uses `defaultTarget` when set, or the
-only configured target when there is exactly one. With multiple targets and no
-default, it reports the available names and requires `--target` or
+Compile, files, watch, realtime, and pack use `defaultTarget` when no entry or
+`--target` is supplied, or the only configured target when there is exactly one.
+With multiple targets and no default, it reports the available names and requires `--target` or
 `defaultTarget`. An explicit entry or `--target` always takes precedence.
 The name `all` is reserved for compiling every target.
 
 Targets run in name order for `all`, continue after individual failures, and
-return failure if any target fails. `all` rejects watch/detach. Entries are
-relative to the project JSON; PDF export paths are relative to the project root.
+return failure if any target fails. `all` rejects watch, realtime, and detach;
+pack accepts one target only. Entries are relative to the project JSON;
+PDF export paths are relative to the project root.
 A target can override `engine`, `outDir`, and add `includeFiles`. Explicit CLI
-engine/output settings win. Exports happen only after successful compilation;
+engine/output settings win, including the existing TeX-style engine flags.
+Compilation invoked through an engine executable alias also overrides the
+target's engine. Pack uses the target entry, engine, selection
+and `outDir`; its ZIP destination follows `--output`, and the target `pdf`
+export applies only to compilation. Exports happen only after successful compilation;
 a missing or ambiguous PDF is an error. Export destinations must be `.pdf` paths
 inside the project root and must not traverse symlinks. Exported content is checked
 against the downloaded artifact's checksum. Shared flags and authentication are

@@ -62,6 +62,10 @@ the corresponding CLI flags take precedence.
 
 ## Server reuse
 
+The following describes portable auxiliary reuse for one-shot compilation and
+ordinary watch jobs. Realtime `reuse` restores a full checkpoint in a new
+isolated worker instead; see [realtime workspaces](REALTIME.md#fresh-and-reusable-workspaces).
+
 `reuse` is the existing opt-in warm-start implementation. It requires the
 server compile-cache capability. `--force` starts cold and refreshes compatible
 state after success.
@@ -113,3 +117,13 @@ latexmk remote clean --plan-id PLAN_ID --yes
 `--scope project` includes reusable state too. Cache cleanup leaves downloaded
 local files, source snapshots and job result archives alone when its scope is
 `cache`.
+
+## Pack builds
+
+`pack --verify` and `pack --mode arxiv` own their build policy: they disable
+SyncTeX, force cold compilation, and request local `output` with server `none`
+only for immediate artifact download. Their temporary build outputs are removed
+after packing. They do not reuse compiler caches or update local auxiliary
+outputs, dependency history or target PDF exports. Cache/force/SyncTeX flags
+are rejected for pack; configured auxiliary policies still apply to ordinary
+compilation. See [source packages](PACKING.md).

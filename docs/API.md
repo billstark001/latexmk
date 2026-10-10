@@ -77,6 +77,8 @@ Example `request`:
 }
 ```
 
+`engine` is a string naming a registered, enabled driver; the current built-ins
+are `xelatex`, `lualatex` and `pdflatex`. See [engine registration](ENGINES.md).
 The server never accepts an arbitrary command-line array. It constructs the
 compile command from structured fields to prevent shell injection and
 uncontrolled `latexmk` arguments.
@@ -160,9 +162,11 @@ resumed with changed source files.
 
 ### `GET /v1/jobs`, `GET /v1/jobs/{id}`, and `DELETE /v1/jobs/{id}`
 
-Returns or cancels jobs of the authenticated principal. Only `queued` jobs can
-be cancelled. Status is `queued`, `running`, `succeeded`, `failed`, or
-`cancelled`. Successful jobs and TeX failures keep result archives until
+Returns or cancels jobs of the authenticated principal. Queued jobs and running
+jobs on the owning server instance can be cancelled; finished jobs and running
+jobs owned by another instance cannot. Running jobs awaiting deferred completion
+persistence remain cancellable. Status is `queued`, `running`, `succeeded`,
+`failed`, or `cancelled`. Successful jobs and TeX failures keep result archives until
 `LATEXMK_RESULT_RETENTION` expires. The optional `snapshotId` is absent only on
 historical finished jobs created before immutable snapshots were introduced.
 
@@ -175,17 +179,18 @@ returns an error once the archive has passed the configured result retention.
 ### `GET /v1/projects/{projectId}/cleanup`
 
 Previews authenticated project cleanup. The required `scope` query parameter is
-`results`, `snapshot`, or `project`. The response includes counts, bytes, active
-jobs, and a server-issued `planDigest`; no data is changed.
+`results`, `snapshot`, `cache`, or `project`. The response includes counts, bytes,
+active jobs/sessions, and a server-issued `planDigest`; no data is changed.
 
 ### `DELETE /v1/projects/{projectId}/cleanup`
 
 Applies a preview with the same `scope` and a required `expectedDigest` query
-parameter. The server recomputes and compares the exact job, result, and
-snapshot targets under the queue admission lock. A changed target set returns
-`409 Conflict`. Snapshot and whole-project cleanup also return conflict while a
-job for that project is queued or running. Authorization is scoped by both the
-authenticated owner and project ID.
+parameter. The server recomputes and compares the exact job, result, snapshot
+and cache targets under the queue admission lock. A changed target set returns
+`409 Conflict`. All scopes reject application while a realtime session is active.
+Snapshot, cache and whole-project cleanup also reject application while a job
+for that project is active. Authorization is scoped by both the authenticated
+owner and project ID.
 
 ## Database administration API
 
@@ -221,7 +226,8 @@ hash.
 
 All session endpoints use the existing compile authentication and owner boundary.
 Session availability is advertised by `realtimeSessions`, `isolatedWorkspaces`,
-`maxRealtimeSessions` and `sessionTTLMS` in metadata. See [realtime behavior](REALTIME.md).
+`maxRealtimeSessions` and `sessionTTLMS` inside metadata `capabilities`.
+See [realtime behavior](REALTIME.md).
 
 - `POST /v1/sessions`: strict JSON `{ "projectId": "paper", "workspace": "fresh|reuse", "request": COMPILE_REQUEST, "idempotencyKey": "16-to-64-byte-key" }`.
   Returns 201 and `Location`. Compile options are immutable for its lifetime.
@@ -247,9 +253,8 @@ Session availability is advertised by `realtimeSessions`, `isolatedWorkspaces`,
   `Last-Event-ID` enables replay of the latest 64 events. Lost or invalid history
   emits `type: resync`; fetch session state to reconcile. Heartbeats are comments,
   sent every 15 seconds with credential revalidation; neither subscribing nor
-  receiving heartbeats renews the lease. Four active
-  streams per session are allowed. Request cancellation and server shutdown end
-  the subscription.
+  receiving heartbeats renews the lease. Four active streams per session are
+  allowed. Request cancellation and server shutdown end the subscription.
 
 Session admission rejects sources using `.latexmk-build` or `.latexmk-home`.
 `DELETE /v1/jobs/:id` now cancels running jobs on the owning instance as well as

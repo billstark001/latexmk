@@ -77,6 +77,8 @@ Stable error codes currently include:
 
 `latexmk pack --json` returns command `pack`, with mode, output, entry, engine,
 files, `requiresBuild`, `verified`, optional `buildJobId`, and warnings in `data`.
+Each member reports `path`, `size`, `sha256` and its selection `reason`; private
+capture paths are never included. `engine` remains an opaque string key.
 Dry-run previews of arXiv/verified packages report pending build work explicitly;
 see [source packages](PACKING.md). Both pack modes preserve the same envelope and
 error/exit-status contract.
@@ -111,7 +113,9 @@ latexmk jobs cancel JOB_ID --json
 
 `jobs.list` returns `jobs`, `count`, and the applied `limit`. Jobs are sorted
 newest first, with ID as the stable tie-breaker. `jobs.show` and `jobs.cancel`
-return one job object. Cancel only succeeds while the remote job is queued.
+return one job object. Cancellation accepts queued jobs and running jobs on the
+owning server instance, including a running job awaiting deferred completion persistence.
+Finished jobs and running jobs owned by another instance cannot be cancelled.
 
 ## Logs, diagnostics, and artifacts
 

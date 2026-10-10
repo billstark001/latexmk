@@ -1,6 +1,9 @@
 # Validation report
 
-Validated on 2026-07-16 in the delivery environment.
+Historical delivery report, validated on 2026-07-16 in that environment.
+Tooling, Docker contents and service behavior below describe that run, rather
+than current repository state. See [development checks](docs/DEVELOPMENT.md)
+for current validation commands and integration fixtures.
 
 ## Passed
 

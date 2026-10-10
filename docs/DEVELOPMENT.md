@@ -1,6 +1,6 @@
 # Development
 
-### Development checks
+## Development checks
 
 The repository uses golangci-lint for Go analysis and formatting (`goimports`
 and `golines`, 120 columns), Oxlint for JavaScript/TypeScript analysis, and
@@ -28,6 +28,49 @@ pin in the manifest. The lockfile records the resolved package manager and JS
 dependencies for reproducible installs. To update all workspace JS dependencies
 with npm-check-updates and refresh the lockfile, run `pnpm deps:update` and then
 the checks above.
+
+## Go modules and engine behavior
+
+CLI, server and shared are separate Go modules in `go.work`; CLI/server use a
+local `replace` for shared. Directly imported packages belong in direct
+`require` entries. Run `GOWORK=off go mod tidy` in the module being changed,
+and use `go mod tidy -diff` there to check it without writing. Do not add
+analysis/formatting tools to application modules; keep them in `tools/go.mod`.
+
+Compiler-specific code belongs in the shared `engine.Driver` registry rather
+than repeated engine-name switches. Keep configuration/protocol names as
+strings. See [driver registration](ENGINES.md#driver-interface-and-registration).
+
+## Local integration checks
+
+Standard unit checks do not require local TeX or Docker. Optional engine tests
+require Python 3, Docker, and a **prebuilt local image** containing latexmk,
+pdfLaTeX, XeLaTeX, BibTeX, makeindex and the fonts/packages used by the fixture.
+Supply a Linux controller binary matching the image architecture and a host CLI.
+For an arm64 image, for example:
+
+```sh
+pnpm --filter @latexmk/cli build
+mkdir -p dist/engine-e2e
+(cd packages/server && GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+  go build -trimpath -o ../../dist/engine-e2e/latexmk-server ./cmd/server)
+python3 scripts/engine-e2e.py --image LOCAL_TEX_IMAGE \
+  --controller-binary dist/engine-e2e/latexmk-server \
+  --cli packages/cli/dist/latexmk
+```
+
+Use `GOARCH=amd64` for an amd64 image. The script never pulls or builds an
+image, reads deployment credentials, or changes slim/full recipes. It creates
+a private read-only container with temporary state and no mounted Docker socket,
+then removes that container and its temporary projects on success or failure.
+The image remains under the operator's control.
+
+It checks pdfLaTeX and XeLaTeX graphics order, nested entries, BibTeX, indexes,
+cache invalidation/reuse, SyncTeX, job names, errors, default/arXiv packing and
+unpacked recompilation. Short leases verify graceful close and expiration
+after a killed CLI. The separate [isolated-runner checks](REALTIME.md#reproducible-local-checks)
+exercise checkpoint reuse, worker cancellation and database recovery; they
+require a pre-pulled, digest-pinned application image and optionally PostgreSQL.
 
 ## CLI releases
 

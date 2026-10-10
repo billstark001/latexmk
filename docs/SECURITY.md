@@ -45,10 +45,11 @@ at the application and deployment layers.
   and upload sessions have hard limits.
 - A state sweeper expires results, project snapshots, and orphaned blobs. It
   never removes data referenced by a live upload, current project snapshot, or
-  queued/running job snapshot.
+  queued/running job snapshot or realtime session.
 - Remote cleanup is owner/project scoped and preview-first. Destructive calls
   require a server-issued digest that binds the exact targets and is rechecked
-  under the queue admission lock; active jobs block snapshot/project deletion.
+  under the queue admission lock. Active jobs block snapshot/cache/project
+  deletion; active realtime sessions block every cleanup scope.
 - Local project identities are random, private files rather than mount-path
   hashes. `latexmk cache ignore` appends an explicit Git rule without replacing
   `.gitignore`, and rejects symlinked policy/cache files.
@@ -72,6 +73,10 @@ at the application and deployment layers.
 - CORS accepts only explicit HTTP(S) origins. Wildcards are rejected at startup.
 - Result artifacts come from `.fls`, are constrained to the workspace and an
   allowlist, and result downloads are authorized by job owner.
+
+- Engine names are registry keys rather than executable names. Only trusted
+  application code registers compiler arguments, graphics rules and version
+  probes; JSON and API requests cannot define drivers or inject commands.
 
 ## Server filesystem and process primitives
 

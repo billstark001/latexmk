@@ -122,11 +122,14 @@ identities. Remote deletion always uses a preview, a short-lived local plan that
 contains no credentials, and a server-validated digest.
 
 `LATEXMK_STATE_DIR` defaults to `/tmp/latexmk-state`; container bundles normally
-use `/var/lib/latexmk`. `LATEXMK_MAX_STATE_BYTES` is a hard combined source-cache
-and result-archive limit. A periodic sweeper expires results, snapshots, and
+use `/var/lib/latexmk`. `LATEXMK_MAX_STATE_BYTES` is a hard combined source-cache,
+result-archive and compiler-cache limit, including realtime checkpoints.
+A periodic sweeper expires results, snapshots, and
 unreferenced blobs according to TTL settings while preserving data referenced by
-a live upload, current project snapshot, or queued/running job snapshot. The
-state directory never stores plaintext API tokens.
+a live upload, current project snapshot, queued/running job snapshot or
+realtime session. Session/checkpoint ownership is process-local; restarts
+require cold sessions. See [realtime deployment](REALTIME.md#runner-configuration).
+The state directory never stores plaintext API tokens.
 
 ## Dashboard
 
