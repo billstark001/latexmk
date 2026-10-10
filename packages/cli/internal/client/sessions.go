@@ -1,16 +1,12 @@
 package client
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
 	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
@@ -156,6 +152,8 @@ func (c *Client) CommitRevision(ctx context.Context, prepared PreparedRevision) 
 
 // StreamSessionEvents is bounded by its context, and uses a separate HTTP client
 // lifetime so status subscriptions cannot exhaust an ordinary compile timeout.
+// Each JSON event is limited to 64 KiB. EOF discards an incomplete final event.
+// receive runs synchronously and must return promptly to allow cancellation.
 func (c *Client) StreamSessionEvents(
 	ctx context.Context,
 	id string,
@@ -184,33 +182,11 @@ func (c *Client) StreamSessionEvents(
 	if resp.StatusCode/100 != 2 {
 		return readHTTPError(resp)
 	}
-	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err != nil || mediaType != "text/event-stream" {
 		return errors.New("unexpected session event content type")
 	}
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 4096), 64<<10)
-	var data string
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "data: ") {
-			data = strings.TrimPrefix(line, "data: ")
-		}
-		if line == "" && data != "" {
-			var event protocol.SessionEvent
-			if err := json.Unmarshal([]byte(data), &event); err != nil {
-				return fmt.Errorf("invalid session event: %w", err)
-			}
-			if event.Type == "resync" || event.Sequence > after {
-				after = event.Sequence
-				receive(event)
-			}
-			data = ""
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	return io.EOF
+	return readSessionEvents(resp.Body, after, receive)
 }
 
 func ValidateRealtimeRequest(request protocol.CompileRequest, meta protocol.Metadata) error {

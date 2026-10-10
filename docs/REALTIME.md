@@ -76,7 +76,9 @@ absolute system paths and paths escaping the project are not remapped.
 Status uses replayable SSE with a bounded event ring, a resync event when history
 is lost, and polling as recovery. Slow subscribers cannot block workers. Connections
 have write deadlines, periodic authentication checks and a four-stream limit per
-session. Closing the CLI attempts to release its session with a five-second
+session. The CLI accepts LF, CRLF and CR line endings, joins multiline event
+data, and limits each event to 64 KiB. Incomplete events at end of stream are
+discarded and recovered through replay or polling. Closing the CLI attempts to release its session with a five-second
 deadline and reports unsuccessful closure. The CLI explicitly renews its lease
 in a separate loop, including during uploads and downloads. State reads and SSE
 subscriptions/heartbeats do not renew it, so a proxy holding a stream open cannot
