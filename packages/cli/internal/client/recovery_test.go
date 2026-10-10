@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -109,5 +110,74 @@ func TestMissingFileRecoverySharesRoundAndCapturedByteLimits(t *testing.T) {
 	}
 	if recovery.Rounds != 0 {
 		t.Fatal("refused recovery mutated its round budget")
+	}
+}
+
+func TestMissingFileRecoveryRejectsInvalidBudgetBeforeMutation(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "new.tex"), []byte("source"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{ProjectRoot: root, UploadMode: "all"}
+	for _, bytes := range []int64{-1, math.MaxInt64, maxNeedsFileBytes} {
+		recovery := MissingFileRecovery{addedBytes: bytes}
+		if _, err := c.ResolveMissingFiles([]string{"new.tex"}, nil, &recovery); err == nil {
+			t.Errorf("accepted byte budget %d", bytes)
+		}
+		if recovery.Rounds != 0 || len(recovery.Additional) != 0 || recovery.addedBytes != bytes {
+			t.Fatal("rejected recovery changed state")
+		}
+	}
+	if _, err := c.ResolveMissingFiles([]string{"new.tex"}, nil, nil); err == nil {
+		t.Fatal("accepted nil recovery")
+	}
+}
+
+func TestMissingFileRecoveryKeepsGrowthBudgetAfterShrink(t *testing.T) {
+	root := t.TempDir()
+	for name, size := range map[string]int64{"prior.tex": 40 << 20, "new.tex": 1, "later.tex": 30 << 20} {
+		file, err := os.Create(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Truncate(size); err != nil {
+			_ = file.Close()
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := &Client{ProjectRoot: root, UploadMode: "all"}
+	recovery := MissingFileRecovery{Additional: []string{"prior.tex"}, addedBytes: 1, Rounds: 1}
+	if _, err := c.ResolveMissingFiles([]string{"new.tex"}, nil, &recovery); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(filepath.Join(root, "prior.tex"), 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ResolveMissingFiles([]string{"later.tex"}, nil, &recovery); err == nil {
+		t.Fatal("shrinking an earlier file reset its historical growth budget")
+	}
+	if recovery.Rounds != 2 || len(recovery.Additional) != 2 {
+		t.Fatal("refused recovery changed state")
+	}
+}
+
+func TestMissingFileRecoveryRemembersCapturedGrowth(t *testing.T) {
+	recovery := MissingFileRecovery{Additional: []string{"prior.tex"}, addedBytes: 1}
+	if err := recovery.ValidateCaptured([]projectarchive.File{{Path: "prior.tex", Size: 40 << 20}}); err != nil {
+		t.Fatal(err)
+	}
+	if recovery.addedBytes != 40<<20 {
+		t.Fatal("capture growth did not advance the historical budget")
+	}
+	if err := recovery.ValidateCaptured(
+		[]projectarchive.File{{Path: "prior.tex", Size: maxNeedsFileBytes + 1}},
+	); err == nil {
+		t.Fatal("accepted an oversized capture")
+	}
+	if recovery.addedBytes != 40<<20 {
+		t.Fatal("rejected capture changed the historical budget")
 	}
 }
