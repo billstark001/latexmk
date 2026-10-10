@@ -78,6 +78,14 @@ func TestDependencyPatternsRespectFilteredManifest(t *testing.T) {
 
 func TestAdditionalParserAndAssetFixtures(t *testing.T) {
 	for _, fixture := range []discoveryFixture{
+		{name: "percent in inline verb", entry: `\verb|100%| \input{real}`,
+			files: map[string]string{"real.tex": ""}, want: []string{"real.tex"}},
+		{name: "percent in listings inline", entry: `\lstinline[language=TeX]|100% \input{missing}| \input{real}`,
+			files: map[string]string{"real.tex": ""}, want: []string{"real.tex"}},
+		{name: "inline verb in comment cannot cross lines", entry: "% \\verb|comment\n\\input{real}\n|",
+			files: map[string]string{"real.tex": ""}, want: []string{"real.tex"}},
+		{name: "escaped inline verb is plain text", entry: `\\verb|text \input{real}|`,
+			files: map[string]string{"real.tex": ""}, want: []string{"real.tex"}},
 		{name: "optional hook precedes file", entry: `\InputIfFileExists{local.cfg}{\graphicspath{{figs/}}}{}`,
 			files: map[string]string{"local.cfg": `\includegraphics{plot}`, "figs/plot.pdf": ""}, want: []string{"local.cfg", "figs/plot.pdf"}},
 		{name: "generated overwrite", entry: "\\begin{filecontents*}[overwrite]{generated.tex}\n\\input{real}\n\\end{filecontents*}\n\\input{generated}", files: map[string]string{"generated.tex": `\input{missing}`, "real.tex": ""}, want: []string{"real.tex"}},

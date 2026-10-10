@@ -18,27 +18,13 @@ const (
 	maxManifestFiles = 20_000
 )
 
+var exactPatternEscaper = strings.NewReplacer(
+	"\\", "\\\\", "*", "\\*", "?", "\\?", "[", "\\[", "]", "\\]", "{", "\\{", "}", "\\}",
+)
+
 // ExactPattern quotes a validated filename when mixing it with user glob input.
-func ExactPattern(name string) string {
-	return strings.NewReplacer(
-		"\\",
-		"\\\\",
-		"*",
-		"\\*",
-		"?",
-		"\\?",
-		"[",
-		"\\[",
-		"]",
-		"\\]",
-		"{",
-		"\\{",
-		"}",
-		"\\}",
-	).Replace(
-		name,
-	)
-}
+// The returned pattern matches only that filename, including literal glob syntax.
+func ExactPattern(name string) string { return exactPatternEscaper.Replace(name) }
 
 // LoadExplicitManifest reads project-relative paths and glob patterns. Blank lines
 // and lines whose first non-space character is # are ignored.
