@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path"
@@ -104,8 +105,14 @@ func writeSelectedMember(tw *tar.Writer, file File) (err error) {
 	return safefs.CopyVerified(tw, f, file.Size, strings.ToLower(file.SHA256))
 }
 
+// Manifest applies upload policy and reports regular files in sorted path order.
+// Zero limits are unbounded; negative limits are invalid. DeferHash returns stat
+// metadata for selection, and requires later hashing/capture before publication.
 func Manifest(opts Options) ([]File, Stats, error) {
 	stats := Stats{}
+	if opts.MaxFiles < 0 || opts.MaxBytes < 0 {
+		return nil, stats, errors.New("invalid project limits")
+	}
 	policy, err := newPolicy(opts)
 	if err != nil {
 		return nil, stats, err
@@ -161,6 +168,9 @@ func Manifest(opts Options) ([]File, Stats, error) {
 			return fmt.Errorf("unsupported file type: %s", rel)
 		}
 		stats.Files++
+		if info.Size() < 0 || info.Size() > math.MaxInt64-stats.Bytes {
+			return errors.New("project byte count overflows")
+		}
 		stats.Bytes += info.Size()
 		if opts.MaxFiles > 0 && stats.Files > opts.MaxFiles {
 			return fmt.Errorf("project contains more than %d files", opts.MaxFiles)
@@ -169,13 +179,22 @@ func Manifest(opts Options) ([]File, Stats, error) {
 			return fmt.Errorf("project is larger than %d bytes", opts.MaxBytes)
 		}
 		digest := ""
+		size := info.Size()
 		if !opts.DeferHash {
-			digest, err = fileSHA256(File{Path: rel, Source: path})
+			limit := opts.MaxBytes
+			if limit == 0 || limit == math.MaxInt64 {
+				limit = math.MaxInt64 - 1
+			}
+			prior := stats.Bytes - info.Size()
+			digest, size, err = digestSelected(File{Path: rel, Source: path}, limit-prior)
 			if err != nil {
 				return err
 			}
 		}
-		files = append(files, File{Path: rel, Source: path, SHA256: digest, Size: info.Size()})
+		if !opts.DeferHash {
+			stats.Bytes = stats.Bytes - info.Size() + size
+		}
+		files = append(files, File{Path: rel, Source: path, SHA256: digest, Size: size})
 		return nil
 	})
 	if walkErr != nil {
@@ -255,52 +274,33 @@ func hasGitMarker(root string) bool {
 	}
 }
 
-func fileSHA256(file File) (string, error) {
-	f, err := OpenFile(file)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		return "", err
-	}
-	hash := sha256.New()
-	if _, err := io.CopyN(hash, f, info.Size()); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
-// HashSelected finalizes only selected members, applying upload size limits afterwards.
+// HashSelected hashes the actual selected byte streams and updates size/digest
+// together. Zero is unbounded; negative limits are invalid. On failure, earlier
+// members may already have been updated, so callers must discard partial state.
 func HashSelected(files []File, maxBytes int64) error {
-	var total int64
+	if maxBytes < 0 {
+		return errors.New("invalid selected-file byte limit")
+	}
+	remaining := maxBytes
+	if remaining == 0 || remaining == math.MaxInt64 {
+		remaining = math.MaxInt64 - 1
+	}
 	for i := range files {
-		f, err := OpenFile(files[i])
+		digest, size, err := digestSelected(files[i], remaining)
 		if err != nil {
-			return err
+			return fmt.Errorf("hash %s: %w", files[i].Path, err)
 		}
-		info, err := f.Stat()
-		if err != nil {
-			_ = f.Close()
-			return err
-		}
-		files[i].Size = info.Size()
-		total += info.Size()
-		if maxBytes > 0 && total > maxBytes {
-			_ = f.Close()
-			return fmt.Errorf("selected files exceed %d bytes", maxBytes)
-		}
-		hash := sha256.New()
-		_, copyErr := io.CopyN(hash, f, info.Size())
-		closeErr := f.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		files[i].SHA256 = hex.EncodeToString(hash.Sum(nil))
+		files[i].Size, files[i].SHA256 = size, digest
+		remaining -= size
 	}
 	return nil
+}
+
+func digestSelected(file File, limit int64) (string, int64, error) {
+	f, err := OpenFile(file)
+	if err != nil {
+		return "", 0, err
+	}
+	digest, size, err := safefs.Digest(f, limit)
+	return digest, size, errors.Join(err, f.Close())
 }

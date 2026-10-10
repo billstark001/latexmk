@@ -63,3 +63,24 @@ func TestCreateFilesRejectsChangedManifestContent(t *testing.T) {
 		}
 	}
 }
+
+func TestHashSelectedCountsActualBytesAndRejectsInvalidBudget(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "main.tex")
+	mustWrite(t, source, "source")
+	for _, limit := range []int64{-1, 5} {
+		files := []File{{Path: "main.tex", Source: source, Size: 1}}
+		if err := HashSelected(files, limit); err == nil {
+			t.Errorf("accepted limit %d", limit)
+		}
+	}
+	for _, limit := range []int64{0, 6} {
+		files := []File{{Path: "main.tex", Source: source, Size: 1}}
+		if err := HashSelected(files, limit); err != nil {
+			t.Fatal(err)
+		}
+		if files[0].Size != 6 || len(files[0].SHA256) != 64 {
+			t.Fatalf("stale file metadata: %+v", files[0])
+		}
+	}
+}

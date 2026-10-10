@@ -32,6 +32,8 @@ func OpenFile(file File) (*os.File, error) {
 	return fs.OpenRegular(file.Path)
 }
 
+// ReadFile revalidates a selected source and bounds the actual bytes read,
+// independently of its previous manifest size. Zero permits an empty file.
 func ReadFile(file File, limit int64) ([]byte, error) {
 	f, err := OpenFile(file)
 	if err != nil {
