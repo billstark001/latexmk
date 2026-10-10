@@ -83,7 +83,7 @@ async function main(argv: string[]) {
     return 0;
   }
   if (command === 'version' || command === '--version') {
-    console.log('latexmk-deploy 0.4.0');
+    console.log('latexmk-deploy 0.4.1');
     return 0;
   }
   if (command !== 'bundle' && command !== 'runtime-bundle') {

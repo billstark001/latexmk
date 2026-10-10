@@ -45,115 +45,129 @@ numbers.
 
 ## [Unreleased]
 
+## @latexmk/cli [0.4.1] - 2026-10-11
+
 ### Added
 
-- Configure ordinary watch and realtime through shared `watch.interval`,
-  `watch.debounce` and `watch.maxWait`, with dotenv/process and CLI overrides.
-  Defaults are 500 ms, 500 ms and 2.5 seconds respectively; maxWait is independent
-  of debounce and bounds continuous save bursts.
-- Add `pack --mode default|arxiv`, immutable capture, deterministic ZIP output,
-  credential-free source previews and optional cold verification. arXiv mode
-  collects `.bbl`, `.ind`, `.gls` and `.nls` from the captured build and verifies
-  the exact final bundle before atomic publication; failure preserves the old ZIP.
-- Return generated `.nls` nomenclature files as compilation artifacts.
-- Introduce the shared engine behavior interface and registry. Engine names
-  remain strings; trusted registration defines latexmk options, graphics
-  suffix order and version probes, without a closed engine-name enum or
-  command inference. Existing three built-ins and public CLI options remain.
-- Add opt-in local Docker checks for real pdfLaTeX/XeLaTeX, packing, cache
-  behavior and realtime lease expiry, without changing runtime recipes.
+- Configure watch/realtime timing through `watch.interval`, `watch.debounce`
+  and `watch.maxWait`, including environment and CLI overrides. Defaults are
+  500 ms, 500 ms and 2.5 seconds; maxWait independently bounds continuous saves.
+- Add deterministic `pack --mode default|arxiv`, immutable source captures,
+  credential-free previews and optional cold verification. arXiv packs include
+  verified generated bibliography, index, glossary and nomenclature files.
 
 ### Fixed
 
-- Verify complete tar.gz envelopes after the tar end marker and share bounded
-  zero-padding validation across uploads, checkpoints and CLI result readers.
-- Enforce log budgets after UTF-8 repair, reject duplicate result members, and
-  apply consistent aggregate limits to CLI result, log and diagnostic reads.
-- Preserve dependencies after inline verbatim percent signs, avoid treating
-  escaped commands as literals, and scan inline literals in one linear pass.
-- Use root-confined bounded reads and atomic publication for CLI policy,
-  manifest and dependency-cache files; permit valid opaque long engine names.
-- Reject nonfinite, overflowing and sub-byte server resource settings. Avoid
-  overflow in realtime revision bursts and make subscription release idempotent.
-- Reject duplicate current input paths during auxiliary-cache compatibility
-  checks and compare realtime compile options directly as typed values.
-- Protect deployment source directories from forced output replacement through
-  symlinked ancestor paths.
-- Reject null or trailing JSON API/envelope bodies through a shared bounded
-  decoder while preserving additive metadata fields and strict request schemas.
-- Publish project IDs atomically under concurrent CLI initialization and preserve
-  existing ZIP output when even an empty pack is canceled.
-- Honor cancellation for empty source captures and document private-spool ownership.
-- Accept complete SSE events with LF, CRLF or CR framing, bound multiline event
-  bodies, and avoid delaying CR-terminated events on quiet connections.
-- Bound SyncTeX expansion and rewritten output, preserve record/newline layout,
-  and stream record replacement without allocating a whole line table.
-- Validate whitespace/control-free Bearer credentials, reject ambiguous duplicate
-  authorization headers, and add authentication mode/role regression coverage.
-- Filter terminal control characters from all human CLI output and enforce the
-  terminal helpers with the standard Go lint rule.
-- Cache nested ignore matchers per directory and bound missing-file regex matches,
-  reducing repeated compilation and allocation for large projects and logs.
-- Evaluate nested ignore patterns relative to their literal directory, preserving
-  CRLF/blank-line rules and directory names containing glob metacharacters.
-- Reject directories and special files in upload-policy explanations and cover
-  ignored, missing, tracked and symlink candidates without reading their contents.
-- Share artifact classification between CLI and server so legacy metadata does
-  not discard uppercase PDF/SyncTeX outputs or index/glossary diagnostics.
-- Publish downloaded artifacts and local auxiliaries through one opened root,
-  preventing directory replacement from substituting unverified staging files;
-  preserve old output on failed writes without a Windows delete-before-rename.
-- Detect invalid artifact metadata, overflowed manifest totals and derived archive
-  budgets before reading data; treat empty process writes as non-truncating.
-- Use Node's standard argument parser for deployment options, validate empty and
-  multiline values before replacing output, and retain explicit preset overrides.
-- Confine cleanup-plan I/O to the user cache root, publish complete plans
-  atomically, and reject malformed server URL boundaries consistently.
-- Apply credential rules to case-insensitive JSON keys, reject null/oversized
-  configuration and empty credential flags, and bound actual dotenv/value-file
-  reads while preserving regular-file secret symlinks.
-- Verify gzip trailers before pruning expired result auxiliaries, preserving the
-  original archive on corruption, and include stderr in combined streamed output.
-- Verify selected upload bytes against their manifest during archive creation,
-  reject negative archive/project limits, and guard worker duration, checkpoint
-  and queue/inode arithmetic against overflow.
-- Honor caller deadlines during the initial PostgreSQL handshake instead of
-  GORM's automatic background-context ping; recognize Unicode display-name
-  controls and stabilize job ordering when creation timestamps tie.
-- Require successful toolchain version probes, deduplicate identical commands,
-  and cap concurrent startup probes instead of serially repeating aliases.
-- Reject malformed or repeated job-list limits rather than silently using the
-  default; share page bounds across the CLI and server.
-- Parse decimal resource units exactly with the standard big-number library,
-  avoiding float rounding near one byte and above 2^53, with bounded mantissa
-  and exponent input. Hash selected files against bounded actual byte streams.
-- Preserve missing-file recovery's historical byte watermark after earlier
-  additions grow and shrink, preventing later retries from resetting the budget.
-- Renew realtime leases only through explicit client renewal or new revision
-  admission. Reads, subscriptions and SSE heartbeats cannot keep abandoned
-  sessions alive; CLI renewal continues during uploads and downloads.
-- Report failed realtime closure instead of silently ignoring it.
-- Follow each engine's default graphics extension order, including case-sensitive
-  suffixes and supported formats; preserve scoped `\DeclareGraphicsExtensions`.
-- Preserve explicit CLI engine flags over target defaults for compilation,
-  file previews and packing, and executable-name engine selection for compilation.
-- Preserve case in configured engine names instead of lowercasing registry keys.
-- Keep validated watcher timing internal rather than exposing an unchecked
-  mutable maxWait field or a zero-value fallback.
-- Declare CLI's directly imported fsnotify dependency as direct and normalize
-  Go module manifests with the standard tidy command. No dependency versions change.
-- Align README, CLI/API, auxiliary, operations, installation and skill guides
-  with realtime cancellation, preview paths, source packs and current test tooling.
-  Remove instructions for the nonexistent Compose watcher.
+- Follow registered engines' graphics suffix order and preserve exact engine
+  names, scoped graphics settings and explicit CLI engine selections.
+- Scan comments and inline verbatim literals in one pass without letting literal
+  percent signs hide later dependencies. Reuse and fuzz literal glob escaping.
+- Confine and bound policy, manifest and dependency-cache reads; publish caches
+  atomically, support opaque long engine keys and cache nested ignore matchers.
+  Preserve nested anchors, CRLF/blank rules, literal directory names and whitespace
+  in discovered Git roots. Explanations reject directories and special files.
+- Hash actual bounded source streams and verify captured manifest bytes during
+  upload. Preserve captured source identity during pack merging and honor
+  cancellation even for empty captures or ZIPs, retaining prior output.
+- Verify full result gzip trailers and enforce duplicate-member, aggregate and
+  UTF-8-repaired log budgets across downloads, logs and diagnostics.
+- Bound SyncTeX expansion and transformed output while streaming record rewrites;
+  preserve unrelated records and newline layout. Handle bounded SSE events using
+  LF, CRLF or CR, including immediate delivery on quiet CR-terminated streams.
+- Atomically publish concurrent project IDs and confine cleanup-plan I/O to the
+  user cache root. Verify downloaded artifacts through one opened root, retaining
+  old output on failure; preserve legacy uppercase outputs and diagnostics.
+- Reject unusable Bearer tokens, malformed URL boundaries, empty credential flags,
+  null/oversized JSON and case-variant credential-policy bypasses. Bound actual
+  dotenv/value-file reads while supporting regular-file secret symlinks.
+- Filter all human terminal output through lint-enforced helpers, validate shared
+  job-list bounds, retain missing-file recovery's historical byte watermark and
+  report unsuccessful realtime session closure.
+- Keep validated watcher timing internal and declare directly imported fsnotify
+  as a direct dependency; dependency versions remain unchanged.
 
 ### Changed
 
-- Session state reads no longer renew leases. Clients must use
-  `POST /v1/sessions/:id/lease` or submit new revisions; upgrade CLI/server
-  together. No older-server renewal fallback is provided.
-- Unregistered engines fail explicitly; new implementations register behavior
-  rather than relying on latexmk's default engine. Profiles/DSL remain deferred
-  in [issue #6](https://github.com/billstark001/latexmk/issues/6).
+- Realtime clients explicitly renew `POST /v1/sessions/:id/lease` during uploads
+  and downloads. Reads, subscriptions and heartbeats no longer renew sessions;
+  upgrade CLI and server together. There is no older-server renewal fallback.
+- Unregistered engines fail explicitly; trusted custom engines register shared
+  driver behavior. Existing built-ins and engine-name strings remain supported.
+- Align default executable and HTTP user-agent versions with `@latexmk/cli`.
+
+## @latexmk/server [0.4.1] - 2026-10-11
+
+### Added
+
+- Return generated `.nls` nomenclature files as compilation artifacts.
+
+### Fixed
+
+- Validate complete upload/result gzip envelopes, declared artifact digests,
+  negative limits and overflow-prone upload, queue, inode, worker-duration,
+  checkpoint and serialized-cache budgets before reading or mutating state.
+- Reject null/trailing JSON, unusable static/bootstrap credentials, duplicate
+  Authorization headers, malformed origins and invalid/repeated job-list limits.
+  Support bounded regular-file secret symlinks and cover authentication modes/roles.
+- Make realtime subscription release idempotent and prevent revision-burst integer
+  overflow. Compare compile options directly and reject duplicate current paths
+  in auxiliary-cache compatibility checks.
+- Preserve original archives and storage accounting when expired-auxiliary pruning
+  encounters corrupt gzip trailers. Bound missing-file regex work and normalize
+  at most 32 distinct, untrusted project-relative paths.
+- Honor caller deadlines for the initial PostgreSQL handshake, reject Unicode
+  display-name controls and order equal-timestamp jobs deterministically.
+- Require successful, deduplicated toolchain version probes with bounded startup
+  concurrency. Include stderr in combined streamed process output and keep empty
+  process writes from falsely marking output truncated.
+- Parse decimal byte units exactly with bounded standard-library big numbers,
+  rejecting nonfinite, overflowing and sub-byte settings. Validate isolated
+  runner settings consistently through `Config.Validate`.
+
+### Changed
+
+- Only explicit lease renewal or admission of a new revision keeps a realtime
+  session alive. Upgrade CLI/server together to retain continuous sessions.
+- Align default executable and application Dockerfile versions with `@latexmk/server`.
+
+## @latexmk/shared [0.4.1] - 2026-10-11
+
+### Added
+
+- Introduce the concurrent engine driver registry for compiler options, graphics
+  suffix order and toolchain probes without a closed engine-name enum. Trusted
+  drivers use exact registered names; profiles/DSL remain deferred in
+  [issue #6](https://github.com/billstark001/latexmk/issues/6).
+- Share bounded JSON decoding and complete gzip-trailer validation, including
+  bounded zero padding, between CLI/server consumers.
+- Share Bearer-token validation, case-insensitive artifact classification and
+  default/maximum job-list limits.
+- Add atomic exclusive staged publication and staged chmod through an opened
+  filesystem root; validate explicitly selected regular secret files by descriptor.
+
+### Changed
+
+- Clarify registry concurrency and ownership contracts. Expand regression/fuzz
+  coverage for JSON, filesystem publication, envelopes and credential boundaries.
+
+## @latexmk/deploy [0.4.1] - 2026-10-11
+
+### Fixed
+
+- Reject forced output replacement through symlinked source ancestors, including
+  deployment recipes and server/shared sources.
+- Use Node's standard argument parser, preserve repeated cache flags and explicit
+  preset overrides, and reject empty/multiline or invalid resource values before
+  replacing output.
+- Align the deploy command's version with its package metadata and embed the
+  server component version in generated application builds.
+
+### Changed
+
+- Reconcile CLI, API, configuration, deployment, operations and security guides
+  with current behavior. Document focused fuzz/benchmark checks and add opt-in
+  Docker checks for real engines, packing, caches and lease expiry without changing
+  runtime recipes. No images or GitHub release are published by this version bump.
 
 ## [0.4.0] - 2026-10-07
 

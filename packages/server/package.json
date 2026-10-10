@@ -1,6 +1,6 @@
 {
   "name": "@latexmk/server",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "scripts": {
     "build": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\" && go build -trimpath -o dist/latexmk-server ./cmd/server",
