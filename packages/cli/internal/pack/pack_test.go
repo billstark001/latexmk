@@ -158,3 +158,13 @@ func TestCancelledEmptyPackPreservesExistingOutput(t *testing.T) {
 		t.Fatalf("output=%q, error=%v", data, err)
 	}
 }
+
+func TestMergeRetainsCapturedSourceForIdenticalGeneratedFile(t *testing.T) {
+	source := projectarchive.File{Path: "main.bbl", Source: "immutable source", Size: 3, SHA256: "same digest"}
+	generated := source
+	generated.Source = "generated temporary file"
+	files, err := Merge([]projectarchive.File{source}, []projectarchive.File{generated})
+	if err != nil || len(files) != 1 || files[0].Source != source.Source {
+		t.Fatalf("merge=%+v, error=%v", files, err)
+	}
+}

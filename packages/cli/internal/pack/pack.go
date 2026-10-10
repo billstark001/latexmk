@@ -23,6 +23,7 @@ const MaxBytes int64 = 2 << 30
 
 const maxZIPOverheadBytes int64 = 32 << 20
 
+// ValidateMode checks the supported source-packaging policies.
 func ValidateMode(mode string) error {
 	if mode != "default" && mode != "arxiv" {
 		return errors.New("pack mode must be default or arxiv")
@@ -58,15 +59,17 @@ func Sources(files []projectarchive.File, entry, mode string) ([]projectarchive.
 }
 
 func intermediate(name string) bool {
+	name = strings.ToLower(name)
 	for _, suffix := range []string{".aux", ".log", ".blg", ".bcf", ".fdb_latexmk", ".fls", ".run.xml",
 		".synctex.gz", ".toc", ".lot", ".lof", ".dvi", ".xdv", ".idx", ".ilg", ".glo", ".glg"} {
-		if strings.HasSuffix(strings.ToLower(name), suffix) {
+		if strings.HasSuffix(name, suffix) {
 			return true
 		}
 	}
 	return false
 }
 
+// SubmissionArtifact identifies generated text files needed in an arXiv pack.
 func SubmissionArtifact(name string) bool {
 	switch strings.ToLower(path.Ext(name)) {
 	case ".bbl", ".ind", ".gls", ".nls":
@@ -81,9 +84,11 @@ func Merge(sources, generated []projectarchive.File) ([]projectarchive.File, err
 	byPath := make(map[string]projectarchive.File)
 	for _, files := range [][]projectarchive.File{sources, generated} {
 		for _, file := range files {
-			if previous, ok := byPath[file.Path]; ok &&
-				(previous.Size != file.Size || previous.SHA256 != file.SHA256) {
-				return nil, fmt.Errorf("generated file conflicts with captured source %q", file.Path)
+			if previous, ok := byPath[file.Path]; ok {
+				if previous.Size != file.Size || previous.SHA256 != file.SHA256 {
+					return nil, fmt.Errorf("generated file conflicts with captured source %q", file.Path)
+				}
+				continue
 			}
 			byPath[file.Path] = file
 		}
