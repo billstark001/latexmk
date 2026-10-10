@@ -1,9 +1,12 @@
 package compile
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -37,5 +40,39 @@ func TestDetectMissingFilesRejectsUnsafePathsAndDeduplicates(t *testing.T) {
 	want := []string{"safe.tex"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("missing files = %#v, want %#v", got, want)
+	}
+}
+
+func TestDetectMissingFilesBoundsAndSortsRequests(t *testing.T) {
+	var log strings.Builder
+	for i := 99; i >= 0; i-- {
+		fmt.Fprintf(&log, "! LaTeX Error: File `file-%03d.tex' not found.\n", i)
+	}
+	files := detectMissingFiles([]byte(log.String()), nil, nil)
+	if len(files) != maxMissingFiles || !sort.StringsAreSorted(files) {
+		t.Fatalf("requests=%v", files)
+	}
+	for _, file := range files {
+		if cleanMissingPath(file) != file {
+			t.Fatalf("unsafe request=%q", file)
+		}
+	}
+}
+
+func BenchmarkDetectRepeatedMissingFiles(b *testing.B) {
+	log := []byte(strings.Repeat("! LaTeX Error: File `safe.tex' not found.\n", 100000))
+	for b.Loop() {
+		detectMissingFiles(log, nil, nil)
+	}
+}
+
+func TestMissingPathsUsePortableProtocolRules(t *testing.T) {
+	for _, name := range []string{"C:secret.tex", "folder/file:stream", "folder\\file.tex", "../escape", "/absolute", ".", "control\x00value"} {
+		if clean := cleanMissingPath(name); clean != "" {
+			t.Errorf("accepted %q as %q", name, clean)
+		}
+	}
+	if clean := cleanMissingPath("./folder/main.tex"); clean != "folder/main.tex" {
+		t.Fatal(clean)
 	}
 }

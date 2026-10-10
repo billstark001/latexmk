@@ -112,7 +112,10 @@ of conservative missing-file diagnostics extracted from TeX output and `.log`
 artifacts. The server returns this field only when the client sent
 `"detectMissingFiles": true`, and clients send that request only after seeing
 `capabilities.needsFiles`. Values are normalized relative paths; absolute,
-traversing, malformed, and control-character paths are discarded. A client
+traversing, malformed, and control-character paths are discarded.
+The list contains at most 32 distinct paths. Extraction examines at most 8 MiB
+of each stdout/stderr stream and 8 MiB of compiler log artifacts combined, with
+a bounded number of regex matches. A client
 must treat the list as untrusted input and apply its complete local upload
 policy before deciding whether to create a new snapshot.
 
