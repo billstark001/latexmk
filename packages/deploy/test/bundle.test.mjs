@@ -148,7 +148,7 @@ test('application context pins the selected runtime and never installs TeX', asy
   }
 });
 
-test('invalid image options fail before replacing the output', async () => {
+test('invalid options fail before replacing the output', async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'latexmk-invalid-image-test-'));
   try {
     for (const args of [
@@ -164,13 +164,21 @@ test('invalid image options fail before replacing the output', async () => {
       ['runtime-bundle', '--runtime-image', 'example/runtime:r1'],
       ['bundle', '--build', '--platform', 'linux/amd64,linux/arm64'],
       ['bundle', '--build', '--push', '--save', 'image.tar'],
+      ['bundle', '--engines', 'xelatex\nLATEXMK_AUTH_MODE=none'],
+      ['bundle', '--compile-timeout', '2m\nLATEXMK_AUTH_MODE=none'],
+      ['bundle', '--max-concurrent', '2\nLATEXMK_AUTH_MODE=none'],
+      ['bundle', '--max-concurrent', '0'],
+      ['bundle', '--max-concurrent=-1'],
+      ['bundle', '--max-concurrent', 'NaN'],
+      ['bundle', '--engines='],
+      ['bundle', '--preset='],
     ]) {
       const result = spawnSync(
         process.execPath,
         [path.join(root, 'src', 'index.ts'), ...args, '--out', path.join(temp, 'absent')],
         { encoding: 'utf8' },
       );
-      assert.equal(result.status, 2);
+      assert.equal(result.status, 2, `${JSON.stringify(args)}: ${result.stderr}`);
       await assert.rejects(stat(path.join(temp, 'absent')), { code: 'ENOENT' });
     }
   } finally {

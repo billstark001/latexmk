@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(packageRoot, '..', '..');
@@ -95,31 +96,63 @@ async function main(argv: string[]) {
 }
 
 function parseBundleOptions(args: string[], command: 'bundle' | 'runtime-bundle') {
-  const selectedPreset = readPreset(args);
-  const preset = selectedPreset ? DEPLOYMENT_PRESETS[selectedPreset] : {};
+  const { values } = parseArgs({
+    args,
+    options: {
+      profile: { type: 'string' },
+      auth: { type: 'string' },
+      database: { type: 'string' },
+      preset: { type: 'string' },
+      out: { type: 'string' },
+      tag: { type: 'string' },
+      'runtime-image': { type: 'string' },
+      'texlive-image': { type: 'string' },
+      'texlive-repository': { type: 'string' },
+      platform: { type: 'string' },
+      'cache-from': { type: 'string', multiple: true },
+      'cache-to': { type: 'string', multiple: true },
+      save: { type: 'string' },
+      engines: { type: 'string' },
+      'compile-timeout': { type: 'string' },
+      'max-concurrent': { type: 'string' },
+      'server-source': { type: 'string' },
+      'shared-source': { type: 'string' },
+      push: { type: 'boolean' },
+      build: { type: 'boolean' },
+      force: { type: 'boolean' },
+      'allow-shell-escape': { type: 'boolean' },
+      'external-database': { type: 'boolean' },
+    },
+    strict: true,
+    allowPositionals: false,
+  });
+  for (const [name, value] of Object.entries(values)) {
+    const items = Array.isArray(value) ? value : [value];
+    if (items.some((item) => typeof item === 'string' && item === '')) throw new Error(`--${name} requires a value`);
+  }
+  const selectedPreset = resolvePreset(values.preset);
+  const preset = selectedPreset ? DEPLOYMENT_PRESETS[selectedPreset] : undefined;
   const options = {
     command,
-    profile: 'slim',
-    runtimeImage: '',
-    texliveImage: '',
-    texliveRepository: '',
-    platform: '',
-    cacheFrom: [] as string[],
-    cacheTo: [] as string[],
-    push: false,
-    auth: 'token',
-    database: 'postgres',
-    out: path.resolve(process.cwd(), 'dist', command === 'bundle' ? 'latexmk-paas' : 'latexmk-runtime'),
-    tag: '',
-    build: false,
-    save: '',
-    force: false,
-    allowShellEscape: false,
-    engines: '',
+    profile: values.profile ?? 'slim',
+    runtimeImage: values['runtime-image'] ?? '',
+    texliveImage: values['texlive-image'] ?? '',
+    texliveRepository: values['texlive-repository'] ?? '',
+    platform: values.platform ?? '',
+    cacheFrom: values['cache-from'] ?? [],
+    cacheTo: values['cache-to'] ?? [],
+    push: values.push ?? false,
+    auth: values.auth ?? 'token',
+    database: values.database ?? 'postgres',
+    out: path.resolve(values.out ?? path.join('dist', command === 'bundle' ? 'latexmk-paas' : 'latexmk-runtime')),
+    tag: values.tag ?? '',
+    build: values.build ?? false,
+    save: values.save ? path.resolve(values.save) : '',
+    force: values.force ?? false,
+    allowShellEscape: values['allow-shell-escape'] ?? false,
+    engines: values.engines ?? '',
     preset: selectedPreset,
-    externalDatabase: false,
-    compileTimeout: '2m',
-    maxConcurrent: '2',
+    externalDatabase: values['external-database'] ?? false,
     maxQueued: '100',
     maxUploadBytes: '64MiB',
     maxExpandedBytes: '256MiB',
@@ -138,54 +171,19 @@ function parseBundleOptions(args: string[], command: 'bundle' | 'runtime-bundle'
     stateDir: '/var/lib/latexmk',
     stateVolume: true,
     ...preset,
-    serverSource: path.join(repoRoot, 'packages', 'server'),
-    sharedSource: path.join(repoRoot, 'packages', 'shared'),
+    compileTimeout: values['compile-timeout'] ?? preset?.compileTimeout ?? '2m',
+    maxConcurrent: values['max-concurrent'] ?? preset?.maxConcurrent ?? '2',
+    serverSource: path.resolve(values['server-source'] ?? path.join(repoRoot, 'packages', 'server')),
+    sharedSource: path.resolve(values['shared-source'] ?? path.join(repoRoot, 'packages', 'shared')),
   };
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    const take = (name: string) => {
-      const equal = arg.indexOf('=');
-      if (equal >= 0) {
-        const value = arg.slice(equal + 1);
-        if (!value) throw new Error(`${name} requires a value`);
-        return value;
-      }
-      if (i + 1 >= args.length || args[i + 1].startsWith('--')) throw new Error(`${name} requires a value`);
-      i += 1;
-      return args[i];
-    };
-    if (arg === '--profile' || arg.startsWith('--profile=')) options.profile = take('--profile');
-    else if (arg === '--auth' || arg.startsWith('--auth=')) options.auth = take('--auth');
-    else if (arg === '--database' || arg.startsWith('--database=')) options.database = take('--database');
-    else if (arg === '--preset' || arg.startsWith('--preset=')) take('--preset');
-    else if (arg === '--out' || arg.startsWith('--out=')) options.out = path.resolve(take('--out'));
-    else if (arg === '--tag' || arg.startsWith('--tag=')) options.tag = take('--tag');
-    else if (arg === '--runtime-image' || arg.startsWith('--runtime-image='))
-      options.runtimeImage = take('--runtime-image');
-    else if (arg === '--texlive-image' || arg.startsWith('--texlive-image='))
-      options.texliveImage = take('--texlive-image');
-    else if (arg === '--texlive-repository' || arg.startsWith('--texlive-repository='))
-      options.texliveRepository = take('--texlive-repository');
-    else if (arg === '--platform' || arg.startsWith('--platform=')) options.platform = take('--platform');
-    else if (arg === '--cache-from' || arg.startsWith('--cache-from=')) options.cacheFrom.push(take('--cache-from'));
-    else if (arg === '--cache-to' || arg.startsWith('--cache-to=')) options.cacheTo.push(take('--cache-to'));
-    else if (arg === '--push') options.push = true;
-    else if (arg === '--save' || arg.startsWith('--save=')) options.save = path.resolve(take('--save'));
-    else if (arg === '--engines' || arg.startsWith('--engines=')) options.engines = take('--engines');
-    else if (arg === '--compile-timeout' || arg.startsWith('--compile-timeout='))
-      options.compileTimeout = take('--compile-timeout');
-    else if (arg === '--max-concurrent' || arg.startsWith('--max-concurrent='))
-      options.maxConcurrent = take('--max-concurrent');
-    else if (arg === '--server-source' || arg.startsWith('--server-source='))
-      options.serverSource = path.resolve(take('--server-source'));
-    else if (arg === '--shared-source' || arg.startsWith('--shared-source='))
-      options.sharedSource = path.resolve(take('--shared-source'));
-    else if (arg === '--build') options.build = true;
-    else if (arg === '--force') options.force = true;
-    else if (arg === '--allow-shell-escape') options.allowShellEscape = true;
-    else if (arg === '--external-database') options.externalDatabase = true;
-    else throw new Error(`unknown option: ${arg}`);
+  for (const [name, value] of [
+    ['--engines', options.engines],
+    ['--compile-timeout', options.compileTimeout],
+    ['--max-concurrent', options.maxConcurrent],
+  ]) {
+    if (/[\r\n\0]/.test(value)) throw new Error(`${name} must be a single configuration value`);
   }
+  if (!/^[1-9][0-9]*$/.test(options.maxConcurrent)) throw new Error('--max-concurrent must be a positive integer');
   if (!['slim', 'full'].includes(options.profile)) throw new Error('--profile must be slim or full');
   if (!['none', 'token', 'postgres'].includes(options.auth)) throw new Error('--auth must be none, token, or postgres');
   if (!['postgres', 'pglite'].includes(options.database)) throw new Error('--database must be postgres or pglite');
@@ -225,17 +223,7 @@ function parseBundleOptions(args: string[], command: 'bundle' | 'runtime-bundle'
   return options;
 }
 
-function readPreset(args: string[]): keyof typeof DEPLOYMENT_PRESETS | '' {
-  let value = '';
-  for (let i = 0; i < args.length; i += 1) {
-    if (args[i] === '--preset') {
-      if (i + 1 >= args.length) throw new Error('--preset requires a value');
-      value = args[i + 1];
-      i += 1;
-    } else if (args[i].startsWith('--preset=')) {
-      value = args[i].slice('--preset='.length);
-    }
-  }
+function resolvePreset(value = ''): keyof typeof DEPLOYMENT_PRESETS | '' {
   if (value && !Object.hasOwn(DEPLOYMENT_PRESETS, value))
     throw new Error('--preset must be railway-serverless, lightsail-tokyo, or railway');
   return value as keyof typeof DEPLOYMENT_PRESETS | '';
