@@ -183,8 +183,10 @@ latexmk files --explain .env.latexmk --json main.tex
 latexmk files --include-file 'figures/**/*.pdf' main.tex
 ```
 
-`--explain` reports the candidate upload policy without reading excluded file
-contents. The normal preview reports actual selected files and their reasons.
+`--explain` checks a project-relative regular file against upload policy without
+reading its contents. Directories, special files and symlinks are not uploadable.
+This does not resolve entry dependencies; the normal preview reports actual
+selected files and their reasons.
 Preview, compilation and watch share selection code. Only selected files are
 hashed and charged against the upload byte limit; candidate enumeration keeps
 its separate file-count bound.

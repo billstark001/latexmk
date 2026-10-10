@@ -13,7 +13,9 @@ type Explanation struct {
 	Reason  string `json:"reason"`
 }
 
-// Explain checks metadata and rules only; excluded file contents are never read.
+// Explain checks whether a project-relative regular file passes upload policy.
+// It checks metadata and rules only; file contents are never read. This does not
+// resolve entry dependencies or predict dependency-mode selection.
 func Explain(opts Options, name string) (Explanation, error) {
 	result := Explanation{Path: name}
 	if !filepath.IsLocal(name) {
@@ -46,6 +48,10 @@ func Explain(opts Options, name string) (Explanation, error) {
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			result.Reason = "symbolic link"
+			return result, nil
+		}
+		if i == len(parts)-1 && !info.Mode().IsRegular() {
+			result.Reason = "unsupported file type"
 			return result, nil
 		}
 	}
