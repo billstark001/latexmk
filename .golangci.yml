@@ -9,12 +9,18 @@ linters:
     - bodyclose
     - errcheck
     - errorlint
+    - forbidigo
     - govet
     - ineffassign
     - nolintlint
     - staticcheck
     - unused
   settings:
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: '^fmt\.(Print|Fprint)(f|ln)?$'
+          msg: 'Use terminal print helpers for human-readable CLI output; JSON must use its encoder.'
     staticcheck:
       checks: ['all', '-QF*']
     nolintlint:
@@ -23,6 +29,11 @@ linters:
   exclusions:
     generated: strict
     presets: []
+    rules:
+      - path-except: '^packages/cli/cmd/latexmk/'
+        linters: [forbidigo]
+      - path: '^packages/cli/cmd/latexmk/(terminal\.go|.*_test\.go)$'
+        linters: [forbidigo]
 formatters:
   enable:
     - goimports

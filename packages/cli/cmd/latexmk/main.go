@@ -83,7 +83,7 @@ func run(args []string) int {
 	if len(argv) > 0 {
 		switch argv[0] {
 		case "version", "--version", "-version":
-			fmt.Printf("latexmk %s\ncommit: %s\nbuilt: %s\n", version, commit, buildDate)
+			terminalPrintf("latexmk %s\ncommit: %s\nbuilt: %s\n", version, commit, buildDate)
 			return 0
 		case "help", "--help", "-h":
 			usage()
@@ -165,8 +165,8 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		if detachedJSON {
 			return failAgentArguments("compile.start", true, err)
 		}
-		fmt.Fprintln(os.Stderr, "latexmk:", err)
-		fmt.Fprintln(os.Stderr, "run 'latexmk help' for usage")
+		terminalFprintln(os.Stderr, "latexmk:", err)
+		terminalFprintln(os.Stderr, "run 'latexmk help' for usage")
 		return 2
 	}
 	if opts.target == "" && opts.entry == "" {
@@ -239,7 +239,7 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		}
 		c.ProjectID = resolution.ID
 		if resolution.Created {
-			fmt.Fprintln(
+			terminalFprintln(
 				os.Stderr,
 				"latexmk: created a local project ID in .latexmk-cache; run 'latexmk cache ignore' in Git projects",
 			)
@@ -286,9 +286,9 @@ func runDetachedCompile(c *client.Client, request protocol.CompileRequest, opts 
 		return 0
 	}
 	for _, warning := range out.Warnings {
-		fmt.Fprintln(os.Stderr, "latexmk: warning:", terminalText(warning))
+		terminalFprintln(os.Stderr, "latexmk: warning:", terminalText(warning))
 	}
-	fmt.Printf(
+	terminalPrintf(
 		"job ID: %s\nproject ID: %s\nsnapshot ID: %s\nstatus: %s\n",
 		out.Job.ID,
 		out.Job.ProjectID,
@@ -318,19 +318,19 @@ func reportCompile(out client.CompileOutput, err error, opts compileOptions) int
 		return fail(err)
 	}
 	for _, warning := range out.Warnings {
-		fmt.Fprintln(os.Stderr, "latexmk: warning:", terminalText(warning))
+		terminalFprintln(os.Stderr, "latexmk: warning:", terminalText(warning))
 	}
 	if opts.jsonOutput {
 		_ = json.NewEncoder(os.Stdout).Encode(out.Result)
 	} else {
 		if !opts.quiet && len(out.Stdout) > 0 {
-			_, _ = fmt.Fprint(os.Stdout, terminalText(string(out.Stdout)))
+			terminalFprintf(os.Stdout, "%s", string(out.Stdout))
 		}
 		if len(out.Stderr) > 0 {
-			_, _ = fmt.Fprint(os.Stderr, terminalText(string(out.Stderr)))
+			terminalFprintf(os.Stderr, "%s", string(out.Stderr))
 		}
 		if cache := out.Result.CompileCache; cache != nil {
-			fmt.Fprintf(
+			terminalFprintf(
 				os.Stderr,
 				"latexmk: compile cache=%s restored=%d stored=%d reason=%s\n",
 				cache.Status,
@@ -339,10 +339,10 @@ func reportCompile(out client.CompileOutput, err error, opts compileOptions) int
 				terminalText(cache.Reason),
 			)
 			if cache.Warning != "" {
-				fmt.Fprintln(os.Stderr, "latexmk: compile cache:", terminalText(cache.Warning))
+				terminalFprintln(os.Stderr, "latexmk: compile cache:", terminalText(cache.Warning))
 			}
 		}
-		fmt.Fprintf(
+		terminalFprintf(
 			os.Stderr,
 			"latexmk: request=%s server=%s profile=%s engine=%s duration=%dms artifacts=%d\n",
 			out.Result.RequestID,
@@ -353,12 +353,12 @@ func reportCompile(out client.CompileOutput, err error, opts compileOptions) int
 			len(out.Result.Artifacts),
 		)
 		if out.Result.StdoutTruncated || out.Result.StderrTruncated {
-			fmt.Fprintln(os.Stderr, "latexmk: warning: server truncated compiler output")
+			terminalFprintln(os.Stderr, "latexmk: warning: server truncated compiler output")
 		}
 	}
 	if !out.Result.Success {
 		if out.Result.Error != "" {
-			fmt.Fprintln(os.Stderr, "latexmk:", terminalText(out.Result.Error))
+			terminalFprintln(os.Stderr, "latexmk:", terminalText(out.Result.Error))
 		}
 		if out.Result.TimedOut {
 			return 124
@@ -372,14 +372,14 @@ func reportCompile(out client.CompileOutput, err error, opts compileOptions) int
 }
 
 func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOptions) int {
-	fmt.Fprintln(os.Stderr, "latexmk: --realtime is recommended for continuous previews and coalesced compilation")
+	terminalFprintln(os.Stderr, "latexmk: --realtime is recommended for continuous previews and coalesced compilation")
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	files, _, err := c.Manifest(request.Entry, request.Engine)
 	if err != nil {
 		return fail(fmt.Errorf("initialize watch manifest: %w", err))
 	}
-	fmt.Fprintf(
+	terminalFprintf(
 		os.Stderr,
 		"latexmk: watching %d selected files (interval=%s debounce=%s maxWait=%s)\n",
 		len(files),
@@ -390,34 +390,42 @@ func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOpt
 	for {
 		refreshed, _, refreshErr := c.Manifest(request.Entry, request.Engine)
 		if refreshErr != nil {
-			fmt.Fprintln(os.Stderr, "latexmk: warning: could not refresh manifest before watch compile:", refreshErr)
+			terminalFprintln(
+				os.Stderr,
+				"latexmk: warning: could not refresh manifest before watch compile:",
+				refreshErr,
+			)
 		} else {
 			files = refreshed
 		}
 		before := files
 		out, compileErr := compileWithTimeout(ctx, c, request, opts)
 		if ctx.Err() != nil {
-			fmt.Fprintln(os.Stderr, "latexmk: watch stopped")
+			terminalFprintln(os.Stderr, "latexmk: watch stopped")
 			return 0
 		}
 		code := reportCompile(out, compileErr, opts)
 		if code != 0 {
-			fmt.Fprintf(os.Stderr, "latexmk: watch compile failed with status %d; waiting for another change\n", code)
+			terminalFprintf(
+				os.Stderr,
+				"latexmk: watch compile failed with status %d; waiting for another change\n",
+				code,
+			)
 		}
 
 		after, _, manifestErr := c.Manifest(request.Entry, request.Engine)
 		if manifestErr != nil {
-			fmt.Fprintln(os.Stderr, "latexmk: warning: could not refresh watch manifest:", manifestErr)
+			terminalFprintln(os.Stderr, "latexmk: warning: could not refresh watch manifest:", manifestErr)
 			after = before
 		}
 		if selectedFilesChanged(before, after) {
 			files = after
-			fmt.Fprintln(
+			terminalFprintln(
 				os.Stderr,
 				"latexmk: selected files changed during compilation; scheduling another immutable compile",
 			)
 			if !waitForContext(ctx, opts.watchDebounce) {
-				fmt.Fprintln(os.Stderr, "latexmk: watch stopped")
+				terminalFprintln(os.Stderr, "latexmk: watch stopped")
 				return 0
 			}
 			continue
@@ -430,12 +438,12 @@ func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOpt
 		changed, waitErr := tracker.Wait(ctx)
 		if waitErr != nil {
 			if ctx.Err() != nil {
-				fmt.Fprintln(os.Stderr, "latexmk: watch stopped")
+				terminalFprintln(os.Stderr, "latexmk: watch stopped")
 				return 0
 			}
 			return fail(waitErr)
 		}
-		fmt.Fprintln(os.Stderr, "latexmk: change detected:", strings.Join(changed, ", "))
+		terminalFprintln(os.Stderr, "latexmk: change detected:", strings.Join(changed, ", "))
 	}
 }
 
@@ -813,7 +821,7 @@ func printManifest(opts compileOptions) int {
 				return fail(err)
 			}
 		} else {
-			fmt.Printf("%s: %s\n", explanation.Path, explanation.Reason)
+			terminalPrintf("%s: %s\n", explanation.Path, explanation.Reason)
 		}
 		return 0
 	}
@@ -839,7 +847,7 @@ func printManifest(opts compileOptions) int {
 		}
 		return 0
 	}
-	fmt.Printf(
+	terminalPrintf(
 		"project root: %s\nentry: %s\nupload mode: %s\nresolved: %t\nfiles: %d\nbytes: %d\n",
 		opts.projectRoot,
 		opts.entry,
@@ -849,13 +857,13 @@ func printManifest(opts compileOptions) int {
 		result.Stats.Bytes,
 	)
 	for _, file := range result.Files {
-		fmt.Printf("%10d  %s  %s  (%s)\n", file.Size, file.SHA256, file.Path, file.Reason)
+		terminalPrintf("%10d  %s  %s  (%s)\n", file.Size, file.SHA256, file.Path, file.Reason)
 	}
 	for _, diagnostic := range result.Diagnostics {
-		fmt.Fprintf(os.Stderr, "latexmk: dependency: %s\n", dependency.FormatDiagnostic(diagnostic))
+		terminalFprintf(os.Stderr, "latexmk: dependency: %s\n", dependency.FormatDiagnostic(diagnostic))
 	}
 	if !result.Resolved {
-		fmt.Fprintln(
+		terminalFprintln(
 			os.Stderr,
 			"latexmk: dependency discovery has unresolved references; fix them or review --upload-mode all",
 		)
@@ -917,7 +925,7 @@ func runMeta(args []string, doctor bool) int {
 		return fail(err)
 	}
 	if doctor && !jsonOutput {
-		fmt.Fprintln(os.Stderr, "authentication:", cfg.TokenSource)
+		terminalFprintln(os.Stderr, "authentication:", cfg.TokenSource)
 	}
 	c, err := client.New(server, cfg.Token, timeout, insecure)
 	if err != nil {
@@ -938,7 +946,7 @@ func runMeta(args []string, doctor bool) int {
 		_ = json.NewEncoder(os.Stdout).Encode(meta)
 		return 0
 	}
-	fmt.Printf(
+	terminalPrintf(
 		"service: %s %s\nprotocol: %d\nprofile: %s\nauth: %s\ndatabase: %s\nengines: %s\n",
 		meta.Service,
 		meta.Version,
@@ -955,11 +963,11 @@ func runMeta(args []string, doctor bool) int {
 	sort.Strings(names)
 	for _, name := range names {
 		if v := meta.Toolchain[name]; v != "" {
-			fmt.Printf("%s: %s\n", name, v)
+			terminalPrintf("%s: %s\n", name, v)
 		}
 	}
 	if doctor {
-		fmt.Println("status: healthy")
+		terminalPrintln("status: healthy")
 	}
 	return 0
 }
@@ -995,9 +1003,12 @@ func runInit(args []string) int {
 	); err != nil {
 		return fail(err)
 	}
-	fmt.Println(path)
-	fmt.Fprintln(os.Stderr, "latexmk: recommended: run 'latexmk cache ignore' to protect the local project identity")
-	fmt.Fprintln(
+	terminalPrintln(path)
+	terminalFprintln(
+		os.Stderr,
+		"latexmk: recommended: run 'latexmk cache ignore' to protect the local project identity",
+	)
+	terminalFprintln(
 		os.Stderr,
 		"latexmk: warning: 'git clean -fdX' deletes ignored cache files; the next compile creates a new project ID",
 	)
@@ -1011,27 +1022,27 @@ func reportDoctorProjectCache(cwd, configuredRoot string, jsonOutput bool) {
 	}
 	root, err := filepath.Abs(root)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "latexmk: doctor: could not inspect project cache Git policy: %v\n", err)
+		terminalFprintf(os.Stderr, "latexmk: doctor: could not inspect project cache Git policy: %v\n", err)
 		return
 	}
 	status, err := client.InspectProjectCacheGitIgnore(root)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "latexmk: doctor: could not inspect project cache Git policy: %v\n", err)
+		terminalFprintf(os.Stderr, "latexmk: doctor: could not inspect project cache Git policy: %v\n", err)
 		return
 	}
 	if !status.InWorkTree {
 		if !jsonOutput {
-			fmt.Println("project cache Git ignore: not applicable (not a Git work tree)")
+			terminalPrintln("project cache Git ignore: not applicable (not a Git work tree)")
 		}
 		return
 	}
 	if status.Ignored {
 		if !jsonOutput {
-			fmt.Println("project cache Git ignore: configured")
+			terminalPrintln("project cache Git ignore: configured")
 		}
 		return
 	}
-	fmt.Fprintln(os.Stderr, "latexmk: doctor: "+client.ProjectCacheGitAdvice)
+	terminalFprintln(os.Stderr, "latexmk: doctor: "+client.ProjectCacheGitAdvice)
 }
 
 func runClean(args []string) int {
@@ -1070,7 +1081,7 @@ func runClean(args []string) int {
 			return fail(err)
 		}
 	}
-	fmt.Printf("removed %d generated files\n", removed)
+	terminalPrintf("removed %d generated files\n", removed)
 	return 0
 }
 
@@ -1255,7 +1266,7 @@ func runRemoteClean(args []string) int {
 			return 0
 		}
 		writeRemoteCleanupReport(report)
-		fmt.Printf(
+		terminalPrintf(
 			"plan ID: %s\nexpires: %s\npreview only; apply with --plan-id %s --yes\n",
 			plan.ID,
 			plan.ExpiresAt.Format(time.RFC3339),
@@ -1278,19 +1289,19 @@ func runRemoteClean(args []string) int {
 		_ = json.NewEncoder(os.Stdout).Encode(remoteCleanupOutput{PlanID: plan.ID, Report: report})
 		return 0
 	}
-	fmt.Printf("plan ID: %s\n", plan.ID)
+	terminalPrintf("plan ID: %s\n", plan.ID)
 	writeRemoteCleanupReport(report)
-	fmt.Printf("reclaimed bytes: %d\n", report.ReclaimedBytes)
+	terminalPrintf("reclaimed bytes: %d\n", report.ReclaimedBytes)
 	return 0
 }
 
 func writeRemoteCleanupReport(report protocol.CleanupReport) {
 	if report.Scope == "cache" || report.Scope == "project" {
-		fmt.Printf("compile caches: %d (%d bytes)\n", report.CompileCaches, report.CompileCacheBytes)
+		terminalPrintf("compile caches: %d (%d bytes)\n", report.CompileCaches, report.CompileCacheBytes)
 	}
-	fmt.Printf("project ID: %s\nscope: %s\ndry run: %t\n", report.ProjectID, report.Scope, report.DryRun)
+	terminalPrintf("project ID: %s\nscope: %s\ndry run: %t\n", report.ProjectID, report.Scope, report.DryRun)
 	if report.Scope == "snapshot" || report.Scope == "project" {
-		fmt.Printf(
+		terminalPrintf(
 			"snapshot: %t (%d files, %d bytes)\n",
 			report.SnapshotPresent,
 			report.SnapshotFiles,
@@ -1298,18 +1309,18 @@ func writeRemoteCleanupReport(report protocol.CleanupReport) {
 		)
 	}
 	if report.Scope == "results" || report.Scope == "project" {
-		fmt.Printf("results: %d (%d bytes)\n", report.Results, report.ResultBytes)
+		terminalPrintf("results: %d (%d bytes)\n", report.Results, report.ResultBytes)
 	}
 	if report.Scope == "project" {
-		fmt.Printf("terminal jobs: %d\n", report.Jobs)
+		terminalPrintf("terminal jobs: %d\n", report.Jobs)
 	}
 	if len(report.ActiveJobs) > 0 {
-		fmt.Printf("active jobs (not deleted): %s\n", strings.Join(report.ActiveJobs, ", "))
+		terminalPrintf("active jobs (not deleted): %s\n", strings.Join(report.ActiveJobs, ", "))
 	}
 }
 
 func usage() {
-	fmt.Print(`latexmk - remote, PaaS-hosted LaTeX compiler
+	terminalPrint(`latexmk - remote, PaaS-hosted LaTeX compiler
 
 Usage:
   latexmk compile [options] [main.tex]
@@ -1384,6 +1395,6 @@ older path-derived project IDs.
 }
 
 func fail(err error) int {
-	fmt.Fprintln(os.Stderr, "latexmk:", err)
+	terminalFprintln(os.Stderr, "latexmk:", err)
 	return 2
 }

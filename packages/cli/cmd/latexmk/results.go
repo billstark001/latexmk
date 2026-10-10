@@ -74,7 +74,7 @@ func runArtifacts(args []string) int {
 			return 0
 		}
 		for _, artifact := range artifacts {
-			fmt.Printf("%s\t%d\t%s\t%s\n", artifact.ID, artifact.Size, artifact.MIMEType, artifact.Path)
+			terminalPrintf("%s\t%d\t%s\t%s\n", artifact.ID, artifact.Size, artifact.MIMEType, artifact.Path)
 		}
 		return 0
 	}
@@ -88,7 +88,7 @@ func runArtifacts(args []string) int {
 		}
 		return 0
 	}
-	fmt.Printf("downloaded: %s\nsize: %d\nSHA-256: %s\n", download.LocalPath, download.Size, download.SHA256)
+	terminalPrintf("downloaded: %s\nsize: %d\nSHA-256: %s\n", download.LocalPath, download.Size, download.SHA256)
 	return 0
 }
 
@@ -120,7 +120,7 @@ func runLogs(args []string) int {
 		return 0
 	}
 	for _, entry := range logs.Entries {
-		fmt.Printf(
+		terminalPrintf(
 			"== %s: %s (%d/%d bytes) ==\n%s",
 			entry.Source,
 			entry.Path,
@@ -129,7 +129,7 @@ func runLogs(args []string) int {
 			entry.Content,
 		)
 		if entry.Content != "" && !strings.HasSuffix(entry.Content, "\n") {
-			fmt.Println()
+			terminalPrintln()
 		}
 	}
 	return 0
@@ -177,7 +177,7 @@ func runDiagnostics(args []string) int {
 				fmt.Sprintf("%s:%s:%d-%d", location.Source, location.Path, location.StartLine, location.EndLine),
 			)
 		}
-		fmt.Printf(
+		terminalPrintf(
 			"%s\t%s\t%s\t[%s]\n",
 			diagnostic.Severity,
 			position,
@@ -186,7 +186,7 @@ func runDiagnostics(args []string) int {
 		)
 	}
 	if diagnostics.Incomplete {
-		fmt.Fprintln(os.Stderr, "latexmk: diagnostic index is incomplete; inspect the raw logs")
+		terminalFprintln(os.Stderr, "latexmk: diagnostic index is incomplete; inspect the raw logs")
 	}
 	return 0
 }

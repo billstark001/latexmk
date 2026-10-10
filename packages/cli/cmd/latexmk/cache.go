@@ -60,11 +60,11 @@ func runCache(args []string) int {
 		return 0
 	}
 	if result.Changed {
-		fmt.Printf("added .latexmk-cache/ to %s\n", result.GitIgnore)
+		terminalPrintf("added .latexmk-cache/ to %s\n", result.GitIgnore)
 	} else {
-		fmt.Println(".latexmk-cache is already covered by the effective Git ignore rules")
+		terminalPrintln(".latexmk-cache is already covered by the effective Git ignore rules")
 	}
-	fmt.Println("warning: git clean -fdX deletes ignored cache files and resets the local project identity")
+	terminalPrintln("warning: git clean -fdX deletes ignored cache files and resets the local project identity")
 	return 0
 }
 
@@ -118,7 +118,7 @@ func runCacheClean(args []string) int {
 			return fail(err)
 		}
 	} else {
-		fmt.Println("local auxiliary cache cleared; project identity and dependency history preserved")
+		terminalPrintln("local auxiliary cache cleared; project identity and dependency history preserved")
 	}
 	return 0
 }

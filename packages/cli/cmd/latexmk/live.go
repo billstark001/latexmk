@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -71,26 +70,26 @@ func runLive(c *client.Client, request protocol.CompileRequest, opts compileOpti
 			if permanentLiveError(err) {
 				return fail(err)
 			}
-			fmt.Fprintln(os.Stderr, "latexmk: session connection failed; retrying:", err)
+			terminalFprintln(os.Stderr, "latexmk: session connection failed; retrying:", err)
 			if !waitForContext(ctx, 2*time.Second) {
 				return 0
 			}
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "latexmk: realtime session %s (%s workspace)\n", session.ID, mode)
+		terminalFprintf(os.Stderr, "latexmk: realtime session %s (%s workspace)\n", session.ID, mode)
 		code := runLiveSession(ctx, c, request, opts, meta, session, observation)
 		cleanup, finish := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := c.CloseSession(cleanup, session.ID); err != nil {
 			var failure *client.HTTPError
 			if !errors.As(err, &failure) || failure.StatusCode != http.StatusNotFound {
-				fmt.Fprintln(os.Stderr, "latexmk: session closure failed; waiting for lease expiry:", err)
+				terminalFprintln(os.Stderr, "latexmk: session closure failed; waiting for lease expiry:", err)
 			}
 		}
 		finish()
 		if code != -1 {
 			return code
 		}
-		fmt.Fprintln(os.Stderr, "latexmk: session ended; reconnecting with a fresh source snapshot")
+		terminalFprintln(os.Stderr, "latexmk: session ended; reconnecting with a fresh source snapshot")
 		creationKey, err = liveIdempotencyKey()
 		if err != nil {
 			return fail(err)
@@ -151,7 +150,7 @@ func runLiveSession(
 			session.Revision, session.LatestJobID = job.Revision, job.ID
 			lastFiles = pendingFiles
 			pending, pendingFiles = nil, nil
-			fmt.Fprintf(os.Stderr, "latexmk: submitted revision %d (%s)\n", job.Revision, job.ID)
+			terminalFprintf(os.Stderr, "latexmk: submitted revision %d (%s)\n", job.Revision, job.ID)
 			return nil
 		}
 		if pending != nil {
@@ -234,10 +233,10 @@ func runLiveSession(
 							request.Engine,
 							out.Result.InputFiles,
 						); err != nil {
-							fmt.Fprintln(os.Stderr, "latexmk: dependency cache:", err)
+							terminalFprintln(os.Stderr, "latexmk: dependency cache:", err)
 						}
 					}
-					fmt.Fprintf(
+					terminalFprintf(
 						os.Stderr,
 						"latexmk: published revision %d (wanted %d), bundle: %s\n",
 						job.Revision,
@@ -260,9 +259,9 @@ func runLiveSession(
 		if job.Status != "failed" {
 			return nil
 		}
-		fmt.Fprintf(os.Stderr, "latexmk: revision %d failed; retaining the last successful PDF\n", job.Revision)
+		terminalFprintf(os.Stderr, "latexmk: revision %d failed; retaining the last successful PDF\n", job.Revision)
 		if job.Result == nil {
-			fmt.Fprintln(os.Stderr, "latexmk:", job.Error)
+			terminalFprintln(os.Stderr, "latexmk:", job.Error)
 			diagnosticJobID = job.ID
 			return nil
 		}
@@ -275,7 +274,7 @@ func runLiveSession(
 		if request.DetectMissingFiles && len(out.Result.NeedsFiles) > 0 {
 			allowed, err := c.ResolveMissingFiles(out.Result.NeedsFiles, lastFiles, &recovery)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, "latexmk: missing-file recovery refused:", err)
+				terminalFprintln(os.Stderr, "latexmk: missing-file recovery refused:", err)
 				return nil
 			}
 			if len(allowed) > 0 {
@@ -299,7 +298,7 @@ func runLiveSession(
 		if permanentLiveError(err) {
 			return fail(err)
 		}
-		fmt.Fprintln(os.Stderr, "latexmk: realtime operation deferred:", err)
+		terminalFprintln(os.Stderr, "latexmk: realtime operation deferred:", err)
 		return -2
 	}
 	for {
@@ -311,7 +310,7 @@ func runLiveSession(
 				return code
 			}
 		case <-observation.reload:
-			fmt.Fprintln(os.Stderr, "latexmk: settings changed; rebuilding the session")
+			terminalFprintln(os.Stderr, "latexmk: settings changed; rebuilding the session")
 			return reloadLiveSettings
 		case err := <-observation.errors:
 			return fail(err)

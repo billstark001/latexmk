@@ -85,7 +85,7 @@ func runJobs(args []string) int {
 			return 0
 		}
 		for _, job := range jobs {
-			fmt.Printf("%s\t%s\t%s\t%s\n", job.ID, job.Status, job.CreatedAt.Format(time.RFC3339), job.ProjectID)
+			terminalPrintf("%s\t%s\t%s\t%s\n", job.ID, job.Status, job.CreatedAt.Format(time.RFC3339), job.ProjectID)
 		}
 		return 0
 	case "show":
@@ -176,7 +176,7 @@ func reportJob(command string, job protocol.Job, jsonOutput bool) int {
 		}
 		return 0
 	}
-	fmt.Printf(
+	terminalPrintf(
 		"job ID: %s\nproject ID: %s\nstatus: %s\ncreated: %s\n",
 		job.ID,
 		job.ProjectID,
@@ -184,16 +184,16 @@ func reportJob(command string, job protocol.Job, jsonOutput bool) int {
 		job.CreatedAt.Format(time.RFC3339),
 	)
 	if job.SnapshotID != "" {
-		fmt.Printf("snapshot ID: %s\n", job.SnapshotID)
+		terminalPrintf("snapshot ID: %s\n", job.SnapshotID)
 	}
 	if job.StartedAt != nil {
-		fmt.Printf("started: %s\n", job.StartedAt.Format(time.RFC3339))
+		terminalPrintf("started: %s\n", job.StartedAt.Format(time.RFC3339))
 	}
 	if job.FinishedAt != nil {
-		fmt.Printf("finished: %s\n", job.FinishedAt.Format(time.RFC3339))
+		terminalPrintf("finished: %s\n", job.FinishedAt.Format(time.RFC3339))
 	}
 	if job.Error != "" {
-		fmt.Printf("error: %s\n", job.Error)
+		terminalPrintf("error: %s\n", job.Error)
 	}
 	return 0
 }

@@ -5,7 +5,10 @@
 The repository uses golangci-lint for Go analysis and formatting (`goimports`
 and `golines`, 120 columns), Oxlint for JavaScript/TypeScript analysis, and
 Oxfmt for formatting. Both TypeScript packages use strict type checking.
-The standard tools run directly; there are no custom source or architecture checks.
+The standard tools run directly. The Go `forbidigo` rule also requires human
+terminal output in `packages/cli/cmd/latexmk` to use the terminal helpers, which
+remove control characters from server and filename text. Structured JSON output
+continues through `json.Encoder`; the helpers and tests are exempt.
 
 ```sh
 pnpm format          # Apply formatting across the repository

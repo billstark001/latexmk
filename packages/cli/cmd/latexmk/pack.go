@@ -232,7 +232,7 @@ func runPack(args []string) int {
 func packBuildError(stage string, build client.CompileOutput) error {
 	for _, log := range [][]byte{build.Stdout, build.Stderr} {
 		if len(log) > 0 {
-			fmt.Fprint(os.Stderr, terminalText(string(log)))
+			terminalFprintf(os.Stderr, "%s", string(log))
 		}
 	}
 	if build.Result.TimedOut {
@@ -276,18 +276,18 @@ func reportPack(view packView, jsonOutput, dryRun bool) int {
 		return 0
 	}
 	if dryRun {
-		fmt.Printf("pack preview (%s): %s\n", view.Mode, view.Output)
+		terminalPrintf("pack preview (%s): %s\n", view.Mode, view.Output)
 	} else {
-		fmt.Printf("packed %d files (%s): %s\n", len(view.Files), view.Mode, view.Output)
+		terminalPrintf("packed %d files (%s): %s\n", len(view.Files), view.Mode, view.Output)
 	}
 	for _, file := range view.Files {
-		fmt.Printf("%10d  %s  %s\n", file.Size, file.SHA256, file.Path)
+		terminalPrintf("%10d  %s  %s\n", file.Size, file.SHA256, file.Path)
 	}
 	for _, warning := range view.Warnings {
-		fmt.Fprintln(os.Stderr, "latexmk: warning:", terminalText(warning))
+		terminalFprintln(os.Stderr, "latexmk: warning:", terminalText(warning))
 	}
 	if dryRun && view.RequiresBuild {
-		fmt.Println("source preview only; remote build and generated submission files are pending")
+		terminalPrintln("source preview only; remote build and generated submission files are pending")
 	}
 	return 0
 }
