@@ -27,46 +27,47 @@ var (
 )
 
 type compileOptions struct {
-	explain       string
-	ignoreFiles   []string
-	denyFiles     []string
-	unmatchedGlob string
-	target        string
-	pdfExport     string
-	auxiliary     protocol.AuxiliaryOptions
-	server        string
-	token         string
-	projectRoot   string
-	projectID     string
-	rootMode      string
-	uploadMode    string
-	manifestFile  string
-	includeFiles  []string
-	gitIgnore     bool
-	engine        string
-	outDir        string
-	timeout       time.Duration
-	interaction   string
-	synctex       bool
-	haltOnError   bool
-	fileLineError bool
-	shellEscape   bool
-	jobName       string
-	force         bool
-	quiet         bool
-	jsonOutput    bool
-	dryRun        bool
-	detach        bool
-	watch         bool
-	realtime      bool
-	controlFiles  []string
-	watchInterval time.Duration
-	watchDebounce time.Duration
-	watchMaxWait  time.Duration
-	insecure      bool
-	entry         string
-	exclude       []string
-	configPath    string
+	explain        string
+	ignoreFiles    []string
+	denyFiles      []string
+	unmatchedGlob  string
+	target         string
+	pdfExport      string
+	auxiliary      protocol.AuxiliaryOptions
+	server         string
+	token          string
+	projectRoot    string
+	projectID      string
+	rootMode       string
+	uploadMode     string
+	manifestFile   string
+	includeFiles   []string
+	gitIgnore      bool
+	engine         string
+	engineExplicit bool
+	outDir         string
+	timeout        time.Duration
+	interaction    string
+	synctex        bool
+	haltOnError    bool
+	fileLineError  bool
+	shellEscape    bool
+	jobName        string
+	force          bool
+	quiet          bool
+	jsonOutput     bool
+	dryRun         bool
+	detach         bool
+	watch          bool
+	realtime       bool
+	controlFiles   []string
+	watchInterval  time.Duration
+	watchDebounce  time.Duration
+	watchMaxWait   time.Duration
+	insecure       bool
+	entry          string
+	exclude        []string
+	configPath     string
 }
 
 func main() {
@@ -158,6 +159,7 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 	opts := optionsFromConfig(cfg, listOnly)
 	if forcedEngine != "" {
 		opts.engine = forcedEngine
+		opts.engineExplicit = true
 	}
 	if err := parseCompileArgs(args, &opts); err != nil {
 		if detachedJSON {
@@ -585,6 +587,7 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 				return err
 			}
 			opts.engine = v
+			opts.engineExplicit = true
 		case a == "--timeout" || strings.HasPrefix(a, "--timeout="):
 			v, err := value("--timeout")
 			if err != nil {
@@ -625,10 +628,13 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 			opts.fileLineError = false
 		case a == "-xelatex" || a == "-pdfxe":
 			opts.engine = "xelatex"
+			opts.engineExplicit = true
 		case a == "-lualatex" || a == "-pdflua":
 			opts.engine = "lualatex"
+			opts.engineExplicit = true
 		case a == "-pdf" || a == "-pdflatex":
 			opts.engine = "pdflatex"
+			opts.engineExplicit = true
 		case a == "-g" || a == "-gg" || a == "--force":
 			opts.force = true
 		case a == "-quiet" || a == "-silent" || a == "--quiet":

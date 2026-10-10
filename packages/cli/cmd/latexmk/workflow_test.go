@@ -13,6 +13,52 @@ import (
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
+func TestExplicitEngineOverridesTargetForSelectionAndPack(t *testing.T) {
+	for _, test := range []struct {
+		name, graphic string
+		args          []string
+	}{
+		{"pdf flag", "plot.png", []string{"latexmk", "files", "-pdf", "--json"}},
+		{"pdflatex flag", "plot.png", []string{"latexmk", "files", "-pdflatex", "--json"}},
+		{"xelatex flag", "plot.PDF", []string{"latexmk", "files", "-xelatex", "--json"}},
+		{"pdfxe flag", "plot.PDF", []string{"latexmk", "files", "-pdfxe", "--json"}},
+		{"named engine", "plot.png", []string{"latexmk", "files", "--engine=pdflatex", "--json"}},
+		{"last engine wins", "plot.PDF", []string{"latexmk", "files", "-pdf", "-xelatex", "--json"}},
+		{"pdflatex executable", "plot.png", []string{"pdflatex", "--dry-run", "--json"}},
+		{"pack pdf flag", "plot.png", []string{"latexmk", "pack", "-pdf", "--dry-run", "--json"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			for name, data := range map[string]string{
+				".latexmk.json": `{"targets":{"paper":{"entry":"main.tex","engine":"lualatex"}}}`,
+				"main.tex":      `\includegraphics{plot}`,
+				"plot.png":      "PNG",
+				"plot.PDF":      "PDF",
+			} {
+				if err := os.WriteFile(name, []byte(data), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			code, stdout, stderr := captureCommandOutput(t, func() int { return run(test.args) })
+			var response struct {
+				Files []struct{ Path string }
+				Data  struct{ Files []struct{ Path string } }
+			}
+			if err := json.Unmarshal([]byte(stdout), &response); err != nil || code != 0 {
+				t.Fatalf("preview: %d %s %s %v", code, stdout, stderr, err)
+			}
+			files := response.Files
+			if response.Data.Files != nil {
+				files = response.Data.Files
+			}
+			if len(files) != 2 || files[1].Path != test.graphic {
+				t.Fatalf("selected %v, want main.tex and %s", files, test.graphic)
+			}
+		})
+	}
+}
+
 func TestImplicitTargetSelection(t *testing.T) {
 	tests := []struct {
 		name, config, args, entry, errorText string

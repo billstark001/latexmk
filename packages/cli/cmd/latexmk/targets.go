@@ -178,7 +178,7 @@ func applyBuildTarget(opts *compileOptions, cfg config.Resolved, args []string) 
 	if cfg.ConfigPath != "" && !filepath.IsAbs(opts.entry) {
 		opts.entry = filepath.Join(filepath.Dir(cfg.ConfigPath), opts.entry)
 	}
-	if target.Engine != "" && !hasOption(args, "--engine") {
+	if target.Engine != "" && !opts.engineExplicit {
 		opts.engine = target.Engine
 	}
 	if target.OutDir != "" && !hasOption(args, "--out-dir") && !hasOption(args, "-output-directory") {
