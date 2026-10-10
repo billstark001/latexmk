@@ -8,6 +8,18 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"mime"
+	"net/http"
+	"os"
+	"path/filepath"
+	"runtime/debug"
+	"strconv"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
 	projectarchive "github.com/billstark001/latexmk/packages/server/internal/archive"
 	"github.com/billstark001/latexmk/packages/server/internal/auth"
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
@@ -18,16 +30,6 @@ import (
 	"github.com/billstark001/latexmk/packages/server/internal/store"
 	"github.com/billstark001/latexmk/packages/shared/jsonutil"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
-	"github.com/gin-gonic/gin"
-	"io"
-	"log/slog"
-	"mime"
-	"net/http"
-	"os"
-	"path/filepath"
-	"runtime/debug"
-	"strconv"
-	"time"
 )
 
 // Server owns the Gin engine and exposes the v2 content-addressed upload and
@@ -307,7 +309,23 @@ func (s *Server) commitUpload(c *gin.Context) {
 
 func (s *Server) listJobs(c *gin.Context) {
 	principal, _ := auth.FromContext(c.Request.Context())
-	limit, _ := strconv.Atoi(c.Query("limit"))
+	limit := protocol.DefaultJobListLimit
+	if values, present := c.Request.URL.Query()["limit"]; present {
+		var err error
+		if len(values) != 1 {
+			writeError(c, http.StatusBadRequest, "limit must be specified once")
+			return
+		}
+		limit, err = strconv.Atoi(values[0])
+		if err != nil || limit < 1 || limit > protocol.MaxJobListLimit {
+			writeError(
+				c,
+				http.StatusBadRequest,
+				fmt.Sprintf("limit must be between 1 and %d", protocol.MaxJobListLimit),
+			)
+			return
+		}
+	}
 	jobs, err := s.jobs.List(c.Request.Context(), principal.ID, limit)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "could not list jobs")

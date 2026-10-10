@@ -165,7 +165,9 @@ resumed with changed source files.
 
 ### `GET /v1/jobs`, `GET /v1/jobs/{id}`, and `DELETE /v1/jobs/{id}`
 
-Returns or cancels jobs of the authenticated principal. Queued jobs and running
+Returns or cancels jobs of the authenticated principal. Listing accepts one
+optional `limit` integer from 1 through 200, defaulting to 50 when omitted. Empty,
+malformed, repeated or out-of-range values return 400. Queued jobs and running
 jobs on the owning server instance can be cancelled; finished jobs and running
 jobs owned by another instance cannot. Running jobs awaiting deferred completion
 persistence remain cancellable. Status is `queued`, `running`, `succeeded`,

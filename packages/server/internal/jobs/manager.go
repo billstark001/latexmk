@@ -326,8 +326,8 @@ func (m *Manager) Get(ctx context.Context, ownerID, id string) (protocol.Job, er
 }
 
 func (m *Manager) List(ctx context.Context, ownerID string, limit int) ([]protocol.Job, error) {
-	if limit < 1 || limit > 200 {
-		limit = 50
+	if limit < 1 || limit > protocol.MaxJobListLimit {
+		limit = protocol.DefaultJobListLimit
 	}
 	m.mu.Lock()
 	publications := maps.Clone(m.publications)

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,5 +120,23 @@ func TestSessionLeaseEndpointAndAbandonedEventStream(t *testing.T) {
 	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+session.ID+"/lease", nil))
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("expired renewal: %d", recorder.Code)
+	}
+}
+
+func TestJobListValidatesExplicitLimits(t *testing.T) {
+	server := newTestServer(t, false)
+	for _, query := range []string{"limit=bad", "limit=-1", "limit=0", "limit=201", "limit=", "limit=999999999999999999999", "limit=1&limit=2"} {
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/jobs?"+query, nil))
+		if recorder.Code != http.StatusBadRequest {
+			t.Errorf("query %q returned %d: %s", query, recorder.Code, recorder.Body.String())
+		}
+	}
+	for _, query := range []string{"", "?limit=1", "?limit=200"} {
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/jobs"+query, nil))
+		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"jobs":[]`) {
+			t.Errorf("valid query %q: %d %s", query, recorder.Code, recorder.Body.String())
+		}
 	}
 }

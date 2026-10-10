@@ -6,7 +6,14 @@ import (
 	"time"
 )
 
+// Version identifies the current content-addressed upload/job wire protocol.
 const Version = 2
+
+// DefaultJobListLimit is the page size when GET /v1/jobs omits limit.
+const DefaultJobListLimit = 50
+
+// MaxJobListLimit bounds a single job-list response.
+const MaxJobListLimit = 200
 
 type AuxiliaryOptions struct {
 	Local     string `json:"local,omitempty"`

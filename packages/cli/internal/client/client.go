@@ -195,8 +195,8 @@ func (c *Client) cleanupProject(
 // ListJobs returns jobs in a stable newest-first order. The server accepts
 // limits from 1 through 200.
 func (c *Client) ListJobs(ctx context.Context, limit int) ([]protocol.Job, error) {
-	if limit < 1 || limit > 200 {
-		return nil, errors.New("job limit must be between 1 and 200")
+	if limit < 1 || limit > protocol.MaxJobListLimit {
+		return nil, fmt.Errorf("job limit must be between 1 and %d", protocol.MaxJobListLimit)
 	}
 	var response struct {
 		Jobs []protocol.Job `json:"jobs"`

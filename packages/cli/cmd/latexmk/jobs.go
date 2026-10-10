@@ -55,7 +55,7 @@ func runJobs(args []string) int {
 	}
 	opts := jobsOptions{
 		server: cfg.Server, token: cfg.Token, timeout: cfg.Timeout,
-		insecure: cfg.InsecureSkipVerify, jsonOutput: jsonOutput, limit: 50,
+		insecure: cfg.InsecureSkipVerify, jsonOutput: jsonOutput, limit: protocol.DefaultJobListLimit,
 	}
 	if err := parseJobsArgs(action, args[1:], &opts); err != nil {
 		return failAgentArguments(command, jsonOutput, err)
@@ -157,8 +157,8 @@ func parseJobsArgs(action string, args []string, opts *jobsOptions) error {
 		if len(positionals) != 0 {
 			return errors.New("jobs list does not accept a job ID")
 		}
-		if opts.limit < 1 || opts.limit > 200 {
-			return errors.New("--limit must be between 1 and 200")
+		if opts.limit < 1 || opts.limit > protocol.MaxJobListLimit {
+			return fmt.Errorf("--limit must be between 1 and %d", protocol.MaxJobListLimit)
 		}
 		return nil
 	}
