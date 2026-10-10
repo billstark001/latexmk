@@ -293,3 +293,20 @@ func TestPruneKeepsBlobPinnedByOlderQueuedSnapshot(t *testing.T) {
 		t.Fatalf("released old snapshot blob still exists: %v", err)
 	}
 }
+
+func TestPlanRejectsOverflowingManifestTotal(t *testing.T) {
+	m, err := New(
+		config.Config{StateDir: t.TempDir(), MaxFiles: 10, MaxExpandedBytes: 1<<63 - 1, MaxStateBytes: 1024},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.Plan("member", protocol.UploadPlanRequest{ProjectID: "paper", Files: []protocol.ProjectFile{
+		{Path: "one", SHA256: strings.Repeat("a", 64), Size: 1<<63 - 2},
+		{Path: "two", SHA256: strings.Repeat("b", 64), Size: 2},
+	}})
+	if err == nil {
+		t.Fatal("overflowing total bypassed expanded byte limit")
+	}
+}

@@ -152,10 +152,10 @@ func (m *Manager) Plan(ownerID string, request protocol.UploadPlanRequest) (prot
 			return protocol.UploadPlan{}, fmt.Errorf("inconsistent size for digest %s", file.SHA256)
 		}
 		expected[file.SHA256] = file.Size
-		total += file.Size
-		if total > m.cfg.MaxExpandedBytes {
+		if file.Size > m.cfg.MaxExpandedBytes-total {
 			return protocol.UploadPlan{}, fmt.Errorf("project expands beyond %d bytes", m.cfg.MaxExpandedBytes)
 		}
+		total += file.Size
 	}
 	id, err := randomID("upl")
 	if err != nil {
