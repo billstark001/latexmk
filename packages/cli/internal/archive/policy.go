@@ -1,12 +1,14 @@
 package archive
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 type filePolicy struct {
@@ -18,6 +20,8 @@ type filePolicy struct {
 	files    map[string]bool
 	nested   bool
 }
+
+const maxPolicyBytes = 1 << 20
 
 func newPolicy(opts Options) (*filePolicy, error) {
 	p := &filePolicy{
@@ -63,7 +67,7 @@ func newPolicy(opts Options) (*filePolicy, error) {
 	}
 	for _, name := range names {
 		data, err := readPolicy(opts.Root, name)
-		if os.IsNotExist(err) && opts.IgnoreFiles == nil {
+		if errors.Is(err, os.ErrNotExist) && opts.IgnoreFiles == nil {
 			continue
 		}
 		if err != nil {
@@ -80,25 +84,16 @@ func readPolicy(root, name string) ([]byte, error) {
 	if !filepath.IsLocal(name) {
 		return nil, fmt.Errorf("policy file must stay inside project root: %s", name)
 	}
-	current := root
-	for _, part := range strings.Split(filepath.Clean(name), string(filepath.Separator)) {
-		current = filepath.Join(current, part)
-		info, err := os.Lstat(current)
-		if err != nil {
-			return nil, err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return nil, fmt.Errorf("policy path contains symlink: %s", name)
-		}
-	}
-	info, err := os.Stat(current)
+	fs, err := safefs.Open(root)
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Size() > 1<<20 {
-		return nil, fmt.Errorf("invalid or oversized policy file: %s", name)
+	defer func() { _ = fs.Close() }()
+	data, err := fs.ReadLimited(filepath.ToSlash(filepath.Clean(name)), maxPolicyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("read policy %s: %w", name, err)
 	}
-	return os.ReadFile(current)
+	return data, nil
 }
 
 func (p *filePolicy) excluded(rel string, directory bool) (bool, string, error) {
@@ -141,7 +136,7 @@ func (p *filePolicy) excluded(rel string, directory bool) (bool, string, error) 
 		for _, base := range bases {
 			name := filepath.Join(base, ".gitignore")
 			data, err := readPolicy(p.root, name)
-			if os.IsNotExist(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
 			if err != nil {

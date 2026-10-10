@@ -123,8 +123,8 @@ deduplicated. Patterns are expanded only over policy-allowed candidates, not by
 walking arbitrary paths. Invalid patterns, absolute paths and `..` components
 are rejected. Exact missing paths are always errors; `unmatchedGlob` (or
 `--unmatched-glob`) controls unmatched globs with `error`, `warn`, or `ignore`.
-The manifest path
-must itself stay inside the project root and cannot contain symlink components.
+The manifest file must be a regular file of at most 1 MiB inside the project
+root, without symlink components. Ignore policy files have the same read limit.
 `.latexmk-manifest`, `.latexmk-files`, and the explicitly configured manifest
 are denied from upload because they are client policy,
 not a TeX input.

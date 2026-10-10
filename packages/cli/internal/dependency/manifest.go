@@ -5,12 +5,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
+
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 const (
@@ -36,37 +36,12 @@ func LoadExplicitManifest(root, manifestPath string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	rootAbs, err := filepath.Abs(root)
+	fs, err := safefs.Open(root)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open project root: %w", err)
 	}
-	rootAbs, err = filepath.EvalSymlinks(rootAbs)
-	if err != nil {
-		return nil, fmt.Errorf("resolve project root: %w", err)
-	}
-	abs := filepath.Join(rootAbs, filepath.FromSlash(clean))
-	current := rootAbs
-	for _, part := range strings.Split(filepath.FromSlash(clean), string(filepath.Separator)) {
-		current = filepath.Join(current, part)
-		info, err := os.Lstat(current)
-		if err != nil {
-			return nil, fmt.Errorf("inspect manifest %s: %w", clean, err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return nil, fmt.Errorf("manifest path contains a symbolic link: %s", clean)
-		}
-	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		return nil, fmt.Errorf("inspect manifest %s: %w", clean, err)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("manifest %s is not a regular file", clean)
-	}
-	if info.Size() > maxManifestBytes {
-		return nil, fmt.Errorf("manifest exceeds %d bytes", maxManifestBytes)
-	}
-	payload, err := os.ReadFile(abs)
+	defer func() { _ = fs.Close() }()
+	payload, err := fs.ReadLimited(clean, maxManifestBytes)
 	if err != nil {
 		return nil, fmt.Errorf("read manifest %s: %w", clean, err)
 	}

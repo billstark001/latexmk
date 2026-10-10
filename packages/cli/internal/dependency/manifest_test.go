@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 func TestLoadExplicitManifestReadsExactPaths(t *testing.T) {
@@ -52,5 +54,24 @@ func TestLoadExplicitManifestRejectsSymlinkPath(t *testing.T) {
 	}
 	if _, err := LoadExplicitManifest(root, ".latexmk-files"); err == nil {
 		t.Fatal("expected symlink manifest to fail")
+	}
+}
+
+func FuzzExactPattern(f *testing.F) {
+	for _, name := range []string{"main.tex", "dir/[a]*?.tex", "{a,b}/data.csv", "x\\y", "你好.tex"} {
+		f.Add(name)
+	}
+	f.Fuzz(func(t *testing.T, name string) {
+		pattern := ExactPattern(name)
+		matched, err := doublestar.Match(pattern, name)
+		if err != nil || !matched || HasGlob(pattern) {
+			t.Fatalf("literal %q, pattern %q: matched=%v error=%v", name, pattern, matched, err)
+		}
+	})
+}
+
+func BenchmarkExactPattern(b *testing.B) {
+	for b.Loop() {
+		ExactPattern("figures/[draft] plot*.pdf")
 	}
 }
