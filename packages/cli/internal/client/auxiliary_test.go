@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/billstark001/latexmk/packages/shared/protocol"
@@ -74,6 +75,34 @@ func TestLocalAuxiliaryPlacementAndVerification(t *testing.T) {
 				bytes.NewReader(bytes.Repeat([]byte("x"), len(data))),
 			); err == nil {
 				t.Fatal("checksum failure ignored")
+			}
+		})
+	}
+}
+
+func TestLegacyArtifactClassificationPreservesOutputsAndDiagnostics(t *testing.T) {
+	for _, name := range []string{"main.PDF", "main.SYNCTEX.GZ", "main.ILG", "main.GLG", "main.log", "main.aux"} {
+		t.Run(name, func(t *testing.T) {
+			root, output := t.TempDir(), t.TempDir()
+			data := "verified artifact"
+			digest := sha256.Sum256([]byte(data))
+			artifact := protocol.Artifact{Path: name, Size: int64(len(data)), SHA256: hex.EncodeToString(digest[:])}
+			if err := storeReturnedArtifact(
+				root,
+				output,
+				protocol.CompileRequest{},
+				artifact,
+				strings.NewReader(data),
+			); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(filepath.Join(output, name))
+			if name == "main.aux" {
+				if !os.IsNotExist(err) {
+					t.Fatalf("discarded auxiliary was written: %q err=%v", got, err)
+				}
+			} else if err != nil || string(got) != data {
+				t.Fatalf("output or diagnostic was discarded: %q err=%v", got, err)
 			}
 		})
 	}

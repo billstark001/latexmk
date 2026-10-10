@@ -1,8 +1,6 @@
 package compile
 
 import (
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/billstark001/latexmk/packages/shared/protocol"
@@ -10,18 +8,7 @@ import (
 
 // ArtifactKind classifies generated artifacts; it is never used to delete inputs.
 func ArtifactKind(name string) string {
-	lower := strings.ToLower(name)
-	if strings.HasSuffix(lower, ".synctex.gz") {
-		return "synctex"
-	}
-	switch filepath.Ext(lower) {
-	case ".pdf":
-		return "output"
-	case ".log", ".blg", ".ilg", ".glg":
-		return "diagnostic"
-	default:
-		return "auxiliary"
-	}
+	return protocol.ClassifyArtifactPath(name)
 }
 
 // RetainArtifacts runs after recorder/diagnostic extraction. Transfer-only auxiliary

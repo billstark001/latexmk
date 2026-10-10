@@ -59,14 +59,7 @@ func storeReturnedArtifact(
 	}
 	kind := artifact.Kind
 	if kind == "" {
-		switch {
-		case strings.HasSuffix(artifact.Path, ".pdf"), strings.HasSuffix(artifact.Path, ".synctex.gz"):
-			kind = "output"
-		case strings.HasSuffix(artifact.Path, ".log"), strings.HasSuffix(artifact.Path, ".blg"):
-			kind = "diagnostic"
-		default:
-			kind = "auxiliary"
-		}
+		kind = protocol.ClassifyArtifactPath(artifact.Path)
 	}
 	if kind != "auxiliary" {
 		if err := os.MkdirAll(output, 0700); err != nil {
