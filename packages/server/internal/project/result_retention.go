@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/billstark001/latexmk/packages/shared/archiveutil"
+	"github.com/billstark001/latexmk/packages/shared/jsonutil"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
@@ -46,6 +48,9 @@ func (m *Manager) pruneRequestedCacheExpiry(now time.Time) (int64, error) {
 	return reclaimed, err
 }
 
+// PruneResultAuxiliary atomically removes expired auxiliary entries and their
+// metadata while retaining result age and quota accounting. A failed rewrite
+// preserves the original archive.
 func (m *Manager) PruneResultAuxiliary(ownerID, jobID string) error {
 	name, err := m.existingResultPath(ownerID, jobID)
 	if err != nil {
@@ -89,7 +94,7 @@ func (m *Manager) pruneResultAuxiliary(name string, now time.Time) (int64, error
 		return 0, nil
 	}
 	var result protocol.CompileResult
-	if err := json.NewDecoder(io.LimitReader(tr, header.Size)).Decode(&result); err != nil {
+	if err := jsonutil.Decode(tr, 1<<20, &result); err != nil {
 		return 0, err
 	}
 	if result.AuxiliaryExpiresAt == nil || now.Before(*result.AuxiliaryExpiresAt) {
@@ -141,6 +146,9 @@ func (m *Manager) pruneResultAuxiliary(name string, now time.Time) (int64, error
 			if _, err := io.CopyN(tw, tr, h.Size); err != nil {
 				return err
 			}
+		}
+		if err := archiveutil.VerifyTrailer(gz); err != nil {
+			return err
 		}
 		return errors.Join(tw.Close(), out.Close())
 	})

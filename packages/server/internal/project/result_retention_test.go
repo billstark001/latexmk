@@ -2,6 +2,7 @@ package project
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"io"
@@ -104,5 +105,49 @@ func TestAuxiliaryRetentionAndExpiryPreserveFinalArtifacts(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAuxiliaryPruneRejectsBadTrailerAndPreservesOriginal(t *testing.T) {
+	for _, corruption := range []string{"checksum", "truncated"} {
+		t.Run(corruption, func(t *testing.T) {
+			m, _, _ := cacheFixture(t)
+			out := cacheOutput(t, t.TempDir(), map[string]string{"main.pdf": "pdf", "main.aux": "aux"})
+			expired := time.Now().Add(-time.Minute)
+			out = compile.RetainArtifacts(
+				out,
+				protocol.CompileRequest{Auxiliary: protocol.AuxiliaryOptions{Server: "retain"}},
+				time.Hour,
+			)
+			out.Result.AuxiliaryExpiresAt = &expired
+			path, err := m.WriteResult("alice", "job1", out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if corruption == "checksum" {
+				data[len(data)-8] ^= 1
+			} else {
+				data = data[:len(data)-8]
+			}
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			// Corruption simulates disk damage; account for its actual length separately.
+			m.stateBytes = int64(len(data))
+			if err := m.PruneResultAuxiliary("alice", "job1"); err == nil {
+				t.Fatal("rewrote a corrupt result archive")
+			}
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(after, data) || m.stateBytes != int64(len(data)) {
+				t.Fatal("failed prune changed archive or quota")
+			}
+		})
 	}
 }
