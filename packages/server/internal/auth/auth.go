@@ -14,8 +14,11 @@ import (
 
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/store"
+	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
+// Principal is the authenticated identity and role exposed to request handlers.
+// It never contains the submitted credential.
 type Principal struct {
 	ID   string
 	Name string
@@ -24,13 +27,23 @@ type Principal struct {
 
 type contextKey struct{}
 
-type Manager struct {
-	cfg config.Config
-	db  *store.Postgres
+type tokenAuthenticator interface {
+	AuthenticateToken(context.Context, string) (store.User, error)
 }
 
+type Manager struct {
+	cfg config.Config
+	db  tokenAuthenticator
+}
+
+// New configures authentication. A nil database still permits static and
+// bootstrap tokens; other database credentials fail until a store is available.
 func New(cfg config.Config, db *store.Postgres) *Manager {
-	return &Manager{cfg: cfg, db: db}
+	m := &Manager{cfg: cfg}
+	if db != nil {
+		m.db = db
+	}
+	return m
 }
 
 // Middleware is the Gin equivalent of Require/RequireAdmin. Keeping the
@@ -52,6 +65,7 @@ func (m *Manager) Middleware(admin bool) gin.HandlerFunc {
 	}
 }
 
+// Require authenticates each request and adds its Principal to request context.
 func (m *Manager) Require(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, err := m.Authenticate(r)
@@ -63,6 +77,7 @@ func (m *Manager) Require(next http.Handler) http.Handler {
 	})
 }
 
+// RequireAdmin additionally rejects authenticated identities without admin role.
 func (m *Manager) RequireAdmin(next http.Handler) http.Handler {
 	return m.Require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, _ := FromContext(r.Context())
@@ -74,11 +89,17 @@ func (m *Manager) RequireAdmin(next http.Handler) http.Handler {
 	}))
 }
 
+// Authenticate resolves the configured identity without modifying the request.
+// Credential-bearing modes require exactly one Authorization header value.
 func (m *Manager) Authenticate(r *http.Request) (Principal, error) {
 	if m.cfg.AuthMode == "none" {
 		return Principal{ID: "local", Name: "local", Role: "admin"}, nil
 	}
-	token, err := bearerToken(r.Header.Get("Authorization"))
+	values := r.Header.Values("Authorization")
+	if len(values) != 1 {
+		return Principal{}, errors.New("exactly one bearer token is required")
+	}
+	token, err := bearerToken(values[0])
 	if err != nil {
 		return Principal{}, err
 	}
@@ -105,6 +126,7 @@ func (m *Manager) Authenticate(r *http.Request) (Principal, error) {
 	}
 }
 
+// FromContext returns the identity inserted by either authentication adapter.
 func FromContext(ctx context.Context) (Principal, bool) {
 	principal, ok := ctx.Value(contextKey{}).(Principal)
 	return principal, ok
@@ -112,7 +134,7 @@ func FromContext(ctx context.Context) (Principal, bool) {
 
 func bearerToken(header string) (string, error) {
 	parts := strings.Fields(header)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || !protocol.ValidBearerToken(parts[1]) {
 		return "", errors.New("missing bearer token")
 	}
 	return parts[1], nil
