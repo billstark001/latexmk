@@ -142,6 +142,9 @@ func (m *Manager) readCompileCache(path string) (compileCacheRecord, error) {
 	return record, nil
 }
 
+// CompatibleCacheInputs compares exact, unique path sets. Only .tex contents
+// may change without invalidating the portable auxiliary cache; all other
+// inputs must retain both size and hash. Slice order does not matter.
 func CompatibleCacheInputs(previous, current []protocol.ProjectFile) bool {
 	if len(previous) != len(current) {
 		return false
@@ -163,6 +166,7 @@ func CompatibleCacheInputs(previous, current []protocol.ProjectFile) bool {
 		if filepath.Ext(file.Path) != ".tex" && (prior.SHA256 != file.SHA256 || prior.Size != file.Size) {
 			return false
 		}
+		delete(old, file.Path)
 	}
 	return true
 }

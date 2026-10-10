@@ -46,6 +46,14 @@ func cacheFixture(t *testing.T) (*Manager, Snapshot, string) {
 	return m, s, key
 }
 
+func TestCompatibleCacheInputsRejectsDuplicateCurrentPaths(t *testing.T) {
+	previous := []protocol.ProjectFile{{Path: "a.tex"}, {Path: "b.tex"}}
+	current := []protocol.ProjectFile{{Path: "a.tex"}, {Path: "a.tex"}}
+	if CompatibleCacheInputs(previous, current) {
+		t.Fatal("duplicate current paths hid a removed input")
+	}
+}
+
 func cacheOutput(t *testing.T, root string, data map[string]string) compile.Output {
 	t.Helper()
 	out := compile.Output{Result: protocol.CompileResult{Success: true}}
