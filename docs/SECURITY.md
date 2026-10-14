@@ -1,165 +1,66 @@
 # Security model
 
-TeX is a complex programmable typesetting system. Even with shell escape
-disabled, this service is not a high-assurance sandbox for hostile code. Its
-intended boundary is a controlled research group, with ordinary path traversal,
-resource exhaustion, configuration execution, and secret-leakage risks reduced
-at the application and deployment layers.
+TeX is a complex programmable typesetting system. Even with shell escape disabled, this service is not a high-assurance sandbox for hostile code. Its intended boundary is a controlled research group, with ordinary path traversal, resource exhaustion, configuration execution, and secret-leakage risks reduced at the application and deployment layers.
 
 ## Implemented controls
 
 - Commands are executed directly, never composed through a shell.
-- `latexmk -norc` prevents system, user, and project latexmk rc files from
-  executing Perl configuration.
+- `latexmk -norc` prevents system, user, and project latexmk rc files from executing Perl configuration.
 - Shell escape is disabled by default.
-- LuaLaTeX runs with LuaTeX `--safer` and `--nosocket` in addition to disabled
-  shell escape. These options reduce Lua file/process/network capabilities but
-  do not make LuaLaTeX a high-assurance sandbox.
-- Every compile has a fresh temporary directory, private HOME/TEXMF trees, and
-  a small environment whitelist. Host credentials, proxy configuration, and
-  arbitrary TeX path overrides are not inherited.
-- Archives and v2 manifests validate paths, types, hashes, sizes, duplicate
-  paths, compression expansion, and file counts.
-- Automatic dependency selection runs only on the manifest that already passed
-  Git-ignore, denylist, path, and symlink policy. It cannot request or restore a
-  filtered file.
-- Recorder INPUT history contains normalized workspace-relative paths only.
-  System TeX paths and paths outside the compile workspace are discarded, and
-  cached paths must pass the client's current upload policy again.
-- Missing-file diagnostics are capability-negotiated and returned only as
-  normalized relative requests. The client can accept them only from its
-  current policy-filtered manifest, with bounded rounds, file count, and bytes;
-  every retry creates a new immutable snapshot and job.
-- The dependency watcher refreshes the policy-filtered candidate and selected
-  sets to detect newly matching glob files, alongside edits to selected inputs
-  and policy controls. Every compilation submits a new immutable snapshot;
-  unrelated files do not become selected merely because watch mode is active.
-- Explicit manifests accept project-relative paths and glob patterns. They cannot
-  override Git-ignore, denylist, root-boundary, or symlink checks; manifest
-  files are client policy and are denied from upload by default.
-- Selected source files are revalidated for regular-file/symlink policy when
-  parsed, hashed and uploaded. Reads use `os.Root` to confine path traversal.
-  User configuration, configured credential paths, and default credential files
-  are excluded from previews as well as uploads, before authentication is needed.
-- Upload blobs, logs, artifacts, concurrent compiles, queued jobs, state bytes,
-  and upload sessions have hard limits.
-- A state sweeper expires results, project snapshots, and orphaned blobs. It
-  never removes data referenced by a live upload, current project snapshot, or
-  queued/running job snapshot or realtime session.
-- Remote cleanup is owner/project scoped and preview-first. Destructive calls
-  require a server-issued digest that binds the exact targets and is rechecked
-  under the queue admission lock. Active jobs block snapshot/cache/project
-  deletion; active realtime sessions block every cleanup scope.
-- Local project identities are random, private files rather than mount-path
-  hashes. `latexmk cache ignore` appends an explicit Git rule without replacing
-  `.gitignore`, and rejects symlinked policy/cache files.
-- Queued jobs persist an immutable, content-derived snapshot ID and complete
-  manifest. A later upload to the same project cannot change their input.
-- Worker start, cancellation, and completion use conditional state transitions,
-  so a stale worker cannot overwrite a cancellation or another terminal state.
-- On Unix, compilation and toolchain probes run in their own process group;
-  cancellation kills the group and surviving descendants are terminated after
-  the parent exits. Both streams are capped while being read. Windows retains
-  direct-child termination and does not provide the Unix process-group guarantee.
-- Docker images run as an unprivileged user. Generated Compose files use a
-  read-only root filesystem, tmpfs, `no-new-privileges`, dropped capabilities,
-  PID limits, and memory limits.
-- Static and database bearer tokens use constant-time comparison; database
-  tokens are stored only as SHA-256 hashes.
-- Shared server tokens may be loaded from a bounded regular file so deployments
-  do not need to expose them in the environment.
-- Administrative endpoints require the administrator role. User and token
-  labels are length-limited and reject control characters.
+- LuaLaTeX runs with LuaTeX `--safer` and `--nosocket` in addition to disabled shell escape. These options reduce Lua file/process/network capabilities but do not make LuaLaTeX a high-assurance sandbox.
+- Every compile has a fresh temporary directory, private HOME/TEXMF trees, and a small environment whitelist. Host credentials, proxy configuration, and arbitrary TeX path overrides are not inherited.
+- Archives and v2 manifests validate paths, types, hashes, sizes, duplicate paths, compression expansion, and file counts.
+- Automatic dependency selection runs only on the manifest that already passed Git-ignore, denylist, path, and symlink policy. It cannot request or restore a filtered file.
+- Recorder INPUT history contains normalized workspace-relative paths only. System TeX paths and paths outside the compile workspace are discarded, and cached paths must pass the client's current upload policy again.
+- Missing-file diagnostics are capability-negotiated and returned only as normalized relative requests. The client can accept them only from its current policy-filtered manifest, with bounded rounds, file count, and bytes; every retry creates a new immutable snapshot and job.
+- The dependency watcher refreshes the policy-filtered candidate and selected sets to detect newly matching glob files, alongside edits to selected inputs and policy controls. Every compilation submits a new immutable snapshot; unrelated files do not become selected merely because watch mode is active.
+- Explicit manifests accept project-relative paths and glob patterns. They cannot override Git-ignore, denylist, root-boundary, or symlink checks; manifest files are client policy and are denied from upload by default.
+- Selected source files are revalidated for regular-file/symlink policy when parsed, hashed and uploaded. Reads use `os.Root` to confine path traversal. User configuration, configured credential paths, and default credential files are excluded from previews as well as uploads, before authentication is needed.
+- Upload blobs, logs, artifacts, concurrent compiles, queued jobs, state bytes, and upload sessions have hard limits.
+- A state sweeper expires results, project snapshots, and orphaned blobs. It never removes data referenced by a live upload, current project snapshot, or queued/running job snapshot or realtime session.
+- Remote cleanup is owner/project scoped and preview-first. Destructive calls require a server-issued digest that binds the exact targets and is rechecked under the queue admission lock. Active jobs block snapshot/cache/project deletion; active realtime sessions block every cleanup scope.
+- Local project identities are random, private files rather than mount-path hashes. `latexmk cache ignore` appends an explicit Git rule without replacing `.gitignore`, and rejects symlinked policy/cache files.
+- Queued jobs persist an immutable, content-derived snapshot ID and complete manifest. A later upload to the same project cannot change their input.
+- Worker start, cancellation, and completion use conditional state transitions, so a stale worker cannot overwrite a cancellation or another terminal state.
+- On Unix, compilation and toolchain probes run in their own process group; cancellation kills the group and surviving descendants are terminated after the parent exits. Both streams are capped while being read. Windows retains direct-child termination and does not provide the Unix process-group guarantee.
+- Docker images run as an unprivileged user. Generated Compose files use a read-only root filesystem, tmpfs, `no-new-privileges`, dropped capabilities, PID limits, and memory limits.
+- Static and database bearer tokens use constant-time comparison; database tokens are stored only as SHA-256 hashes.
+- Shared server tokens may be loaded from a bounded regular file so deployments do not need to expose them in the environment.
+- Administrative endpoints require the administrator role. User and token labels are length-limited and reject control characters.
 - CORS accepts only explicit HTTP(S) origins. Wildcards are rejected at startup.
-- Result artifacts come from `.fls`, are constrained to the workspace and an
-  allowlist, and result downloads are authorized by job owner.
+- Result artifacts come from `.fls`, are constrained to the workspace and an allowlist, and result downloads are authorized by job owner.
 
-- Engine names are registry keys rather than executable names. Only trusted
-  application code registers compiler arguments, graphics rules and version
-  probes; JSON and API requests cannot define drivers or inject commands.
+- Engine names are registry keys rather than executable names. Only trusted application code registers compiler arguments, graphics rules and version probes; JSON and API requests cannot define drivers or inject commands.
 
 ## Server filesystem and process primitives
 
-`packages/shared/safefs` owns normalized relative paths, `os.Root`-confined
-operations, regular-file reads, byte limits, verified copies, and staged file
-publication. Symlinks are rejected during path validation; `os.Root` independently
-prevents root escape during the actual operation, including concurrent path
-changes. Root confinement does not prevent traversal of privileged mount points.
-Unix regular-file opens are nonblocking so a replaced FIFO cannot hang a reader.
+`packages/shared/safefs` owns normalized relative paths, `os.Root`-confined operations, regular-file reads, byte limits, verified copies, and staged file publication. Symlinks are rejected during path validation; `os.Root` independently prevents root escape during the actual operation, including concurrent path changes. Root confinement does not prevent traversal of privileged mount points. Unix regular-file opens are nonblocking so a replaced FIFO cannot hang a reader.
 
-Uploads, snapshot materialization, archive extraction, auxiliary caches, artifact
-collection and token-file reads use these primitives. Artifact contents are
-checked again against their collected size and hash during result packaging.
-CLI policy files, explicit manifests and dependency caches use bounded reads
-under the project root; dependency-cache publication uses the same staged writes.
-Downloaded artifacts and local auxiliary-cache files are verified and atomically
-published through an opened root, without resolving host paths again after the
-copy. Failed writes preserve existing output.
-Complete tar.gz reads verify gzip checksums and truncation after the tar end
-marker, permitting at most 1 MiB of zero padding and rejecting hidden trailing
-content. Individual artifact downloads may stop after verifying that artifact's
-declared size and SHA-256, without reading the remainder of the archive.
-The shared recorder parser applies the same `PWD` and root-boundary handling to
-both input and output records, with a bounded recorder-file size.
+Uploads, snapshot materialization, archive extraction, auxiliary caches, artifact collection and token-file reads use these primitives. Artifact contents are checked again against their collected size and hash during result packaging. CLI policy files, explicit manifests and dependency caches use bounded reads under the project root; dependency-cache publication uses the same staged writes. Downloaded artifacts and local auxiliary-cache files are verified and atomically published through an opened root, without resolving host paths again after the copy. Failed writes preserve existing output. Complete tar.gz reads verify gzip checksums and truncation after the tar end marker, permitting at most 1 MiB of zero padding and rejecting hidden trailing content. Individual artifact downloads may stop after verifying that artifact's declared size and SHA-256, without reading the remainder of the archive. The shared recorder parser applies the same `PWD` and root-boundary handling to both input and output records, with a bounded recorder-file size.
 
-Blob, result and cache publication writes a private sibling file first. Staged
-files are synced and closed before rename; encoder failures, byte-limit errors
-and failed publication preserve the previous generation and remove temporary
-files. State quotas include both the old and staged generation. This provides
-atomic visibility on the Unix deployment filesystem, not a power-loss durability
-guarantee: parent directories are not fsynced. Non-Unix rename semantics depend
-on the operating system; no delete-before-rename fallback is used.
+Blob, result and cache publication writes a private sibling file first. Staged files are synced and closed before rename; encoder failures, byte-limit errors and failed publication preserve the previous generation and remove temporary files. State quotas include both the old and staged generation. This provides atomic visibility on the Unix deployment filesystem, not a power-loss durability guarantee: parent directories are not fsynced. Non-Unix rename semantics depend on the operating system; no delete-before-rename fallback is used.
 
-`internal/platform/process` owns subprocess start/wait, bounded output and
-cancellation. Callers supply deadlines, argument lists and environment policy;
-compiler calls explicitly pass the restricted environment. `compile.Workspace`
-owns temporary job directories and clean retry resets. Cache compatibility,
-retention, quotas and job transitions remain in their owning business packages.
+`internal/platform/process` owns subprocess start/wait, bounded output and cancellation. Callers supply deadlines, argument lists and environment policy; compiler calls explicitly pass the restricted environment. `compile.Workspace` owns temporary job directories and clean retry resets. Cache compatibility, retention, quotas and job transitions remain in their owning business packages.
 
 ## Deployment responsibilities
 
-- Use TLS and place the service behind a private network, VPN, or an
-  identity-aware proxy.
-- Use token or PostgreSQL authentication in every deployment. `none` is only
-  suitable for a deliberately isolated local development instance.
+- Use TLS and place the service behind a private network, VPN, or an identity-aware proxy.
+- Use token or PostgreSQL authentication in every deployment. `none` is only suitable for a deliberately isolated local development instance.
 - Do not inject cloud-control-plane credentials into the compile container.
 - Restrict outbound network access, especially if shell escape is ever enabled.
-- Keep the root filesystem read-only and retain equivalent seccomp/AppArmor or
-  PaaS isolation controls.
+- Keep the root filesystem read-only and retain equivalent seccomp/AppArmor or PaaS isolation controls.
 - Enforce request-size and timeout limits at the edge as well as in the server.
-- Pin and scan base images; regularly update TeX Live, fonts, Go, and OS
-  packages.
-- Keep PostgreSQL private to the service. Use TLS or the provider's private
-  network for a standalone database service.
+- Pin and scan base images; regularly update TeX Live, fonts, Go, and OS packages.
+- Keep PostgreSQL private to the service. Use TLS or the provider's private network for a standalone database service.
 
 ## Out of scope
 
-Do not offer this image as an anonymous public TeX compiler without additional
-microVM/container isolation, strict egress control, abuse prevention, and a
-separate threat-model review.
+Do not offer this image as an anonymous public TeX compiler without additional microVM/container isolation, strict egress control, abuse prevention, and a separate threat-model review.
 
 ## Realtime workers
 
-Reusable realtime sessions require the opt-in digest-pinned Docker runner.
-Its disposable workers receive verified source/checkpoint bytes over stdin and
-return bounded result archives over stdout. They receive no host mounts, network,
-controller credentials or Docker socket. CPU, memory, PIDs, writable bytes and
-inodes are limited independently of ordinary source/log/artifact quotas.
-All queued jobs execute in workers once a runner is configured; synchronous
-legacy compilation and shell escape are disallowed in that mode. The privileged
-controller never executes user TeX. Only a
-successful checkpoint can be reused; failed or cancelled attempts cannot publish
-new state. Their prior verified checkpoint keeps its original expiry and input
-compatibility checks. Corrupt state, expiration, explicit closure and restart
-invalidate it. Session owner checks apply to uploads, revision receipts, job results
-and SSE. See [configuration and trust boundaries](REALTIME.md).
+Reusable realtime sessions require the opt-in digest-pinned Docker runner. Its disposable workers receive verified source/checkpoint bytes over stdin and return bounded result archives over stdout. They receive no host mounts, network, controller credentials or Docker socket. CPU, memory, PIDs, writable bytes and inodes are limited independently of ordinary source/log/artifact quotas. All queued jobs execute in workers once a runner is configured; synchronous legacy compilation and shell escape are disallowed in that mode. The privileged controller never executes user TeX. Only a successful checkpoint can be reused; failed or cancelled attempts cannot publish new state. Their prior verified checkpoint keeps its original expiry and input compatibility checks. Corrupt state, expiration, explicit closure and restart invalidate it. Session owner checks apply to uploads, revision receipts, job results and SSE. See [configuration and trust boundaries](REALTIME.md).
 
-Docker access belongs to the trusted controller and grants administrative control
-of its daemon. Use a dedicated host/VM or broker for hostile tenants. Native fresh
-sessions retain the existing compiler trust boundary; enabling realtime alone
-without a runner does not add OS isolation.
+Docker access belongs to the trusted controller and grants administrative control of its daemon. Use a dedicated host/VM or broker for hostile tenants. Native fresh sessions retain the existing compiler trust boundary; enabling realtime alone without a runner does not add OS isolation.
 
-Source modes `0444/0555` protect against accidental writes. The worker and
-compiler share a UID, so a compromised compiler can change those modes; they
-are not an enforced read-only mount or ownership boundary. Controller snapshots
-remain separate verified copies, and only bounded build state is exported.
+Source modes `0444/0555` protect against accidental writes. The worker and compiler share a UID, so a compromised compiler can change those modes; they are not an enforced read-only mount or ownership boundary. Controller snapshots remain separate verified copies, and only bounded build state is exported.

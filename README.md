@@ -1,14 +1,8 @@
 # latexmk
 
-A remote LaTeX compiler for small research groups. A Go CLI selects project
-dependencies and sends an immutable source snapshot to a Go server. Each job
-compiles in an isolated workspace and returns PDF, SyncTeX and diagnostics.
-Optional server auxiliary caches reduce repeated compilation passes. Realtime
-sessions provide continuous previews, and `pack` exports portable source ZIPs.
+A remote LaTeX compiler for small research groups. A Go CLI selects project dependencies and sends an immutable source snapshot to a Go server. Each job compiles in an isolated workspace and returns PDF, SyncTeX and diagnostics. Optional server auxiliary caches reduce repeated compilation passes. Realtime sessions provide continuous previews, and `pack` exports portable source ZIPs.
 
-This documentation follows `main`. Features listed under
-[Unreleased](CHANGELOG.md#unreleased) may require local CLI/server builds from
-the same revision until their release is published.
+This documentation follows `main`. Features listed under [Unreleased](CHANGELOG.md#unreleased) may require local CLI/server builds from the same revision until their release is published.
 
 ## Install the CLI
 
@@ -18,10 +12,7 @@ Install the latest GitHub Release and register `latexmk` in your shell rc file:
 curl -fsSL https://raw.githubusercontent.com/billstark001/latexmk/main/scripts/install-cli.sh | bash -s --
 ```
 
-Open a new terminal and run `latexmk version`. Release installation needs Bash,
-curl and a SHA-256 utility, with binaries for macOS/Linux on Intel/AMD and ARM64;
-it does not require Go, Node.js or local TeX Live. Configure a remote server using
-the [configuration guide](docs/CONFIGURATION.md).
+Open a new terminal and run `latexmk version`. Release installation needs Bash, curl and a SHA-256 utility, with binaries for macOS/Linux on Intel/AMD and ARM64; it does not require Go, Node.js or local TeX Live. Configure a remote server using the [configuration guide](docs/CONFIGURATION.md).
 
 To register a local build instead, run from this repository after building:
 
@@ -29,15 +20,11 @@ To register a local build instead, run from this repository after building:
 bash scripts/install-cli.sh --local "$PWD/packages/cli/dist/latexmk"
 ```
 
-Re-running updates the same managed rc block. Use `--rc FILE` for another shell
-startup file, `--release TAG` to pin a release, or `--uninstall` to remove the
-registration. See [installation](docs/INSTALLATION.md) for examples and shell details.
+Re-running updates the same managed rc block. Use `--rc FILE` for another shell startup file, `--release TAG` to pin a release, or `--uninstall` to remove the registration. See [installation](docs/INSTALLATION.md) for examples and shell details.
 
 ## Development quick start
 
-Requirements: Go 1.27+, Node.js 24+, pnpm 12. Local end-to-end testing also
-requires TeX Live and latexmk, or a prebuilt Docker TeX image; see
-[local integration checks](docs/DEVELOPMENT.md#local-integration-checks).
+Requirements: Go 1.27+, Node.js 24+, pnpm 12. Local end-to-end testing also requires TeX Live and latexmk, or a prebuilt Docker TeX image; see [local integration checks](docs/DEVELOPMENT.md#local-integration-checks).
 
 ```sh
 pnpm install --frozen-lockfile
@@ -59,19 +46,14 @@ cd examples/basic
 ../../packages/cli/dist/latexmk main.tex
 ```
 
-Project configuration is optional. Git ignore rules and automatic dependency
-selection work by default. Put shared connection settings in the user config,
-or use a project `.env.latexmk`:
+Project configuration is optional. Git ignore rules and automatic dependency selection work by default. Put shared connection settings in the user config, or use a project `.env.latexmk`:
 
 ```dotenv
 LATEXMK_SERVER=https://latex.example.edu
 LATEXMK_TOKEN_FILE=.latexmk-token
 ```
 
-The CLI reads the environment file automatically; it never executes it as a
-shell script. Without an explicit credential source it looks for
-`.latexmk-token` at the resolved project root, then a user-level token file.
-See [configuration](docs/CONFIGURATION.md) for precedence and alternatives.
+The CLI reads the environment file automatically; it never executes it as a shell script. Without an explicit credential source it looks for `.latexmk-token` at the resolved project root, then a user-level token file. See [configuration](docs/CONFIGURATION.md) for precedence and alternatives.
 
 For a strict upload list, existing JSON can contain glob patterns directly:
 
@@ -83,12 +65,9 @@ For a strict upload list, existing JSON can contain glob patterns directly:
 }
 ```
 
-No separate manifest or ignore file is required. Use `latexmk files` to preview
-the exact selected paths and hashes before compiling.
+No separate manifest or ignore file is required. Use `latexmk files` to preview the exact selected paths and hashes before compiling.
 
-For a project with one configured build target, run `latexmk` directly. If it
-has several targets, set `defaultTarget` in `.latexmk.json` or pass
-`--target NAME`; see [build targets](docs/CONFIGURATION.md#build-targets-and-output).
+For a project with one configured build target, run `latexmk` directly. If it has several targets, set `defaultTarget` in `.latexmk.json` or pass `--target NAME`; see [build targets](docs/CONFIGURATION.md#build-targets-and-output).
 
 ## Documentation
 
@@ -119,11 +98,6 @@ has several targets, set `defaultTarget` in `.latexmk.json` or pass
 | `@latexmk/shared`    | Go             | Protocol, safe filesystem/recorder operations and engine drivers |
 | `@latexmk/deploy`    | TypeScript     | Runtime/application images and deployment bundles                |
 
-Source snapshots, result archives and auxiliary reuse are independently managed.
-Shell escape is disabled by default; project latexmkrc files are not executed.
-Persistent state depends on the deployment's configured storage volume.
+Source snapshots, result archives and auxiliary reuse are independently managed. Shell escape is disabled by default; project latexmkrc files are not executed. Persistent state depends on the deployment's configured storage volume.
 
-Realtime remote compilation is available with `--realtime`, optionally using isolated
-workspace checkpoints with `--server-cache reuse`. See [realtime compilation](docs/REALTIME.md).
-Use realtime in preference to `watch` for continuous editing and previews;
-`watch` remains available for ordinary independent jobs and older servers.
+Realtime remote compilation is available with `--realtime`, optionally using isolated workspace checkpoints with `--server-cache reuse`. See [realtime compilation](docs/REALTIME.md). Use realtime in preference to `watch` for continuous editing and previews; `watch` remains available for ordinary independent jobs and older servers.

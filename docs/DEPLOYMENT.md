@@ -21,10 +21,7 @@ The supplied low-cost resource presets are:
 | `lightsail-tokyo`    | 3 GiB named volume   | 1 compiler, 12 queued jobs, seven-day cache retention         |
 | `railway`            | 512 MiB named volume | 1 compiler, 5 queued jobs, 72-hour cache retention            |
 
-Use `--profile full` for the full TeX Live image. The bundler writes
-`.env.example`, `compose.yaml`, and `latexmk-deploy.json`; replace all secret
-placeholders. `--external-database` connects to an already provisioned private
-PostgreSQL service rather than adding another database container.
+Use `--profile full` for the full TeX Live image. The bundler writes `.env.example`, `compose.yaml`, and `latexmk-deploy.json`; replace all secret placeholders. `--external-database` connects to an already provisioned private PostgreSQL service rather than adding another database container.
 
 Build the runtime once before building an application image:
 
@@ -45,17 +42,13 @@ node packages/deploy/dist/index.js bundle \
   --save dist/latexmk-0.4.0.tar
 ```
 
-For production, publish the runtime and pass its immutable reference
-as `--runtime-image registry/name@sha256:...` when bundling the application.
-Server-only builds no longer install TeX. See the [deployment guide](../packages/deploy/README.md)
-for the two CI paths, fixed TeX snapshots, and external build caches.
+For production, publish the runtime and pass its immutable reference as `--runtime-image registry/name@sha256:...` when bundling the application. Server-only builds no longer install TeX. See the [deployment guide](../packages/deploy/README.md) for the two CI paths, fixed TeX snapshots, and external build caches.
 
 ## Server modes
 
 ### `none`
 
-Only for an intentionally isolated local development instance. It is not the
-bundler default and cannot be used with a deployment preset.
+Only for an intentionally isolated local development instance. It is not the bundler default and cannot be used with a deployment preset.
 
 ```sh
 LATEXMK_AUTH_MODE=none
@@ -63,11 +56,7 @@ LATEXMK_AUTH_MODE=none
 
 ### `token`
 
-One shared Bearer token without a database. This is the secure default. Static
-and bootstrap tokens require at least 24 characters and cannot contain whitespace
-or control characters. Generate a separate random value for each deployment. `LATEXMK_API_TOKEN_FILE`
-can select a regular secret file instead of an environment token; symlinked
-secret mounts are supported, and reads are limited to 64 KiB.
+One shared Bearer token without a database. This is the secure default. Static and bootstrap tokens require at least 24 characters and cannot contain whitespace or control characters. Generate a separate random value for each deployment. `LATEXMK_API_TOKEN_FILE` can select a regular secret file instead of an environment token; symlinked secret mounts are supported, and reads are limited to 64 KiB.
 
 ```sh
 LATEXMK_AUTH_MODE=token
@@ -76,8 +65,7 @@ LATEXMK_API_TOKEN="$(openssl rand -hex 32)"
 
 ### `postgres`
 
-PostgreSQL stores users and API tokens; a bootstrap token provides initial
-administration.
+PostgreSQL stores users and API tokens; a bootstrap token provides initial administration.
 
 ```sh
 LATEXMK_AUTH_MODE=postgres
@@ -86,14 +74,11 @@ DATABASE_URL='postgres://latexmk:password@postgres:5432/latexmk?sslmode=require'
 LATEXMK_BOOTSTRAP_TOKEN="$(openssl rand -hex 32)"
 ```
 
-Administration endpoints are `GET/POST /v1/admin/users`,
-`PATCH /v1/admin/users/{id}`, and `POST /v1/admin/users/{id}/tokens`. A
-plaintext API token is returned only once, in its creation response.
+Administration endpoints are `GET/POST /v1/admin/users`, `PATCH /v1/admin/users/{id}`, and `POST /v1/admin/users/{id}/tokens`. A plaintext API token is returned only once, in its creation response.
 
 ### PGlite development database
 
-PGlite socket uses the PostgreSQL protocol, so the Go server needs no alternate
-store implementation. It provides neither TLS nor production concurrency.
+PGlite socket uses the PostgreSQL protocol, so the Go server needs no alternate store implementation. It provides neither TLS nor production concurrency.
 
 ```sh
 npm install -g @electric-sql/pglite-socket
@@ -106,47 +91,19 @@ LATEXMK_BOOTSTRAP_TOKEN="$(openssl rand -hex 32)" \
 ./packages/server/dist/latexmk-server
 ```
 
-The bundler supports `--auth postgres --database pglite` for local/demo Compose
-only. The default database mode uses full PostgreSQL.
+The bundler supports `--auth postgres --database pglite` for local/demo Compose only. The default database mode uses full PostgreSQL.
 
 ## Incremental uploads, jobs, and retention
 
-The CLI creates the same validated project manifest as the legacy archive path,
-addresses every file by SHA-256, asks the server for missing hashes, uploads
-only changed content, and commits a project snapshot to a bounded queue. Each
-job runs in a separate workspace. Result archives are available through the job
-API. The synchronous `POST /v1/compile` endpoint is disabled by default and can
-be temporarily enabled with `LATEXMK_ENABLE_LEGACY_COMPILE=true` for v1 clients.
+The CLI creates the same validated project manifest as the legacy archive path, addresses every file by SHA-256, asks the server for missing hashes, uploads only changed content, and commits a project snapshot to a bounded queue. Each job runs in a separate workspace. Result archives are available through the job API. The synchronous `POST /v1/compile` endpoint is disabled by default and can be temporarily enabled with `LATEXMK_ENABLE_LEGACY_COMPILE=true` for v1 clients.
 
-Each project receives a random identity stored in
-`.latexmk-cache/project-id`, avoiding collisions when unrelated projects share
-the same container mount path. Concurrent CLI processes publish one complete ID
-atomically; this requires filesystem support for hard links. Run `latexmk cache ignore` in Git projects.
-`--legacy-project-id` exists only to clean data created by older path-derived
-identities. Remote deletion always uses a preview, a short-lived local plan that
-contains no credentials, and a server-validated digest.
+Each project receives a random identity stored in `.latexmk-cache/project-id`, avoiding collisions when unrelated projects share the same container mount path. Concurrent CLI processes publish one complete ID atomically; this requires filesystem support for hard links. Run `latexmk cache ignore` in Git projects. `--legacy-project-id` exists only to clean data created by older path-derived identities. Remote deletion always uses a preview, a short-lived local plan that contains no credentials, and a server-validated digest.
 
-`LATEXMK_STATE_DIR` defaults to `/tmp/latexmk-state`; container bundles normally
-use `/var/lib/latexmk`. `LATEXMK_MAX_STATE_BYTES` is a hard combined source-cache,
-result-archive and compiler-cache limit, including realtime checkpoints.
-A periodic sweeper expires results, snapshots, and
-unreferenced blobs according to TTL settings while preserving data referenced by
-a live upload, current project snapshot, queued/running job snapshot or
-realtime session. Session/checkpoint ownership is process-local; restarts
-require cold sessions. See [realtime deployment](REALTIME.md#runner-configuration).
-The state directory never stores plaintext API tokens.
+`LATEXMK_STATE_DIR` defaults to `/tmp/latexmk-state`; container bundles normally use `/var/lib/latexmk`. `LATEXMK_MAX_STATE_BYTES` is a hard combined source-cache, result-archive and compiler-cache limit, including realtime checkpoints. A periodic sweeper expires results, snapshots, and unreferenced blobs according to TTL settings while preserving data referenced by a live upload, current project snapshot, queued/running job snapshot or realtime session. Session/checkpoint ownership is process-local; restarts require cold sessions. See [realtime deployment](REALTIME.md#runner-configuration). The state directory never stores plaintext API tokens.
 
-Byte limits accept positive integer byte counts or decimal values with
-case-insensitive `KB`, `MB`, `GB` (powers of 1000) and `KiB`, `MiB`, `GiB`
-(powers of 1024). For example, `1.5MiB` is 1,572,864 bytes. Fractional byte
-remainders are truncated after exact decimal scaling; values below one byte, nonfinite numbers and overflow
-are rejected. Feature-specific documented zero values, such as
-`LATEXMK_MAX_COMPILE_CACHE_BYTES=0`, disable that feature.
+Byte limits accept positive integer byte counts or decimal values with case-insensitive `KB`, `MB`, `GB` (powers of 1000) and `KiB`, `MiB`, `GiB` (powers of 1024). For example, `1.5MiB` is 1,572,864 bytes. Fractional byte remainders are truncated after exact decimal scaling; values below one byte, nonfinite numbers and overflow are rejected. Feature-specific documented zero values, such as `LATEXMK_MAX_COMPILE_CACHE_BYTES=0`, disable that feature.
 
-Compiler-cache and runner workspace limits also reserve space for derived
-archive budgets. Values that overflow those budgets are rejected during
-configuration validation, before the server starts. Queue dispatch and runner entry counts also reject
-overflow. Isolated runners require a compile timeout of at least 1 ms.
+Compiler-cache and runner workspace limits also reserve space for derived archive budgets. Values that overflow those budgets are rejected during configuration validation, before the server starts. Queue dispatch and runner entry counts also reject overflow. Isolated runners require a compile timeout of at least 1 ms.
 
 ## Dashboard
 
@@ -154,16 +111,10 @@ overflow. Isolated runners require a compile timeout of at least 1 ms.
 pnpm --filter @latexmk/dashboard dev
 ```
 
-The development server proxies `/v1` to the local server. The console can use a
-different API URL and Bearer token, displays jobs and capabilities, downloads
-results, and manages users/tokens in administrator mode. Compilation remains
-submitted through the safe local CLI.
+The development server proxies `/v1` to the local server. The console can use a different API URL and Bearer token, displays jobs and capabilities, downloads results, and manages users/tokens in administrator mode. Compilation remains submitted through the safe local CLI.
 
 ## Metadata
 
-`GET /v1/meta` returns the protocol, server version, commit, build date, image
-profile, engines, resource and cache-retention limits, shell-escape/workspace/
-rc-file policies, toolchain versions, and Go/OS/architecture information. Each
-compile result also contains `serverVersion` and `imageProfile`.
+`GET /v1/meta` returns the protocol, server version, commit, build date, image profile, engines, resource and cache-retention limits, shell-escape/workspace/ rc-file policies, toolchain versions, and Go/OS/architecture information. Each compile result also contains `serverVersion` and `imageProfile`.
 
 See [runtime fonts](FONTS.md) for font coverage, per-image inventories and custom fonts.

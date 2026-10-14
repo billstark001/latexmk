@@ -1,19 +1,12 @@
 # Agent-facing CLI contract
 
-Status: version 1 draft implemented for detached compile, jobs, logs,
-diagnostics, artifacts, and pack.
+Status: version 1 draft implemented for detached compile, jobs, logs, diagnostics, artifacts, and pack.
 
-This contract is for local agents and scripts. The CLI uses the same token,
-timeout, and TLS configuration as interactive commands. It never prints the
-token or Authorization header.
+This contract is for local agents and scripts. The CLI uses the same token, timeout, and TLS configuration as interactive commands. It never prints the token or Authorization header.
 
 ## Compatibility
 
-New Agent-facing commands use a versioned JSON envelope. Existing JSON output
-from `compile`, `files`, `meta`, `cache ignore`, and `remote clean` remains
-unchanged for now. Those commands
-will move to the versioned contract only through an explicit compatibility
-mechanism. Their current top-level JSON shape will not change silently.
+New Agent-facing commands use a versioned JSON envelope. Existing JSON output from `compile`, `files`, `meta`, `cache ignore`, and `remote clean` remains unchanged for now. Those commands will move to the versioned contract only through an explicit compatibility mechanism. Their current top-level JSON shape will not change silently.
 
 ## Envelope
 
@@ -44,9 +37,7 @@ Failure:
 }
 ```
 
-With `--json`, stdout contains exactly one JSON value followed by a newline.
-Progress text belongs on stderr. Consumers must check both `ok` and the process
-exit status. Unknown fields must be ignored within the same schema version.
+With `--json`, stdout contains exactly one JSON value followed by a newline. Progress text belongs on stderr. Consumers must check both `ok` and the process exit status. Unknown fields must be ignored within the same schema version.
 
 Exit status:
 
@@ -75,13 +66,7 @@ Stable error codes currently include:
 
 ## Pack
 
-`latexmk pack --json` returns command `pack`, with mode, output, entry, engine,
-files, `requiresBuild`, `verified`, optional `buildJobId`, and warnings in `data`.
-Each member reports `path`, `size`, `sha256` and its selection `reason`; private
-capture paths are never included. `engine` remains an opaque string key.
-Dry-run previews of arXiv/verified packages report pending build work explicitly;
-see [source packages](PACKING.md). Both pack modes preserve the same envelope and
-error/exit-status contract.
+`latexmk pack --json` returns command `pack`, with mode, output, entry, engine, files, `requiresBuild`, `verified`, optional `buildJobId`, and warnings in `data`. Each member reports `path`, `size`, `sha256` and its selection `reason`; private capture paths are never included. `engine` remains an opaque string key. Dry-run previews of arXiv/verified packages report pending build work explicitly; see [source packages](PACKING.md). Both pack modes preserve the same envelope and error/exit-status contract.
 
 ## Detached compile
 
@@ -89,19 +74,11 @@ error/exit-status contract.
 latexmk compile --detach --json main.tex
 ```
 
-The entry may be omitted when `defaultTarget` selects a configured target or
-exactly one target exists. An ambiguous target configuration returns an argument
-error before upload.
+The entry may be omitted when `defaultTarget` selects a configured target or exactly one target exists. An ambiguous target configuration returns an argument error before upload.
 
-The command applies the normal project-root, Git-ignore, denylist, dependency,
-manifest, TLS, and token policies. It uploads the selected files, commits one
-immutable snapshot, and returns after the queued job is created. It does not
-poll, download artifacts, or perform automatic missing-file retries.
+The command applies the normal project-root, Git-ignore, denylist, dependency, manifest, TLS, and token policies. It uploads the selected files, commits one immutable snapshot, and returns after the queued job is created. It does not poll, download artifacts, or perform automatic missing-file retries.
 
-The success command is `compile.start`. Its data contains `job` and optional
-manifest-selection `warnings`. Detached compile requires a server that supports
-queued jobs and incremental uploads. Use `jobs show` to poll the returned job
-ID.
+The success command is `compile.start`. Its data contains `job` and optional manifest-selection `warnings`. Detached compile requires a server that supports queued jobs and incremental uploads. Use `jobs show` to poll the returned job ID.
 
 ## Jobs
 
@@ -111,11 +88,7 @@ latexmk jobs show JOB_ID --json
 latexmk jobs cancel JOB_ID --json
 ```
 
-`jobs.list` returns `jobs`, `count`, and the applied `limit`. Jobs are sorted
-newest first, with ID as the stable tie-breaker. `jobs.show` and `jobs.cancel`
-return one job object. Cancellation accepts queued jobs and running jobs on the
-owning server instance, including a running job awaiting deferred completion persistence.
-Finished jobs and running jobs owned by another instance cannot be cancelled.
+`jobs.list` returns `jobs`, `count`, and the applied `limit`. Jobs are sorted newest first, with ID as the stable tie-breaker. `jobs.show` and `jobs.cancel` return one job object. Cancellation accepts queued jobs and running jobs on the owning server instance, including a running job awaiting deferred completion persistence. Finished jobs and running jobs owned by another instance cannot be cancelled.
 
 ## Logs, diagnostics, and artifacts
 
@@ -126,37 +99,13 @@ latexmk artifacts list JOB_ID --json
 latexmk artifacts get JOB_ID ARTIFACT_ID --out-dir ./build --json
 ```
 
-Logs distinguish `stdout`, `stderr`, and TeX-generated `compiler` logs. The
-byte limit applies across all returned entries and is capped at 4 MiB. Content
-is streamed through a bounded tail buffer; large PDFs and unrelated artifacts
-are not loaded into memory. The budget counts returned UTF-8 bytes, including
-replacement characters for invalid compiler output; a very small budget can
-return an empty tail when a complete character does not fit. Compiler logs are
-checked against job metadata. Duplicate archive members and corrupt or truncated
-gzip envelopes are rejected.
+Logs distinguish `stdout`, `stderr`, and TeX-generated `compiler` logs. The byte limit applies across all returned entries and is capped at 4 MiB. Content is streamed through a bounded tail buffer; large PDFs and unrelated artifacts are not loaded into memory. The budget counts returned UTF-8 bytes, including replacement characters for invalid compiler output; a very small budget can return an empty tail when a complete character does not fit. Compiler logs are checked against job metadata. Duplicate archive members and corrupt or truncated gzip envelopes are rejected.
 
-`diagnostics.get` scans the complete raw log streams without retaining them in
-memory. It returns at most 100 deduplicated common TeX errors and warnings.
-Each diagnostic contains `severity`, optional project-relative `file` and
-`line`, `message`, optional bounded `context`, and one or more `logLocations`.
-`fileInferred: true` distinguishes a filename inferred from TeX's open-file
-trace from an explicit `-file-line-error` location.
-A location identifies the raw log `source`, `path`, and exact `startLine` and
-`endLine`. Duplicate messages from stdout and a compiler log are merged while
-keeping both locations. Messages, source context, locations, selected log
-count, and input line length are bounded. `incomplete: true` means the caller
-must inspect `logs`; an empty or apparently insufficient index should also
-fall back to raw logs. Diagnostics are an index, not an authoritative parser or
-a replacement for the original output.
+`diagnostics.get` scans the complete raw log streams without retaining them in memory. It returns at most 100 deduplicated common TeX errors and warnings. Each diagnostic contains `severity`, optional project-relative `file` and `line`, `message`, optional bounded `context`, and one or more `logLocations`. `fileInferred: true` distinguishes a filename inferred from TeX's open-file trace from an explicit `-file-line-error` location. A location identifies the raw log `source`, `path`, and exact `startLine` and `endLine`. Duplicate messages from stdout and a compiler log are merged while keeping both locations. Messages, source context, locations, selected log count, and input line length are bounded. `incomplete: true` means the caller must inspect `logs`; an empty or apparently insufficient index should also fall back to raw logs. Diagnostics are an index, not an authoritative parser or a replacement for the original output.
 
-Artifact list returns an opaque, deterministic 128-bit ID derived from the
-declared project-relative artifact path. Download accepts only that ID, checks
-size and SHA-256, rejects unsafe output paths and symlinks, and returns the
-absolute local path and MIME type. Binary data is never embedded in JSON.
+Artifact list returns an opaque, deterministic 128-bit ID derived from the declared project-relative artifact path. Download accepts only that ID, checks size and SHA-256, rejects unsafe output paths and symlinks, and returns the absolute local path and MIME type. Binary data is never embedded in JSON.
 
-Job list output is bounded to 1 through 200 jobs. Log, diagnostic, and artifact
-commands use their own bounded contracts; they do not embed PDF data or
-unbounded logs in this envelope.
+Job list output is bounded to 1 through 200 jobs. Log, diagnostic, and artifact commands use their own bounded contracts; they do not embed PDF data or unbounded logs in this envelope.
 
 ## Remote cleanup
 
@@ -165,9 +114,4 @@ latexmk remote clean --scope results --json
 latexmk remote clean --plan-id PLAN_ID --yes --json
 ```
 
-The first command is always a preview and returns `planId`, `expiresAt`, and a
-report containing the server-issued `planDigest`. The local ten-minute plan
-contains the server, project ID, scope, and digest, but no token. The second
-command requires that exact plan, current credentials, and the current local
-project identity; it consumes the plan only after a successful matching server
-response. These two JSON responses are currently unversioned as noted above.
+The first command is always a preview and returns `planId`, `expiresAt`, and a report containing the server-issued `planDigest`. The local ten-minute plan contains the server, project ID, scope, and digest, but no token. The second command requires that exact plan, current credentials, and the current local project identity; it consumes the plan only after a successful matching server response. These two JSON responses are currently unversioned as noted above.

@@ -2,9 +2,7 @@
 
 ## Deployment presets
 
-The deployment bundler can emit resource settings tuned for the usual small
-deployment shapes. Use a preset with a secure authentication mode; an external
-PostgreSQL service is supported without bundling a database container.
+The deployment bundler can emit resource settings tuned for the usual small deployment shapes. Use a preset with a secure authentication mode; an external PostgreSQL service is supported without bundling a database container.
 
 ```sh
 node packages/deploy/dist/index.js bundle \
@@ -14,35 +12,19 @@ node packages/deploy/dist/index.js bundle \
   --out dist/railway-serverless
 ```
 
-| Preset               | Intended use                                    | Compile / queue |    State cache |                          Retention |
-| -------------------- | ----------------------------------------------- | --------------: | -------------: | ---------------------------------: |
-| `railway-serverless` | Short-lived Railway instance, low-to-medium use |           1 / 2 |  256 MiB tmpfs | results 24 h; snapshots/blobs 48 h |
-| `lightsail-tokyo`    | Always-on 2 GiB Lightsail instance in Tokyo     |          1 / 12 |   3 GiB volume |                             7 days |
-| `railway`            | Always-on Railway service                       |           1 / 5 | 512 MiB volume |                               72 h |
+| Preset | Intended use | Compile / queue | State cache | Retention |
+| --- | --- | --: | --: | --: |
+| `railway-serverless` | Short-lived Railway instance, low-to-medium use | 1 / 2 | 256 MiB tmpfs | results 24 h; snapshots/blobs 48 h |
+| `lightsail-tokyo` | Always-on 2 GiB Lightsail instance in Tokyo | 1 / 12 | 3 GiB volume | 7 days |
+| `railway` | Always-on Railway service | 1 / 5 | 512 MiB volume | 72 h |
 
-All three presets keep a single compiler running at a time. This is deliberate:
-XeLaTeX, Biber, TikZ, large images, and CJK fonts can transiently consume far
-more memory and temporary disk than a small instance has available. Raise
-concurrency only after measuring the largest real document on the selected
-image and instance size.
+All three presets keep a single compiler running at a time. This is deliberate: XeLaTeX, Biber, TikZ, large images, and CJK fonts can transiently consume far more memory and temporary disk than a small instance has available. Raise concurrency only after measuring the largest real document on the selected image and instance size.
 
-The server still enforces `LATEXMK_MAX_STATE_BYTES` synchronously. The periodic
-sweeper bounds normal cache growth: result archives expire first, project
-snapshots expire next, and blobs are deleted only when no live upload, current
-project snapshot, queued/running job snapshot or realtime session refers to them.
-Session checkpoints count toward the same state quota. A result whose
-retention period has elapsed remains in job history but can no longer be
-downloaded.
+The server still enforces `LATEXMK_MAX_STATE_BYTES` synchronously. The periodic sweeper bounds normal cache growth: result archives expire first, project snapshots expire next, and blobs are deleted only when no live upload, current project snapshot, queued/running job snapshot or realtime session refers to them. Session checkpoints count toward the same state quota. A result whose retention period has elapsed remains in job history but can no longer be downloaded.
 
-Database migration adds immutable snapshot fields to queued jobs. Historical
-finished jobs from older versions remain readable. An old `queued` or `running`
-job without a stored manifest is marked failed during startup and must be
-submitted again; the server never substitutes the current project version.
+Database migration adds immutable snapshot fields to queued jobs. Historical finished jobs from older versions remain readable. An old `queued` or `running` job without a stored manifest is marked failed during startup and must be submitted again; the server never substitutes the current project version.
 
-For Railway Serverless, the state directory is deliberately in `/tmp`; cache
-reuse lasts only for the running instance. For Lightsail and always-on Railway,
-the generated Compose configuration uses a named volume. A volume is helpful
-for repeated work on one paper, but it is not a database backup.
+For Railway Serverless, the state directory is deliberately in `/tmp`; cache reuse lasts only for the running instance. For Lightsail and always-on Railway, the generated Compose configuration uses a named volume. A volume is helpful for repeated work on one paper, but it is not a database backup.
 
 ## Baseline sizing
 
@@ -52,55 +34,47 @@ For a research-group instance start with:
 - 2–4 GiB RAM;
 - 1–4 GiB of `/tmp` space;
 - `LATEXMK_MAX_CONCURRENT_COMPILES=1` (or `2` only after testing);
-- an edge/PaaS request timeout at least 30 seconds above
-  `LATEXMK_COMPILE_TIMEOUT`.
+- an edge/PaaS request timeout at least 30 seconds above `LATEXMK_COMPILE_TIMEOUT`.
 
-TikZ, complex fonts, Glossaries, Biber, and large images substantially increase
-CPU, memory, and temporary-disk requirements.
+TikZ, complex fonts, Glossaries, Biber, and large images substantially increase CPU, memory, and temporary-disk requirements.
 
 ## Important environment variables
 
-| Variable                          | Default                                                                                |
-| --------------------------------- | -------------------------------------------------------------------------------------- |
-| `PORT`                            | `8080`                                                                                 |
-| `LATEXMK_AUTH_MODE`               | `token`                                                                                |
-| `LATEXMK_API_TOKEN_FILE`          | empty; mutually exclusive with `LATEXMK_API_TOKEN`; regular-file symlinks are accepted |
-| `LATEXMK_IMAGE_PROFILE`           | `development`                                                                          |
-| `LATEXMK_ENGINES`                 | `xelatex,lualatex,pdflatex`                                                            |
-| `LATEXMK_COMPILE_TIMEOUT`         | `2m`                                                                                   |
-| `LATEXMK_MAX_UPLOAD_BYTES`        | `64MiB` per v2 blob                                                                    |
-| `LATEXMK_MAX_EXPANDED_BYTES`      | `256MiB` per project                                                                   |
-| `LATEXMK_MAX_ARTIFACT_BYTES`      | `128MiB`                                                                               |
-| `LATEXMK_MAX_FILES`               | `10000`                                                                                |
-| `LATEXMK_MAX_CONCURRENT_COMPILES` | `CPU/2`, minimum 1                                                                     |
-| `LATEXMK_MAX_QUEUED_JOBS`         | `100`                                                                                  |
-| `LATEXMK_MAX_UPLOAD_SESSIONS`     | `64`                                                                                   |
-| `LATEXMK_MAX_LOG_BYTES`           | `8MiB` per stream                                                                      |
-| `LATEXMK_MAX_STATE_BYTES`         | `2GiB`                                                                                 |
-| `LATEXMK_RESULT_RETENTION`        | `168h`                                                                                 |
-| `LATEXMK_SNAPSHOT_RETENTION`      | `168h`                                                                                 |
-| `LATEXMK_BLOB_RETENTION`          | `168h`                                                                                 |
-| `LATEXMK_STATE_SWEEP_INTERVAL`    | `1h`                                                                                   |
-| `LATEXMK_ALLOW_SHELL_ESCAPE`      | `false`                                                                                |
-| `LATEXMK_ENABLE_LEGACY_COMPILE`   | `false`                                                                                |
-| `LATEXMK_TEMP_DIR`                | system temporary directory                                                             |
-| `LATEXMK_STATE_DIR`               | `/tmp/latexmk-state`                                                                   |
-| `LATEXMK_DATABASE_MODE`           | `postgres` (`pglite` is supported)                                                     |
-| `LATEXMK_CORS_ORIGINS`            | empty (same-origin); comma-separated exact Dashboard origins                           |
+| Variable | Default |
+| --- | --- |
+| `PORT` | `8080` |
+| `LATEXMK_AUTH_MODE` | `token` |
+| `LATEXMK_API_TOKEN_FILE` | empty; mutually exclusive with `LATEXMK_API_TOKEN`; regular-file symlinks are accepted |
+| `LATEXMK_IMAGE_PROFILE` | `development` |
+| `LATEXMK_ENGINES` | `xelatex,lualatex,pdflatex` |
+| `LATEXMK_COMPILE_TIMEOUT` | `2m` |
+| `LATEXMK_MAX_UPLOAD_BYTES` | `64MiB` per v2 blob |
+| `LATEXMK_MAX_EXPANDED_BYTES` | `256MiB` per project |
+| `LATEXMK_MAX_ARTIFACT_BYTES` | `128MiB` |
+| `LATEXMK_MAX_FILES` | `10000` |
+| `LATEXMK_MAX_CONCURRENT_COMPILES` | `CPU/2`, minimum 1 |
+| `LATEXMK_MAX_QUEUED_JOBS` | `100` |
+| `LATEXMK_MAX_UPLOAD_SESSIONS` | `64` |
+| `LATEXMK_MAX_LOG_BYTES` | `8MiB` per stream |
+| `LATEXMK_MAX_STATE_BYTES` | `2GiB` |
+| `LATEXMK_RESULT_RETENTION` | `168h` |
+| `LATEXMK_SNAPSHOT_RETENTION` | `168h` |
+| `LATEXMK_BLOB_RETENTION` | `168h` |
+| `LATEXMK_STATE_SWEEP_INTERVAL` | `1h` |
+| `LATEXMK_ALLOW_SHELL_ESCAPE` | `false` |
+| `LATEXMK_ENABLE_LEGACY_COMPILE` | `false` |
+| `LATEXMK_TEMP_DIR` | system temporary directory |
+| `LATEXMK_STATE_DIR` | `/tmp/latexmk-state` |
+| `LATEXMK_DATABASE_MODE` | `postgres` (`pglite` is supported) |
+| `LATEXMK_CORS_ORIGINS` | empty (same-origin); comma-separated exact Dashboard origins |
 
-Invalid booleans, durations, byte sizes, resource limits, or CORS origins fail
-server startup instead of silently falling back. A CORS origin must be an exact
-`http://` or `https://` origin; `*` and path-bearing URLs are rejected.
+Invalid booleans, durations, byte sizes, resource limits, or CORS origins fail server startup instead of silently falling back. A CORS origin must be an exact `http://` or `https://` origin; `*` and path-bearing URLs are rejected.
 
-`LATEXMK_RESULT_RETENTION` also bounds terminal job metadata. Shutdown first
-stops HTTP admission, then cancels and waits for compile workers up to
-`LATEXMK_SHUTDOWN_TIMEOUT`.
+`LATEXMK_RESULT_RETENTION` also bounds terminal job metadata. Shutdown first stops HTTP admission, then cancels and waits for compile workers up to `LATEXMK_SHUTDOWN_TIMEOUT`.
 
 ## Image pinning
 
-Build the TeX runtime separately using `latexmk-deploy runtime-bundle`. The
-runtime lock pins upstream images and a matching date-specific TeX repository.
-Publish the runtime, then pin the application to its digest:
+Build the TeX runtime separately using `latexmk-deploy runtime-bundle`. The runtime lock pins upstream images and a matching date-specific TeX repository. Publish the runtime, then pin the application to its digest:
 
 ```sh
 node packages/deploy/dist/index.js bundle \
@@ -109,17 +83,9 @@ node packages/deploy/dist/index.js bundle \
   --out dist/app
 ```
 
-Replace the placeholder with the published digest. The application Dockerfile
-only compiles/copies the server binary. A cold PaaS builder pulls the runtime;
-it does not install thousands of TeX packages. See the [deployment guide](../packages/deploy/README.md)
-for runtime publishing, automatic CI selection, cache import/export, and measurement.
+Replace the placeholder with the published digest. The application Dockerfile only compiles/copies the server binary. A cold PaaS builder pulls the runtime; it does not install thousands of TeX packages. See the [deployment guide](../packages/deploy/README.md) for runtime publishing, automatic CI selection, cache import/export, and measurement.
 
-CI selects runtimes automatically from the hash of each profile's actual build
-inputs. Missing recipes are built and verified before the application uses their
-immutable digests; server-only updates reuse the verified recipe. Repository
-runtime variables and the old variable-update script are no longer needed.
-See [automatic image CI](../packages/deploy/README.md#automatic-image-ci) for
-branch testing without publication, deliberate OS refreshes, and failure behavior.
+CI selects runtimes automatically from the hash of each profile's actual build inputs. Missing recipes are built and verified before the application uses their immutable digests; server-only updates reuse the verified recipe. Repository runtime variables and the old variable-update script are no longer needed. See [automatic image CI](../packages/deploy/README.md#automatic-image-ci) for branch testing without publication, deliberate OS refreshes, and failure behavior.
 
 Use `latexmk meta` to verify the remote toolchain actually running the image.
 
@@ -133,33 +99,17 @@ latexmk --realtime --server-cache reuse --target paper
 latexmk watch --target paper
 ```
 
-Configure both modes through `watch.{interval,debounce,maxWait}` in the user
-or project JSON, or through `LATEXMK_WATCH_*` and CLI flags. See
-[watch configuration](CONFIGURATION.md#watching-changes). Realtime workspace
-reuse requires the isolated runner; fresh realtime sessions can use the native
-compiler. [Realtime deployment](REALTIME.md#runner-configuration) documents
-runner/session limits, explicit lease renewal and restart behavior.
+Configure both modes through `watch.{interval,debounce,maxWait}` in the user or project JSON, or through `LATEXMK_WATCH_*` and CLI flags. See [watch configuration](CONFIGURATION.md#watching-changes). Realtime workspace reuse requires the isolated runner; fresh realtime sessions can use the native compiler. [Realtime deployment](REALTIME.md#runner-configuration) documents runner/session limits, explicit lease renewal and restart behavior.
 
 ## PostgreSQL and PGlite
 
-The server uses GORM/pgx over the PostgreSQL protocol and creates its tables and
-indexes on startup. Full PostgreSQL should only be reachable by the server, via
-TLS or a PaaS private network. PGlite socket does not provide TLS and should be
-restricted to single-instance development or demonstrations; its URL must use
-`sslmode=disable`.
+The server uses GORM/pgx over the PostgreSQL protocol and creates its tables and indexes on startup. Full PostgreSQL should only be reachable by the server, via TLS or a PaaS private network. PGlite socket does not provide TLS and should be restricted to single-instance development or demonstrations; its URL must use `sslmode=disable`.
 
-`LATEXMK_STATE_DIR` holds content-addressed source blobs and job result
-archives. Do not expose it as a static-file directory. Keep its volume
-permission-restricted, bounded, and covered by an explicit retention policy.
+`LATEXMK_STATE_DIR` holds content-addressed source blobs and job result archives. Do not expose it as a static-file directory. Keep its volume permission-restricted, bounded, and covered by an explicit retention policy.
 
-When Dashboard and API have different origins, add the Dashboard's exact origin
-(for example `https://latex-console.example.edu`) to
-`LATEXMK_CORS_ORIGINS`. Do not use `*` for a console that holds administrative
-tokens.
+When Dashboard and API have different origins, add the Dashboard's exact origin (for example `https://latex-console.example.edu`) to `LATEXMK_CORS_ORIGINS`. Do not use `*` for a console that holds administrative tokens.
 
-Store bootstrap tokens in the PaaS secret manager, never in the image or the
-repository. The bootstrap token is an emergency administrator credential; rotate
-or remove it after a separate recovery route exists.
+Store bootstrap tokens in the PaaS secret manager, never in the image or the repository. The bootstrap token is an emergency administrator credential; rotate or remove it after a separate recovery route exists.
 
 ## Monitoring
 
@@ -173,5 +123,4 @@ Collect at least:
 - active compiles, queued jobs, realtime sessions and PaaS queue time;
 - cache sweep errors and reclaimed bytes.
 
-Logs are JSON and include `request_id`; they do not log project content, tokens,
-or database URLs.
+Logs are JSON and include `request_id`; they do not log project content, tokens, or database URLs.
