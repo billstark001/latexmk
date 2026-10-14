@@ -4,10 +4,6 @@
   "tabWidth": 2,
   "useTabs": false,
   "singleQuote": true,
-  "ignorePatterns": [
-    "pnpm-lock.yaml",
-    "**/dist/**",
-    "**/node_modules/**"
-  ],
+  "ignorePatterns": ["pnpm-lock.yaml", "**/dist/**", "**/node_modules/**"],
   "proseWrap": "never"
 }
