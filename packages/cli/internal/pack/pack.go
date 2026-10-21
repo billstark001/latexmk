@@ -4,6 +4,8 @@ package pack
 import (
 	"archive/zip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -100,34 +102,86 @@ func Merge(sources, generated []projectarchive.File) ([]projectarchive.File, err
 	return files, nil
 }
 
-// Write publishes atomically only after every member passes its captured hash.
-// Sorted paths, fixed timestamps and modes make identical snapshots reproducible.
-func Write(ctx context.Context, output string, files []projectarchive.File) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
+// ValidateOutput checks the entire destination before selection, verification
+// or directory creation. The same policy is used by the actual writer.
+func ValidateOutput(output string) error {
 	if !strings.EqualFold(filepath.Ext(output), ".zip") {
 		return errors.New("pack output must have a .zip extension")
 	}
-	if err := os.MkdirAll(filepath.Dir(output), 0700); err != nil {
+	return safefs.ValidateOutputPath(output)
+}
+
+// Write publishes atomically only after every member passes its captured hash.
+// Sorted paths, fixed timestamps and modes make identical snapshots reproducible.
+func Write(ctx context.Context, output string, files []projectarchive.File) error {
+	prepared, err := Prepare(ctx, output, files)
+	if err != nil {
 		return err
+	}
+	defer func() { _ = prepared.Close() }()
+	return prepared.Commit()
+}
+
+// Prepared owns a verified ZIP staged at its destination. Its metadata is
+// available before Commit, so adapters can prepare bookkeeping before publication.
+type Prepared struct {
+	Size    int64
+	SHA256  string
+	root    *safefs.Root
+	pending *safefs.Pending
+	ctx     context.Context
+}
+
+func (p *Prepared) Commit() error {
+	if p.pending == nil {
+		return errors.New("prepared ZIP is closed")
+	}
+	if err := p.ctx.Err(); err != nil {
+		return err
+	}
+	return p.pending.Commit()
+}
+
+func (p *Prepared) Close() error {
+	if p.root == nil {
+		return nil
+	}
+	err := errors.Join(p.pending.Close(), p.root.Close())
+	p.root, p.pending = nil, nil
+	return err
+}
+
+func Prepare(ctx context.Context, output string, files []projectarchive.File) (*Prepared, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := ValidateOutput(output); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(output), 0700); err != nil {
+		return nil, err
 	}
 	root, err := safefs.Open(filepath.Dir(output))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer func() { _ = root.Close() }()
+	hash := sha256.New()
 	pending, err := root.Stage(filepath.Base(output), MaxBytes+maxZIPOverheadBytes, func(dst io.Writer) error {
-		return writeZIP(ctx, dst, files)
+		return writeZIP(ctx, io.MultiWriter(dst, hash), files)
 	})
 	if err != nil {
-		return err
+		return nil, errors.Join(err, root.Close())
 	}
-	defer func() { _ = pending.Close() }()
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, errors.Join(err, pending.Close(), root.Close())
 	}
-	return pending.Commit()
+	return &Prepared{
+		Size:    pending.Size,
+		SHA256:  hex.EncodeToString(hash.Sum(nil)),
+		root:    root,
+		pending: pending,
+		ctx:     ctx,
+	}, nil
 }
 
 func writeZIP(ctx context.Context, dst io.Writer, files []projectarchive.File) (err error) {

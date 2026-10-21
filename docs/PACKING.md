@@ -8,11 +8,14 @@ latexmk pack --target paper --output paper.zip
 latexmk pack --mode arxiv --target paper --output paper-arxiv.zip
 latexmk pack --mode default --verify --engine pdflatex main.tex
 latexmk pack --mode arxiv --dry-run --json main.tex
+latexmk pack main.tex --output-template 'release/{entry.stem}-{date}-{git.commit:8}.zip'
 ```
 
 `--mode` accepts only `default` and `arxiv`, defaulting to `default`. The default output is `ENTRY-default.zip` or `ENTRY-arxiv.zip` in the resolved `outDir`; an explicit `--output` is relative to the working directory. The output must end in `.zip` and is excluded from its own selection. Existing outputs are replaced atomically only after all members pass their captured size and SHA-256 checks. Sorted paths, fixed timestamps, and regular-file modes make identical packages reproducible within the same CLI/compression implementation. Failed builds, verification, or writes preserve the previous ZIP. Local capture/packing is bounded to 20,000 files and 2 GiB of expanded contents; verified builds must also satisfy the server’s advertised source and artifact limits.
 
 ## Default mode
+
+`--output-template` renders an explicit [naming template](NAMING.md) and is mutually exclusive with literal `--output`. Template ZIPs inside the project record export history so subsequent packages exclude older generated ZIPs too. This may create `.latexmk-cache/exports/`, including in offline mode, but does not create a local project ID. Target PDF templates and retention do not apply to pack. Dry-run validates the rendered destination and creates neither the ZIP nor export history.
 
 Default mode exports the selected sources and preserves the directory structure. It needs no server connection or credential-file reads and does not create a local project ID. Selection can conservatively include unused conditional inputs or recorder history; it is not a proof of the smallest possible TeX dependency set. Computed references still require a reviewed `manifest`, just as they do for ordinary compilation. There is no automatic selection of every project file.
 

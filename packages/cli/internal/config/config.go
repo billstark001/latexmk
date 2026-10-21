@@ -25,11 +25,22 @@ const maxTokenFileSize = 64 << 10
 const maxConfigFileSize = 1 << 20
 
 type Target struct {
-	Entry        string   `json:"entry"`
-	Engine       string   `json:"engine,omitempty"`
-	OutDir       string   `json:"outDir,omitempty"`
-	PDF          string   `json:"pdf,omitempty"`
-	IncludeFiles []string `json:"includeFiles,omitempty"`
+	Entry        string        `json:"entry"`
+	Engine       string        `json:"engine,omitempty"`
+	OutDir       string        `json:"outDir,omitempty"`
+	PDF          string        `json:"pdf,omitempty"`
+	PDFTemplate  string        `json:"pdfTemplate,omitempty"`
+	PDFRetention *PDFRetention `json:"pdfRetention,omitempty"`
+	IncludeFiles []string      `json:"includeFiles,omitempty"`
+}
+
+type NamingConfig struct {
+	Scope    string `json:"scope,omitempty"`
+	TimeZone string `json:"timeZone,omitempty"`
+}
+
+type PDFRetention struct {
+	KeepLast *int `json:"keepLast,omitempty"`
 }
 
 type WatchConfig struct {
@@ -45,7 +56,10 @@ type WatchSettings struct {
 }
 
 type FileConfig struct {
-	Watch         *WatchConfig `json:"watch,omitempty"`
+	Watch         *WatchConfig  `json:"watch,omitempty"`
+	Naming        *NamingConfig `json:"naming,omitempty"`
+	PDFTemplate   string        `json:"pdfTemplate,omitempty"`
+	PDFRetention  *PDFRetention `json:"pdfRetention,omitempty"`
 	tokenSource   *ValueSource
 	TokenMode     string            `json:"tokenMode,omitempty"`
 	TokenFile     string            `json:"tokenFile,omitempty"`
@@ -74,6 +88,9 @@ type FileConfig struct {
 
 type Resolved struct {
 	Watch         WatchSettings
+	Naming        NamingConfig
+	PDFTemplate   string
+	PDFRetention  *PDFRetention
 	TokenMode     string
 	TokenSource   string
 	EnvPath       string
@@ -143,6 +160,7 @@ func load(start string, envOverride *string) (Resolved, error) {
 	respectGitIgnore := true
 	cfg := FileConfig{
 		Watch:     &WatchConfig{Interval: "500ms", Debounce: "500ms", MaxWait: "2.5s"},
+		Naming:    &NamingConfig{Scope: "invocation", TimeZone: "local"},
 		TokenMode: "auto", UnmatchedGlob: "error",
 		Server:           ServerSources{LiteralSource("http://127.0.0.1:8080")},
 		RootMode:         "entry",
@@ -278,6 +296,29 @@ func load(start string, envOverride *string) (Resolved, error) {
 	if err != nil {
 		return Resolved{}, err
 	}
+	if cfg.Naming == nil {
+		return Resolved{}, errors.New("naming must be an object")
+	}
+	if v := get("LATEXMK_NAME_SCOPE"); v != "" {
+		cfg.Naming.Scope = v
+	}
+	if v := get("LATEXMK_NAME_TIMEZONE"); v != "" {
+		cfg.Naming.TimeZone = v
+	}
+	if err := ValidateNaming(*cfg.Naming); err != nil {
+		return Resolved{}, err
+	}
+	if err := ValidateRetention(cfg.PDFRetention); err != nil {
+		return Resolved{}, err
+	}
+	for name, target := range cfg.Targets {
+		if target.PDF != "" && target.PDFTemplate != "" {
+			return Resolved{}, fmt.Errorf("target %q: pdf and pdfTemplate are mutually exclusive", name)
+		}
+		if err := ValidateRetention(target.PDFRetention); err != nil {
+			return Resolved{}, fmt.Errorf("target %q: %w", name, err)
+		}
+	}
 
 	root := cfg.ProjectRoot
 	if root != "" && !filepath.IsAbs(root) {
@@ -301,6 +342,9 @@ func load(start string, envOverride *string) (Resolved, error) {
 	respectGitIgnore = cfg.RespectGitIgnore == nil || *cfg.RespectGitIgnore
 	return Resolved{
 		Watch:         watch,
+		Naming:        *cfg.Naming,
+		PDFTemplate:   cfg.PDFTemplate,
+		PDFRetention:  cfg.PDFRetention,
 		TokenMode:     cfg.TokenMode,
 		EnvPath:       envPath,
 		IgnoreFiles:   cfg.IgnoreFiles,
@@ -347,6 +391,25 @@ func load(start string, envOverride *string) (Resolved, error) {
 		ConfigPath:         path,
 		UserConfigPath:     userPath,
 	}, nil
+}
+
+func ValidateNaming(n NamingConfig) error {
+	if n.Scope != "" && n.Scope != "invocation" && n.Scope != "build" {
+		return errors.New("naming.scope must be invocation or build")
+	}
+	if n.TimeZone != "" && n.TimeZone != "local" {
+		if _, err := time.LoadLocation(n.TimeZone); err != nil {
+			return fmt.Errorf("invalid naming.timeZone %q: %w", n.TimeZone, err)
+		}
+	}
+	return nil
+}
+
+func ValidateRetention(r *PDFRetention) error {
+	if r != nil && r.KeepLast != nil && *r.KeepLast < 1 {
+		return errors.New("pdfRetention.keepLast must be a positive integer or null (keep all)")
+	}
+	return nil
 }
 
 func resolveWatch(cfg *WatchConfig, get func(string) string) (WatchSettings, error) {

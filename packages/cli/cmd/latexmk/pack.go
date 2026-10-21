@@ -13,13 +13,16 @@ import (
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
+	"github.com/billstark001/latexmk/packages/cli/internal/exporthistory"
+	"github.com/billstark001/latexmk/packages/cli/internal/naming"
 	projectpack "github.com/billstark001/latexmk/packages/cli/internal/pack"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
 type packOptions struct {
-	mode, output string
-	verify       bool
+	mode, output   string
+	outputTemplate string
+	verify         bool
 }
 
 type packView struct {
@@ -43,7 +46,7 @@ func parsePackArgs(args []string) (packOptions, []string, error) {
 		case "--":
 			common = append(common, args[i:]...)
 			i = len(args)
-		case "--mode", "--output":
+		case "--mode", "--output", "--output-template":
 			if !supplied {
 				i++
 				if i >= len(args) {
@@ -56,8 +59,10 @@ func parsePackArgs(args []string) (packOptions, []string, error) {
 			}
 			if name == "--mode" {
 				options.mode = value
-			} else {
+			} else if name == "--output" {
 				options.output = value
+			} else {
+				options.outputTemplate = value
 			}
 		case "--verify":
 			if supplied {
@@ -77,6 +82,9 @@ func parsePackArgs(args []string) (packOptions, []string, error) {
 		default:
 			common = append(common, args[i])
 		}
+	}
+	if options.output != "" && options.outputTemplate != "" {
+		return options, nil, errors.New("--output and --output-template are mutually exclusive")
 	}
 	return options, common, projectpack.ValidateMode(options.mode)
 }
@@ -98,11 +106,15 @@ func runPack(args []string) int {
 		return failArgs(err)
 	}
 	opts := optionsFromConfig(cfg, false)
+	opts.invocation = newNameInvocation()
 	if err := parseCompileArgs(common, &opts); err != nil {
 		return failArgs(err)
 	}
 	if opts.watch || opts.detach || opts.target == "all" || opts.explain != "" {
 		return failArgs(errors.New("pack supports one entry/target and cannot watch, detach, or explain"))
+	}
+	if hasOption(common, "--pdf-template") || hasOption(common, "--pdf-keep-last") {
+		return failArgs(errors.New("pack does not export PDFs; use --output-template for the ZIP name"))
 	}
 	if opts.target == "" && opts.entry == "" {
 		opts.target, err = implicitTarget(cfg)
@@ -121,6 +133,22 @@ func runPack(args []string) int {
 	if err := normalizeCompilePaths(&opts, cwd); err != nil {
 		return fail(err)
 	}
+	if err := prepareGeneratedPaths(&opts); err != nil {
+		return fail(err)
+	}
+	if packing.outputTemplate != "" {
+		template, err := naming.Parse(packing.outputTemplate)
+		if err != nil {
+			return failArgs(err)
+		}
+		packing.output, err = renderOutputName(context.Background(), template, opts)
+		if err != nil {
+			return failArgs(err)
+		}
+		if packing.output == "" {
+			return failArgs(errors.New("pack output template rendered an empty path"))
+		}
+	}
 	stem := strings.TrimSuffix(filepath.Base(opts.entry), filepath.Ext(opts.entry))
 	if packing.mode == "arxiv" && (opts.shellEscape || (opts.jobName != "" && opts.jobName != stem)) {
 		return failArgs(errors.New("arxiv mode requires shell escape disabled and the entry's default job name"))
@@ -128,15 +156,24 @@ func runPack(args []string) int {
 	if packing.output == "" {
 		packing.output = filepath.Join(opts.outDir, stem+"-"+packing.mode+".zip")
 	}
+	if err := projectpack.ValidateOutput(packing.output); err != nil {
+		return failArgs(err)
+	}
 	packing.output, err = filepath.Abs(packing.output)
 	if err != nil {
 		return fail(err)
 	}
-	if !strings.EqualFold(filepath.Ext(packing.output), ".zip") {
-		return failArgs(errors.New("pack output must have a .zip extension"))
+	packing.output, err = canonicalPackPath(packing.output)
+	if err != nil {
+		return fail(err)
+	}
+	if err := projectpack.ValidateOutput(packing.output); err != nil {
+		return failArgs(err)
 	}
 	// An existing output can never become its own input in upload mode all.
 	opts.denyFiles = append(opts.denyFiles, packing.output)
+	lease := opts.generated.reserve(packing.output)
+	defer lease.Close()
 	c := selectionClient(opts)
 	request := requestFromOptions(opts)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -222,11 +259,63 @@ func runPack(args []string) int {
 		}
 		view.Verified = true
 	}
-	if err := projectpack.Write(ctx, packing.output, files); err != nil {
+	if err := publishPack(ctx, opts, packing, files); err != nil {
 		return fail(err)
 	}
 	view.Files, view.RequiresBuild = files, false
 	return reportPack(view, jsonOutput, false)
+}
+
+// Resolve existing directory ancestors so a host alias such as macOS /var
+// does not make an output inside the canonical project root appear external.
+// The final filename is left intact for the writer's symlink checks.
+func canonicalPackPath(output string) (string, error) {
+	dir := filepath.Dir(output)
+	var missing []string
+	for {
+		resolved, err := filepath.EvalSymlinks(dir)
+		if err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return filepath.Join(resolved, filepath.Base(output)), nil
+		}
+		if !errors.Is(err, os.ErrNotExist) || filepath.Dir(dir) == dir {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(dir))
+		dir = filepath.Dir(dir)
+	}
+}
+
+func publishPack(ctx context.Context, opts compileOptions, packing packOptions, files []projectarchive.File) error {
+	prepared, err := projectpack.Prepare(ctx, packing.output, files)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = prepared.Close() }()
+	if packing.outputTemplate == "" {
+		return prepared.Commit()
+	}
+	rel, err := filepath.Rel(opts.projectRoot, packing.output)
+	if err != nil {
+		return err
+	}
+	if !filepath.IsLocal(rel) {
+		return prepared.Commit()
+	} // External ZIPs cannot become project inputs.
+	group := "pack\x00" + opts.entry + "\x00" + opts.target + "\x00" + packing.mode
+	return exporthistory.Publish(
+		opts.projectRoot,
+		group,
+		exporthistory.File{
+			Path:   filepath.ToSlash(rel),
+			Size:   prepared.Size,
+			SHA256: prepared.SHA256,
+		},
+		nil,
+		prepared.Commit,
+	)
 }
 
 func packBuildError(stage string, build client.CompileOutput) error {

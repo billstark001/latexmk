@@ -125,8 +125,23 @@ func runLiveSession(
 	var lastFiles []projectarchive.File
 	var pending *client.PreparedRevision
 	var pendingFiles []projectarchive.File
+	var pendingExport compileOptions
+	revisionExports := make(map[string]compileOptions)
+	pruneExports := func(state protocol.Session) {
+		for id := range revisionExports {
+			if id != state.RunningJobID && id != state.PendingJobID &&
+				id != state.LastSuccessfulJobID && id != state.LatestJobID {
+				releaseBuildNaming(revisionExports[id])
+				delete(revisionExports, id)
+			}
+		}
+	}
 	var captured *client.CapturedSnapshot
 	defer func() {
+		releaseBuildNaming(pendingExport)
+		for _, exported := range revisionExports {
+			releaseBuildNaming(exported)
+		}
 		if captured != nil {
 			_ = captured.Close()
 		}
@@ -143,13 +158,16 @@ func runLiveSession(
 			if err != nil {
 				var failure *client.HTTPError
 				if errors.As(err, &failure) && failure.StatusCode == http.StatusConflict {
+					releaseBuildNaming(pendingExport)
 					pending = nil
 				}
 				return err
 			}
 			session.Revision, session.LatestJobID = job.Revision, job.ID
+			revisionExports[job.ID] = pendingExport
 			lastFiles = pendingFiles
 			pending, pendingFiles = nil, nil
+			pendingExport = compileOptions{}
 			terminalFprintf(os.Stderr, "latexmk: submitted revision %d (%s)\n", job.Revision, job.ID)
 			return nil
 		}
@@ -166,6 +184,36 @@ func runLiveSession(
 		frozen, err := c.FreezeSnapshot(operation, request, recovery.Additional, meta, previous)
 		if err != nil {
 			return err
+		}
+		if lastFiles != nil && !selectedFilesChanged(lastFiles, frozen.Files) {
+			_ = frozen.Close()
+			dirty = false
+			return nil
+		}
+		// Only real source revisions capture a build-scoped name. A no-op
+		// reconciliation must neither query Git nor retain a new output path.
+		buildOptions, err := prepareBuildNaming(operation, opts)
+		if err != nil {
+			_ = frozen.Close()
+			return err
+		}
+		keepReservation := false
+		defer func() {
+			if !keepReservation {
+				releaseBuildNaming(buildOptions)
+			}
+		}()
+		// A previously untracked file at this new destination must not become
+		// source input. Re-capture with the newly reserved name excluded.
+		for _, file := range frozen.Files {
+			if opts.naming != nil && file.Path == buildOptions.pdfExport {
+				_ = frozen.Close()
+				frozen, err = c.FreezeSnapshot(operation, request, recovery.Additional, meta, previous)
+				if err != nil {
+					return err
+				}
+				break
+			}
 		}
 		if err := recovery.ValidateCaptured(frozen.Files); err != nil {
 			_ = frozen.Close()
@@ -184,6 +232,7 @@ func runLiveSession(
 			return err
 		}
 		session = state
+		pruneExports(state)
 		key, err := liveIdempotencyKey()
 		if err != nil {
 			return err
@@ -194,6 +243,8 @@ func runLiveSession(
 		}
 		pending = &prepared
 		pendingFiles = append([]projectarchive.File(nil), frozen.Files...)
+		pendingExport = buildOptions
+		keepReservation = true
 		if err := acceptPending(); err != nil {
 			return err
 		}
@@ -208,6 +259,7 @@ func runLiveSession(
 			return err
 		}
 		session = state
+		pruneExports(state)
 		// Deliver a completed success even if newer input is pending, but never move
 		// backwards. Consumers can compare its revision with the session's wanted one.
 		if state.LastSuccessfulJobID != "" && state.LastSuccessfulJobID != publishedJobID {
@@ -222,10 +274,18 @@ func runLiveSession(
 				}
 				if out.Result.Success {
 					publishedOptions := opts
+					if opts.naming != nil {
+						var ok bool
+						publishedOptions, ok = revisionExports[job.ID]
+						if !ok {
+							return errors.New("published revision has no captured naming context")
+						}
+					}
 					publishedOptions.outDir = root
 					if err := exportPDF(publishedOptions, out); err != nil {
 						return err
 					}
+					releaseBuildNaming(publishedOptions)
 					if len(out.Result.InputFiles) > 0 {
 						if err := dependency.SaveCachedInputs(
 							c.ProjectRoot,

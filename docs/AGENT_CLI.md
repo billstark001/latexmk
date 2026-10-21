@@ -90,6 +90,10 @@ latexmk jobs cancel JOB_ID --json
 
 `jobs.list` returns `jobs`, `count`, and the applied `limit`. Jobs are sorted newest first, with ID as the stable tie-breaker. `jobs.show` and `jobs.cancel` return one job object. Cancellation accepts queued jobs and running jobs on the owning server instance, including a running job awaiting deferred completion persistence. Finished jobs and running jobs owned by another instance cannot be cancelled.
 
+## Name previews
+
+`latexmk name render --template TEMPLATE [entry|--target NAME] --json` previews context-aware names locally without credentials, state creation or a server. It returns command `name.render` with `template` and `resolved` in `data`; invalid templates/arguments use `invalid_arguments`. See [naming](NAMING.md) for variables and formats. Existing compile/files JSON contracts are unchanged.
+
 ## Logs, diagnostics, and artifacts
 
 ```sh

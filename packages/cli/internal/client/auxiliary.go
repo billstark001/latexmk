@@ -31,6 +31,9 @@ func ExportArtifact(outputRoot, projectRoot, destination string, artifact protoc
 		return fmt.Errorf("PDF export must be a .pdf path inside the project root")
 	}
 	destination = filepath.Clean(destination)
+	if err := safefs.ValidateOutputPath(destination); err != nil {
+		return err
+	}
 	input, err := projectarchive.OpenFile(projectarchive.File{
 		Path: artifact.Path, Source: filepath.Join(outputRoot, filepath.FromSlash(artifact.Path)),
 	})

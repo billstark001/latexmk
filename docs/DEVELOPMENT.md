@@ -26,6 +26,8 @@ Compiler-specific code belongs in the shared `engine.Driver` registry rather tha
 
 ## Focused edge-case checks
 
+`packages/cli/internal/naming` is an independent template package using fasttemplate for substitution and a dedicated parser for `{variable[:format]}` and escaped braces. It imports no CLI/config/client/protocol packages and never reads the environment, clock, Git or filesystem. Callers provide captured values through the extensible `Value.Format` interface; `Variables()` exposes dependencies before collection. String, hexadecimal hash and timestamp implementations provide strict typed formatting. CLI capture/scope/revision binding and temporary name reservations live in `cmd/latexmk/naming.go`, while persistent export policy lives separately in `internal/exporthistory`. It reuses shared `safefs` for checked directory reads, portable output validation, bounded files, atomic staging, advisory process locks (`Root.TryLock`) and conditional verified removal (`Root.RemoveVerified`); it contains no platform-specific filesystem code. ZIP staging exposes its checksum before publication so history can be prepared before replacing the ZIP. Unit tests cover case aliases, modified/non-regular exports, cleanup replacement races, unwritable history and filename rejection before server contact. Realtime integration tests delay an older result until newer input is submitted, retry a failed revision commit, and check that no-op reconciliations do not capture names.
+
 Fuzz tests exercise dependency command scanning, literal glob escaping, result archive decoding, SSE framing, bounded JSON and exact resource-unit parsing. Run one target at a time with a bounded duration, for example:
 
 ```sh

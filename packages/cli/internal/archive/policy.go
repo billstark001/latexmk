@@ -98,6 +98,9 @@ func readPolicy(root, name string) ([]byte, error) {
 }
 
 func (p *filePolicy) excluded(rel string, directory bool) (bool, string, error) {
+	if !directory && safefs.IsStagedName(path.Base(rel)) {
+		return true, "private staged file", nil
+	}
 	value := rel
 	if directory {
 		value += "/"

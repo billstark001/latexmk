@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -33,6 +34,14 @@ type compileOptions struct {
 	unmatchedGlob  string
 	target         string
 	pdfExport      string
+	pdfTemplate    string
+	pdfKeepLast    *int
+	nameScope      string
+	nameTimeZone   string
+	naming         *pdfNamingPlan
+	invocation     *nameInvocation
+	generated      *generatedPaths
+	exportLease    *nameReservation
 	auxiliary      protocol.AuxiliaryOptions
 	server         string
 	token          string
@@ -115,6 +124,8 @@ func run(args []string) int {
 			return runArtifacts(argv[1:])
 		case "pack":
 			return runPack(argv[1:])
+		case "name":
+			return runName(argv[1:])
 		case "files":
 			return runCompile(argv[1:], "", true)
 		case "watch":
@@ -134,8 +145,9 @@ func run(args []string) int {
 	case "pdflatex", "pdflatex.exe":
 		forcedEngine = "pdflatex"
 	}
+	invocation := newNameInvocation()
 	for {
-		code := runCompile(argv, forcedEngine, false)
+		code := runCompileWithInvocation(argv, forcedEngine, false, invocation)
 		if code != reloadLiveSettings {
 			return code
 		}
@@ -143,6 +155,10 @@ func run(args []string) int {
 }
 
 func runCompile(args []string, forcedEngine string, listOnly bool) int {
+	return runCompileWithInvocation(args, forcedEngine, listOnly, newNameInvocation())
+}
+
+func runCompileWithInvocation(args []string, forcedEngine string, listOnly bool, invocation *nameInvocation) int {
 	originalArgs := append([]string{}, args...)
 	if listOnly {
 		originalArgs = append(originalArgs, "--dry-run")
@@ -157,6 +173,7 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 		return failAgentArguments("compile.start", detachedJSON, err)
 	}
 	opts := optionsFromConfig(cfg, listOnly)
+	opts.invocation = invocation
 	if forcedEngine != "" {
 		opts.engine = forcedEngine
 		opts.engineExplicit = true
@@ -180,7 +197,7 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 	}
 	if opts.target != "" {
 		if opts.target == "all" {
-			return runAllTargets(originalArgs, cfg)
+			return runAllTargets(originalArgs, cfg, invocation)
 		}
 		if err := applyBuildTarget(&opts, cfg, args); err != nil {
 			return fail(err)
@@ -205,6 +222,15 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 			return failAgentArguments("compile.start", opts.jsonOutput, err)
 		}
 		return fail(err)
+	}
+	if opts.detach && (opts.pdfTemplate != "" || opts.pdfKeepLast != nil) {
+		return failAgentArguments("compile.start", opts.jsonOutput, errors.New("--detach cannot export a PDF template"))
+	}
+	if err := preparePDFNaming(&opts); err != nil {
+		return failAgentArguments("compile.start", detachedJSON, err)
+	}
+	if opts.naming != nil {
+		defer opts.naming.previewLease.Close()
 	}
 	if opts.dryRun {
 		return printManifest(opts)
@@ -253,6 +279,7 @@ func runCompile(args []string, forcedEngine string, listOnly bool) int {
 	c.UploadMode = opts.uploadMode
 	c.ManifestFile = opts.manifestFile
 	c.IncludeFiles = append([]string(nil), opts.includeFiles...)
+	c.GeneratedFiles = generatedFiles(opts)
 	request := requestFromOptions(opts)
 	if opts.realtime {
 		return runLive(c, request, opts)
@@ -306,6 +333,12 @@ func compileWithTimeout(
 ) (client.CompileOutput, error) {
 	ctx, cancel := context.WithTimeout(parent, opts.timeout)
 	defer cancel()
+	var err error
+	opts, err = prepareBuildNaming(ctx, opts)
+	if err != nil {
+		return client.CompileOutput{}, err
+	}
+	defer releaseBuildNaming(opts)
 	out, err := c.Compile(ctx, request, opts.outDir)
 	if err == nil {
 		err = exportPDF(opts, out)
@@ -462,6 +495,46 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 			return args[i], nil
 		}
 		switch {
+		case a == "--pdf-template" || strings.HasPrefix(a, "--pdf-template="):
+			v, err := value("--pdf-template")
+			if err != nil {
+				return err
+			}
+			if v == "" {
+				return errors.New("--pdf-template requires a nonempty value")
+			}
+			opts.pdfTemplate, opts.pdfExport = v, ""
+		case a == "--name-scope" || strings.HasPrefix(a, "--name-scope="):
+			v, err := value("--name-scope")
+			if err != nil {
+				return err
+			}
+			if v != "invocation" && v != "build" {
+				return errors.New("--name-scope must be invocation or build")
+			}
+			opts.nameScope = v
+		case a == "--name-timezone" || strings.HasPrefix(a, "--name-timezone="):
+			v, err := value("--name-timezone")
+			if err != nil {
+				return err
+			}
+			if v == "" {
+				return errors.New("--name-timezone requires a nonempty value")
+			}
+			opts.nameTimeZone = v
+		case a == "--pdf-keep-last" || strings.HasPrefix(a, "--pdf-keep-last="):
+			v, err := value("--pdf-keep-last")
+			if err != nil {
+				return err
+			}
+			opts.pdfKeepLast = nil
+			if v != "all" {
+				n, err := strconv.Atoi(v)
+				if err != nil || n < 1 {
+					return errors.New("--pdf-keep-last must be a positive integer or all")
+				}
+				opts.pdfKeepLast = &n
+			}
 		case a == "--":
 			positionals = append(positionals, args[i+1:]...)
 			i = len(args)
@@ -713,7 +786,7 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 	if opts.watch && opts.watchMaxWait <= 0 {
 		return errors.New("watch max wait must be positive")
 	}
-	return nil
+	return config.ValidateNaming(config.NamingConfig{Scope: opts.nameScope, TimeZone: opts.nameTimeZone})
 }
 
 func hasDetachFlag(args []string) bool {
@@ -800,6 +873,9 @@ type manifestView struct {
 func printManifest(opts compileOptions) int {
 	if opts.explain != "" {
 		deny := append([]string{}, opts.denyFiles...)
+		if opts.generated != nil {
+			deny = append(deny, opts.generated.snapshot()...)
+		}
 		if opts.manifestFile != "" {
 			deny = append(deny, filepath.Join(opts.projectRoot, opts.manifestFile))
 		}
@@ -1344,6 +1420,8 @@ Usage:
   latexmk artifacts get JOB_ID ARTIFACT_ID [--out-dir DIR] [--json]
   latexmk files [options] [main.tex]
   latexmk pack [options] [main.tex] --mode default|arxiv [--output FILE.zip] [--verify]
+  latexmk pack [options] [main.tex] --output-template TEMPLATE.zip
+  latexmk name render --template TEMPLATE [main.tex|--target NAME] [--json]
   latexmk version
 
 Compile options:
@@ -1367,6 +1445,10 @@ Compile options:
   --no-ignore-files            Disable custom ignore files
   --explain PATH               Explain upload policy without reading excluded contents
   --target NAME|all            Compile configured build targets and export PDFs
+  --pdf-template TEMPLATE      Export a PDF using {variable[:format]} placeholders
+  --name-scope MODE            invocation (default) or build; controls template refresh
+  --name-timezone ZONE         local (default), UTC, or an IANA time zone
+  --pdf-keep-last N|all        Retain N distinct PDF export paths; default keeps all
   --gitignore                  Respect Git ignore rules (default)
   --no-gitignore               Include Git-ignored files unless otherwise excluded
   --out-dir DIR                Local root for returned artifacts

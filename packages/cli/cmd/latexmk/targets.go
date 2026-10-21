@@ -13,8 +13,10 @@ import (
 )
 
 func selectionClient(opts compileOptions) *client.Client {
-	return &client.Client{ProjectRoot: opts.projectRoot, Exclude: opts.exclude, IgnoreFiles: opts.ignoreFiles,
-		DenyFiles: opts.denyFiles, UnmatchedGlob: opts.unmatchedGlob, RespectGitIgnore: opts.gitIgnore,
+	return &client.Client{
+		ProjectRoot: opts.projectRoot, Exclude: opts.exclude, IgnoreFiles: opts.ignoreFiles,
+		GeneratedFiles: generatedFiles(opts),
+		DenyFiles:      opts.denyFiles, UnmatchedGlob: opts.unmatchedGlob, RespectGitIgnore: opts.gitIgnore,
 		UploadMode: opts.uploadMode, ManifestFile: opts.manifestFile, IncludeFiles: opts.includeFiles}
 }
 
@@ -59,7 +61,7 @@ func implicitTarget(cfg config.Resolved) (string, error) {
 	return "", nil
 }
 
-func runAllTargets(args []string, cfg config.Resolved) int {
+func runAllTargets(args []string, cfg config.Resolved, invocation *nameInvocation) int {
 	if hasOption(args, "--realtime") || hasOption(args, "--watch") || hasOption(args, "--detach") {
 		return fail(errors.New("--target all does not support watch or detach"))
 	}
@@ -88,7 +90,7 @@ func runAllTargets(args []string, cfg config.Resolved) int {
 	code := 0
 	for _, name := range names {
 		next := append(append([]string{}, common...), "--target", name)
-		if result := runCompile(next, "", hasOption(args, "--dry-run")); result != 0 {
+		if result := runCompileWithInvocation(next, "", hasOption(args, "--dry-run"), invocation); result != 0 {
 			code = result
 		}
 	}
@@ -116,12 +118,16 @@ func exportPDF(opts compileOptions, out client.CompileOutput) error {
 	if chosen == nil {
 		return fmt.Errorf("target PDF %s.pdf was not returned", stem)
 	}
-	return client.ExportArtifact(opts.outDir, opts.projectRoot, opts.pdfExport, *chosen)
+	return publishPDF(opts, *chosen)
 }
 
 func optionsFromConfig(cfg config.Resolved, dryRun bool) compileOptions {
 	return compileOptions{
-		ignoreFiles: cfg.IgnoreFiles, denyFiles: cfg.DenyFiles, unmatchedGlob: cfg.UnmatchedGlob,
+		pdfTemplate:  cfg.PDFTemplate,
+		pdfKeepLast:  retentionCount(cfg.PDFRetention),
+		nameScope:    cfg.Naming.Scope,
+		nameTimeZone: cfg.Naming.TimeZone,
+		ignoreFiles:  cfg.IgnoreFiles, denyFiles: cfg.DenyFiles, unmatchedGlob: cfg.UnmatchedGlob,
 		auxiliary:     cfg.Auxiliary,
 		server:        cfg.Server,
 		token:         cfg.Token,
@@ -174,7 +180,15 @@ func applyBuildTarget(opts *compileOptions, cfg config.Resolved, args []string) 
 	if opts.entry != "" {
 		return errors.New("--target cannot be combined with an entry")
 	}
-	opts.entry, opts.pdfExport = target.Entry, target.PDF
+	opts.entry = target.Entry
+	if !hasOption(args, "--pdf-template") {
+		if target.PDF != "" || target.PDFTemplate != "" {
+			opts.pdfExport, opts.pdfTemplate = target.PDF, target.PDFTemplate
+		}
+	}
+	if target.PDFRetention != nil && !hasOption(args, "--pdf-keep-last") {
+		opts.pdfKeepLast = target.PDFRetention.KeepLast
+	}
 	if cfg.ConfigPath != "" && !filepath.IsAbs(opts.entry) {
 		opts.entry = filepath.Join(filepath.Dir(cfg.ConfigPath), opts.entry)
 	}

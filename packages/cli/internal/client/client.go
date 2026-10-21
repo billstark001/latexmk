@@ -28,8 +28,11 @@ import (
 )
 
 type Client struct {
-	IgnoreFiles      []string
-	DenyFiles        []string
+	IgnoreFiles []string
+	DenyFiles   []string
+	// GeneratedFiles returns a concurrency-safe snapshot of adapter-owned
+	// output paths, including publications made while a watcher is running.
+	GeneratedFiles   func() ([]string, error)
 	UnmatchedGlob    string
 	BaseURL          string
 	Token            string
@@ -621,6 +624,13 @@ func (c *Client) policyManifest() ([]projectarchive.File, string, error) {
 		exclude = append(exclude, manifestPath)
 	}
 	denyFiles := append([]string{}, c.DenyFiles...)
+	if c.GeneratedFiles != nil {
+		generated, err := c.GeneratedFiles()
+		if err != nil {
+			return nil, "", fmt.Errorf("read generated-file policy: %w", err)
+		}
+		denyFiles = append(denyFiles, generated...)
+	}
 	if manifestPath != "" {
 		denyFiles = append(denyFiles, filepath.Join(c.ProjectRoot, manifestPath))
 	}
