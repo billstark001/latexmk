@@ -17,6 +17,8 @@ import (
 )
 
 var ErrLimit = errors.New("file exceeds size limit")
+var ErrSymlink = errors.New("symlink is not allowed")
+var ErrNotRegular = errors.New("not a regular file")
 
 type Root struct{ *os.Root }
 
@@ -55,7 +57,7 @@ func (r *Root) check(name string, missing bool) (string, error) {
 			return "", err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf("symlink is not allowed: %s", name)
+			return "", fmt.Errorf("%w: %s", ErrSymlink, name)
 		}
 		if i < len(parts)-1 && !info.IsDir() {
 			return "", fmt.Errorf("non-directory path component: %s", name)
@@ -84,6 +86,32 @@ func (r *Root) OpenRegular(name string) (*os.File, error) {
 	return regularFile(r.Root.OpenFile(local, os.O_RDONLY|regularOpenFlags, 0))
 }
 
+// ReadDir lists a checked directory without creating it or following symlinks.
+// A raced-in special file cannot block the open operation.
+func (r *Root) ReadDir(name string) ([]os.DirEntry, error) {
+	local := "."
+	if name != "." {
+		var err error
+		local, err = r.check(name, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+	dir, err := r.Root.OpenFile(local, os.O_RDONLY|regularOpenFlags, 0)
+	if err != nil {
+		return nil, err
+	}
+	info, err := dir.Stat()
+	if err == nil && !info.IsDir() {
+		err = errors.New("not a directory")
+	}
+	if err != nil {
+		return nil, errors.Join(err, dir.Close())
+	}
+	entries, err := dir.ReadDir(-1)
+	return entries, errors.Join(err, dir.Close())
+}
+
 // OpenRegularFile opens an explicitly selected host path, permitting symlinks
 // used by secret mounts. It does not provide root confinement. The actual opened
 // descriptor must be a regular file; a FIFO cannot block the Unix open operation.
@@ -98,7 +126,7 @@ func regularFile(f *os.File, err error) (*os.File, error) {
 	}
 	info, err := f.Stat()
 	if err == nil && !info.Mode().IsRegular() {
-		err = errors.New("not a regular file")
+		err = ErrNotRegular
 	}
 	if err != nil {
 		return nil, errors.Join(err, f.Close())
@@ -236,6 +264,14 @@ type Pending struct {
 
 const stagedPrefix = ".latexmk-"
 
+func stagedSibling(local string) (string, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(local), stagedPrefix+hex.EncodeToString(nonce[:])), nil
+}
+
 // IsStagedName identifies private sibling files created by Stage. State-volume
 // collectors skip them while reservations are active and remove them at startup.
 func IsStagedName(name string) bool {
@@ -257,11 +293,10 @@ func (r *Root) Stage(name string, max int64, write func(io.Writer) error) (_ *Pe
 	if err := r.MakeDirs(filepath.ToSlash(filepath.Dir(local)), 0o700); err != nil {
 		return nil, err
 	}
-	var nonce [16]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
+	temp, err := stagedSibling(local)
+	if err != nil {
 		return nil, err
 	}
-	temp := filepath.Join(filepath.Dir(local), stagedPrefix+hex.EncodeToString(nonce[:]))
 	f, err := r.Root.OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, err

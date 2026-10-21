@@ -40,6 +40,34 @@ func TestCleanProtocolPaths(t *testing.T) {
 	}
 }
 
+func TestReadDirIsReadOnlyAndAppliesPathPolicy(t *testing.T) {
+	root := testRoot(t)
+	if _, err := root.ReadDir("missing"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if _, err := root.Lstat("missing"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("reader created a directory", err)
+	}
+	if err := root.WriteExclusive("nested/data", 3, textWriter("abc")); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := root.ReadDir("nested")
+	if err != nil || len(entries) != 1 || entries[0].Name() != "data" {
+		t.Fatal(entries, err)
+	}
+	for _, name := range []string{"../escape", "nested/data"} {
+		if _, err := root.ReadDir(name); err == nil {
+			t.Fatalf("accepted %q", name)
+		}
+	}
+	if err := root.Symlink("nested", "link"); err != nil {
+		t.Skip(err)
+	}
+	if _, err := root.ReadDir("link"); err == nil {
+		t.Fatal("followed symlinked directory")
+	}
+}
+
 func TestLimitedIOAndExclusiveRollback(t *testing.T) {
 	root := testRoot(t)
 	if err := root.WriteExclusive("nested/data", 3, textWriter("abc")); err != nil {
