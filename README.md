@@ -2,7 +2,7 @@
 
 A remote LaTeX compiler for small research groups. A Go CLI selects project dependencies and sends an immutable source snapshot to a Go server. Each job compiles in an isolated workspace and returns PDF, SyncTeX and diagnostics. Optional server auxiliary caches reduce repeated compilation passes. Realtime sessions provide continuous previews, and `pack` exports portable source ZIPs.
 
-This documentation follows `main`. Features listed under [Unreleased](CHANGELOG.md#unreleased) may require local CLI/server builds from the same revision until their release is published.
+This documentation follows `main`. Changes newer than the latest published release require local builds; see the [changelog](CHANGELOG.md) for component versions.
 
 ## Install the CLI
 
@@ -21,6 +21,24 @@ bash scripts/install-cli.sh --local "$PWD/packages/cli/dist/latexmk"
 ```
 
 Re-running updates the same managed rc block. Use `--rc FILE` for another shell startup file, `--release TAG` to pin a release, or `--uninstall` to remove the registration. See [installation](docs/INSTALLATION.md) for examples and shell details.
+
+## Agent skill
+
+The [latexmk-compile skill](.agents/skills/latexmk-compile/SKILL.md) helps coding agents select the remote CLI, preview uploads, diagnose the service, compile configured targets, and manage PDF names, retention and source packs. It distinguishes this CLI from TeX Live's command with the same name and preserves the project's upload and cache policies.
+
+Install it in your paper project with the [Skills CLI](https://github.com/vercel-labs/skills/blob/main/docs/commands.md) (requires Node.js/npm):
+
+```sh
+npx skills add billstark001/latexmk --skill latexmk-compile
+```
+
+Choose your agent interactively, or append `--agent codex` for Codex. Add `--global` to make it available across projects. The skill supplies agent instructions; install and configure the CLI separately using the steps above. In Codex, invoke it with `$latexmk-compile`, for example: “Use $latexmk-compile to preview the theory target and compile it with the configured policies.”
+
+To use changes from a local checkout before publication, run from your paper project and pass the checkout path:
+
+```sh
+npx skills add /path/to/latexmk --skill latexmk-compile --agent codex
+```
 
 ## Development quick start
 
@@ -75,6 +93,7 @@ For a project with one configured build target, run `latexmk` directly. If it ha
 | ---------------------------------------------------------------- | ------------------------------------------- |
 | Installing the CLI and shell registration                        | [Installation](docs/INSTALLATION.md)        |
 | Configuration, credentials, dotenv and build targets             | [Configuration](docs/CONFIGURATION.md)      |
+| Template names, Git/time context and export retention            | [Output naming](docs/NAMING.md)             |
 | Git ignore rules, manifests, glob and dependency discovery       | [File selection](docs/DEPENDENCIES.md)      |
 | Local/server auxiliary retention and compilation reuse           | [Auxiliary files](docs/AUXILIARY.md)        |
 | Continuous editing, session leases and isolated checkpoint reuse | [Realtime](docs/REALTIME.md)                |
