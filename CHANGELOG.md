@@ -22,6 +22,23 @@ All notable changes to latexmk are documented in this file. Entries follow the c
 
 ## [Unreleased]
 
+## @latexmk/cli [0.4.2] - 2026-10-22
+
+### Added
+
+- Add explicit PDF/ZIP naming templates with typed `{variable[:format]}` placeholders, Git hash prefixes, time presets and Go layouts. Preview names offline with `name render`; choose invocation/build scope and optional persistent `pdfRetention.keepLast`. The independent template package uses fasttemplate without CLI or filesystem dependencies, and managed exports are excluded from later source selection.
+- Document installation of the portable `latexmk-compile` agent skill with the Skills CLI, and update its naming, retention and packing guidance.
+
+### Fixed
+
+- Validate PDF/ZIP output names consistently before build or directory side effects, keeping plain text rendering unchanged. Release realtime name reservations on no-op/rejected/superseded revisions, reload export history during selection, and protect current/other-group files by identity during retention. Reuse safefs for checked cleanup with replacement recovery and stage export history before PDF/ZIP publication.
+
+## @latexmk/shared [0.4.2] - 2026-10-22
+
+### Added
+
+- Extend safefs with portable output-name validation, checked destination/directory inspection, nonblocking process locks and checksum-verified removal with replacement recovery. Keep export-history ownership and retention policy in the CLI.
+
 ## @latexmk/cli [0.4.1] - 2026-10-11
 
 ### Added
