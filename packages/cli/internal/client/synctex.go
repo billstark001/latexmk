@@ -82,7 +82,10 @@ func writeRebasedSyncTeX(w io.Writer, data []byte, remote, local string, remaini
 				}
 				name = path.Clean(name)
 				if name != "." && filepath.IsLocal(filepath.FromSlash(name)) {
-					replacement := fields[0] + ":" + fields[1] + ":" + filepath.Join(local, filepath.FromSlash(name))
+					// SyncTeX paths use forward slashes, including Windows drive paths.
+					replacement := fields[0] + ":" + fields[1] + ":" + filepath.ToSlash(
+						filepath.Join(local, filepath.FromSlash(name)),
+					)
 					if newline {
 						replacement += "\n"
 					}

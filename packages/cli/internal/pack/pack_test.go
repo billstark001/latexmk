@@ -108,7 +108,7 @@ func TestZIPRejectsUnsafeDuplicateAndSymlinkMembers(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, frozen.Files[0].Source); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if err := writeZIP(context.Background(), &bytes.Buffer{}, frozen.Files); err == nil {
 		t.Fatal("followed a replaced symlink")

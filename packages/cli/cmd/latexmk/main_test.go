@@ -55,7 +55,7 @@ func TestNormalizeCompilePathsResolvesProjectRootSymlink(t *testing.T) {
 	}
 	alias := filepath.Join(t.TempDir(), "project")
 	if err := os.Symlink(physicalRoot, alias); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	resolvedRoot, err := filepath.EvalSymlinks(physicalRoot)
 	if err != nil {

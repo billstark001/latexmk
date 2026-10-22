@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -27,7 +28,7 @@ func TestResolveProjectIDPersistsRandomIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm()&0o077 != 0 {
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("project ID permissions = %o, want private", info.Mode().Perm())
 	}
 }
@@ -39,7 +40,7 @@ func TestResolveProjectIDRejectsSymlinkedCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(target, filepath.Join(root, ".latexmk-cache")); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if _, err := ResolveProjectID(root, true); err == nil {
 		t.Fatal("expected symlinked cache directory to be rejected")

@@ -46,7 +46,7 @@ func TestFreezeKeepsHashedBytesAfterEditorReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(filepath.Join(t.TempDir(), "secret"), source); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if _, err := Freeze(context.Background(), []File{{Path: "main.tex", Source: source}}, 1, 5, nil); err == nil {
 		t.Fatal("symlink was captured")
@@ -108,7 +108,7 @@ func TestFreezeReusesContentButDetectsMetadataPreservingEdits(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(changed.Files[0].Source, source); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if _, err := Freeze(context.Background(), files, 1, int64(len(data)), changed); err == nil {
 		t.Fatal("reused an unapproved symlink source")
