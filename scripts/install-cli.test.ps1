@@ -114,6 +114,9 @@ Test-Installer 'uninstall no-op and multiple profiles' {
 
 Test-Installer 'existing BOM-less profile can load Unicode paths in Windows PowerShell 5.1' {
     param($f)
+    # Chinese paths can round-trip through the system ANSI code page (e.g. 936).
+    # A supplementary character requires Unicode regardless of that code page.
+    $f.Prefix += ' ' + [char]0xd83d + [char]0xde80
     $original = "# existing ASCII profile`r`n"
     [IO.File]::WriteAllText($f.Rc, $original, (New-Object Text.UTF8Encoding($false)))
     Invoke-LatexmkInstall -Local $f.Local -Prefix $f.Prefix -Rc $f.Rc
@@ -256,8 +259,17 @@ if ($Binary) {
         $expression = '$ErrorActionPreference = ''Stop''; . ' + (ConvertTo-LatexmkLiteral $f.Rc) + '; if ((Get-Command latexmk -CommandType Application).Source -ine $env:LATEXMK_CLI) { throw ''Wrong CLI on PATH'' }; latexmk version; if ($LASTEXITCODE -ne 0) { exit 1 }; & $env:LATEXMK_CLI help; exit $LASTEXITCODE'
         # UTF-16LE EncodedCommand avoids legacy 5.1 native argument quoting.
         $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($expression))
-        & $hostExe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded
-        Assert-True ($LASTEXITCODE -eq 0) 'Installed exe could not run through PATH and LATEXMK_CLI'
+        $startArguments = @{
+            FilePath = $hostExe
+            ArgumentList = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded)
+            Wait = $true
+            PassThru = $true
+        }
+        if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $startArguments.WindowStyle = 'Hidden' }
+        $process = Start-Process @startArguments
+        try {
+            Assert-True ($process.ExitCode -eq 0) 'Installed exe could not run through PATH and LATEXMK_CLI'
+        } finally { $process.Dispose() }
     }
 }
 

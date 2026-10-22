@@ -18,7 +18,7 @@ On Windows, run in PowerShell 5.1 or 7:
 & ([scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/billstark001/latexmk/main/scripts/install-cli.ps1')))
 ```
 
-Open a new terminal and run `latexmk version`. Release binaries support macOS/Linux/Windows on Intel/AMD x64 and ARM64; installation does not require Go, Node.js or local TeX Live. macOS/Linux needs Bash, curl and a SHA-256 utility; Windows uses PowerShell's built-in download and checksum commands. Windows assets require a CLI 0.4.3 or later release; until that release is published, use a local build as described in [installation](docs/INSTALLATION.md#windows-powershell). Configure a remote server using the [configuration guide](docs/CONFIGURATION.md).
+Open a new terminal and run `latexmk version`. Release binaries support macOS/Linux/Windows on Intel/AMD x64 and ARM64; installation does not require Go, Node.js or local TeX Live. macOS/Linux needs Bash, curl and a SHA-256 utility; Windows uses PowerShell's built-in download and checksum commands. Windows assets require CLI 0.4.3 or later. See [installation](docs/INSTALLATION.md#windows-powershell) for local builds and [configuration](docs/CONFIGURATION.md) for remote server settings.
 
 To register a local build instead, run from this repository after building:
 

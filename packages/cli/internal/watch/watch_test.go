@@ -155,13 +155,20 @@ func TestMaximumWaitBoundsContinuousEdits(t *testing.T) {
 	if err := os.WriteFile(file, []byte("one"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	tracker, err := New([]Target{{Name: "main.tex", Path: file}}, 5*time.Millisecond, time.Second, 70*time.Millisecond)
+	tracker, err := New([]Target{{Name: "main.tex", Path: file}}, 5*time.Millisecond, time.Minute, 70*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
+	// The watchdog is well below debounce, so only maxWait can finish this
+	// continuous-edit test. Leave room for filesystem setup on loaded runners.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	done := make(chan struct{})
+	defer func() {
+		cancel()
+		<-done
+	}()
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(10 * time.Millisecond)
 		defer ticker.Stop()
 		for {

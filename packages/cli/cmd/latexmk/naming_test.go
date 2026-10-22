@@ -140,11 +140,8 @@ func TestOutputTemplatesRejectIllegalNamesBeforeSideEffects(t *testing.T) {
 			}
 		}
 	}
-	if _, err := os.Stat(".latexmk-cache"); !os.IsNotExist(err) {
-		t.Fatal("invalid output created history", err)
-	}
-	if _, err := os.Stat("bad?"); !os.IsNotExist(err) {
-		t.Fatal("invalid pack output created directories", err)
+	if entries, err := os.ReadDir("."); err != nil || len(entries) != 1 || entries[0].Name() != "main.tex" {
+		t.Fatal("invalid output created files or directories", entries, err)
 	}
 	code, stdout, stderr := captureCommandOutput(t, func() int {
 		return run([]string{"latexmk", "name", "render", "main.tex", "--template", "{datetime:iso8601}", "--json"})

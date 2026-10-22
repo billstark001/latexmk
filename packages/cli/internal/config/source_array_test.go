@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -151,8 +152,8 @@ func TestServerArrayLayeringAndEmptyEnvironment(t *testing.T) {
 }
 
 func TestServerArrayDoesNotHidePermissionErrors(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root can read files without read permissions")
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("requires Unix permission enforcement")
 	}
 	isolateUserConfig(t)
 	t.Setenv("LATEXMK_SERVER", "")

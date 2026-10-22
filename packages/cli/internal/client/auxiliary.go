@@ -7,12 +7,22 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
+
+// AuxiliaryCachePath returns the project-relative local auxiliary directory.
+// AUX is a reserved device name on Windows, even when used as a directory.
+func AuxiliaryCachePath() string {
+	if runtime.GOOS == "windows" {
+		return ".latexmk-cache/auxiliary"
+	}
+	return ".latexmk-cache/aux"
+}
 
 // ExportArtifact verifies a downloaded artifact and atomically exports it to a
 // PDF path inside projectRoot. Absolute destinations within that root are allowed.
@@ -81,7 +91,7 @@ func storeReturnedArtifact(
 		return nil
 	case "cache":
 		key := sha256.Sum256([]byte(req.Entry + "\x00" + req.Engine + "\x00" + req.JobName))
-		relative := filepath.Join(".latexmk-cache", "aux", hex.EncodeToString(key[:16]), artifact.Path)
+		relative := filepath.Join(AuxiliaryCachePath(), hex.EncodeToString(key[:16]), artifact.Path)
 		return writeArtifact(root, filepath.ToSlash(relative), input, artifact.Size, artifact.SHA256)
 	case "output":
 	default:

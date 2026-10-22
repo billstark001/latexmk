@@ -229,7 +229,7 @@ func TestCacheCleanPreservesProjectIdentity(t *testing.T) {
 	root := t.TempDir()
 	t.Chdir(root)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	if err := os.MkdirAll(filepath.Join(root, ".latexmk-cache/aux/entry"), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, client.AuxiliaryCachePath(), "entry"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, ".latexmk-cache/project-id"), []byte("identity"), 0600); err != nil {
@@ -238,7 +238,7 @@ func TestCacheCleanPreservesProjectIdentity(t *testing.T) {
 	if status := run([]string{"latexmk", "cache", "clean"}); status != 0 {
 		t.Fatalf("cache clean: %d", status)
 	}
-	if _, err := os.Stat(filepath.Join(root, ".latexmk-cache/aux")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, client.AuxiliaryCachePath())); !os.IsNotExist(err) {
 		t.Fatal("auxiliary cache survived")
 	}
 	if _, err := os.Stat(filepath.Join(root, ".latexmk-cache/project-id")); err != nil {

@@ -10,7 +10,7 @@ Run in Windows PowerShell 5.1 or PowerShell 7:
 & ([scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/billstark001/latexmk/main/scripts/install-cli.ps1')))
 ```
 
-For a pinned release, add `-Release vX.Y.Z` after the closing parentheses. Windows binaries are `latexmk_windows_amd64.exe` and `latexmk_windows_arm64.exe`; the installer detects the OS architecture, including emulated shells, resolves `latest` once, verifies the release's SHA-256 checksum and replaces the managed exe. Download or checksum failures preserve the previous exe and registration. Close running CLI processes before updating; Windows may prevent replacement of an exe in use. Windows assets require CLI 0.4.3 or later; use a local build until that release is published.
+For a pinned release, add `-Release vX.Y.Z` after the closing parentheses. Windows binaries are `latexmk_windows_amd64.exe` and `latexmk_windows_arm64.exe`; the installer detects the OS architecture, including emulated shells, resolves `latest` once, verifies the release's SHA-256 checksum and replaces the managed exe. Download or checksum failures preserve the previous exe and registration. Close running CLI processes before updating; Windows may prevent replacement of an exe in use. Windows assets require CLI 0.4.3 or later.
 
 From a checkout, build and install without downloading a release:
 

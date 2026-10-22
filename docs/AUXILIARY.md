@@ -14,7 +14,7 @@ Auxiliary retention and reuse are configured in the same optional JSON as the re
 
 | Setting | Values |
 | --- | --- |
-| `local` | `none`: do not save auxiliaries; `cache`: save under `.latexmk-cache/aux/`; `output`: save alongside returned outputs |
+| `local` | `none`: do not save auxiliaries; `cache`: save under `.latexmk-cache/aux/` on macOS/Linux or `.latexmk-cache/auxiliary/` on Windows; `output`: save alongside returned outputs |
 | `server` | `none`: no long-term auxiliary retention or reuse; `retain`: retain in the job archive without reuse; `reuse`: also restore compatible successful compiler state |
 | `serverTTL` | Optional positive duration, capped by the server's result/cache retention limits |
 
