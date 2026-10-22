@@ -6,13 +6,19 @@ This documentation follows `main`. Changes newer than the latest published relea
 
 ## Install the CLI
 
-Install the latest GitHub Release and register `latexmk` in your shell rc file:
+Install the latest GitHub Release and register `latexmk` in your shell startup file. On macOS/Linux:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/billstark001/latexmk/main/scripts/install-cli.sh | bash -s --
 ```
 
-Open a new terminal and run `latexmk version`. Release installation needs Bash, curl and a SHA-256 utility, with binaries for macOS/Linux on Intel/AMD and ARM64; it does not require Go, Node.js or local TeX Live. Configure a remote server using the [configuration guide](docs/CONFIGURATION.md).
+On Windows, run in PowerShell 5.1 or 7:
+
+```powershell
+& ([scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/billstark001/latexmk/main/scripts/install-cli.ps1')))
+```
+
+Open a new terminal and run `latexmk version`. Release binaries support macOS/Linux/Windows on Intel/AMD x64 and ARM64; installation does not require Go, Node.js or local TeX Live. macOS/Linux needs Bash, curl and a SHA-256 utility; Windows uses PowerShell's built-in download and checksum commands. Windows assets require a CLI 0.4.3 or later release; until that release is published, use a local build as described in [installation](docs/INSTALLATION.md#windows-powershell). Configure a remote server using the [configuration guide](docs/CONFIGURATION.md).
 
 To register a local build instead, run from this repository after building:
 

@@ -61,9 +61,9 @@ It checks pdfLaTeX and XeLaTeX graphics order, nested entries, BibTeX, indexes, 
 
 ## CLI releases
 
-The [CLI release workflow](../.github/workflows/cli-release.yml) runs on `v*` tag pushes. Use a version tag such as `v0.4.0` on a tested commit; tags containing a hyphen are published as prereleases and are not selected by the installer's default `latest` mode. Update package versions as part of preparing a release.
+The [CLI release workflow](../.github/workflows/cli-release.yml) runs on `v*` tag pushes. Use a version tag such as `v0.4.3` on a tested commit; tags containing a hyphen are published as prereleases and are not selected by the installer's default `latest` mode. Update package versions as part of preparing a release.
 
-The workflow tests the CLI and installer, cross-compiles CGO-free Linux/macOS binaries for amd64/arm64, embeds version/commit/build metadata, and generates SHA-256 checksums. It uploads all assets to a draft release before publishing. Only the publishing job has repository write permission. Reruns can replace assets on a mutable release; immutable releases require a new tag.
+The workflow tests the CLI and installer, cross-compiles CGO-free Linux/macOS/Windows binaries for amd64/arm64, embeds version/commit/build metadata, and generates SHA-256 checksums for every binary and both installers. Windows assets have an `.exe` suffix. The reusable [Windows checks](../.github/workflows/cli-windows.yml) explicitly select and verify native Go/Node architectures on x64 and ARM64, run CLI/shared tests, build `dist/latexmk.exe` with the package build script, and test installation and exe invocation under PowerShell 7 and Windows PowerShell 5.1. The installer steps assert the shell version, so a fallback shell cannot silently replace 5.1 coverage. Both ordinary CI and release publishing use these checks; publishing waits for Windows checks to pass. It uploads all assets to a draft release before publishing. Only the publishing job has repository write permission. Reruns can replace assets on a mutable release; immutable releases require a new tag.
 
 The installer accepts local builds without a release. Its tests use isolated home directories and mocked downloads, checking update/uninstall, shell quoting, dotfile symlinks, checksum failure and PATH idempotency without changing your rc:
 
@@ -72,4 +72,13 @@ bash -n scripts/install-cli.sh
 node --test scripts/install-cli.test.mjs
 ```
 
-CI also runs these tests on Linux and macOS, with Bash, zsh and sh available.
+CI also runs the Bash installer tests on Linux and macOS, with Bash, zsh and sh available. The standalone PowerShell tests require no Pester or network and use temporary profiles instead of the user's real profile or registry. They cover UTF-16 profiles, ANSI/UTF-8 BOM handling for Unicode paths, straight/typographic quotes, profile aliases, locked executables, architecture selection and failed downloads/checksums:
+
+```powershell
+pwsh -NoProfile -File scripts/install-cli.test.ps1
+# On Windows, also test the built native exe:
+pwsh -NoProfile -File scripts/install-cli.test.ps1 -Binary packages/cli/dist/latexmk.exe
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-cli.test.ps1 -Binary packages/cli/dist/latexmk.exe
+```
+
+Installer logic can be exercised with PowerShell 7 on macOS/Linux; Windows-specific filesystem behavior and native exe execution require Windows. The CLI's package build chooses `dist/latexmk.exe` on Windows and `dist/latexmk` elsewhere. Server/Docker workflows remain Linux-based.

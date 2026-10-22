@@ -1,6 +1,54 @@
 # CLI installation and shell registration
 
-The [installer](../scripts/install-cli.sh) supports Bash 3.2+ and writes exports compatible with Bash, zsh and POSIX sh. It runs as your user without sudo. Release binaries support macOS/Linux, amd64/arm64; the remote server supplies TeX Live.
+The [Bash installer](../scripts/install-cli.sh) supports Bash 3.2+ and writes exports compatible with Bash, zsh and POSIX sh. The [Windows installer](../scripts/install-cli.ps1) supports Windows PowerShell 5.1 and PowerShell 7. Both run as your user without administrator privileges. Release binaries support macOS/Linux/Windows, amd64/arm64; the remote server supplies TeX Live.
+
+## Windows PowerShell
+
+Run in Windows PowerShell 5.1 or PowerShell 7:
+
+```powershell
+& ([scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/billstark001/latexmk/main/scripts/install-cli.ps1')))
+```
+
+For a pinned release, add `-Release vX.Y.Z` after the closing parentheses. Windows binaries are `latexmk_windows_amd64.exe` and `latexmk_windows_arm64.exe`; the installer detects the OS architecture, including emulated shells, resolves `latest` once, verifies the release's SHA-256 checksum and replaces the managed exe. Download or checksum failures preserve the previous exe and registration. Close running CLI processes before updating; Windows may prevent replacement of an exe in use. Windows assets require CLI 0.4.3 or later; use a local build until that release is published.
+
+From a checkout, build and install without downloading a release:
+
+```powershell
+pnpm --filter @latexmk/cli build
+& ./scripts/install-cli.ps1 -Local ./packages/cli/dist/latexmk.exe
+```
+
+Alternatively, with only Go 1.27+ installed, run from the repository root:
+
+```powershell
+go -C packages/cli build -trimpath -o dist/latexmk.exe ./cmd/latexmk
+& ./scripts/install-cli.ps1 -Local ./packages/cli/dist/latexmk.exe
+```
+
+`-Local` copies the exe, so it needs no symlink privileges. Re-run after rebuilding. The default prefix is `$env:LOCALAPPDATA\latexmk`, and the command is `PREFIX\bin\latexmk.exe`. Use `-Prefix 'D:\Tools\latexmk'` to change it. Spaces, quotes and non-ASCII paths are supported; prefixes containing `;` and paths containing newlines are rejected.
+
+Registration writes a marked `latexmk CLI` block to `$PROFILE.CurrentUserAllHosts` for the PowerShell edition running the installer. It exports `$env:LATEXMK_CLI` and prepends the managed directory to the session's PATH, ahead of TeX Live's command with the same name. Repeated installation and profile loading do not duplicate PATH entries; relative aliases and case variants of the same profile are registered once. Existing profile text is preserved. The original encoding is retained when it can safely represent the registration in both PowerShell editions; otherwise the installer writes UTF-8 with BOM so Windows PowerShell 5.1 can read Unicode paths. Malformed markers and symlinked profile files are rejected. For a symlinked profile, pass its actual target explicitly.
+
+PowerShell 7 and Windows PowerShell 5.1 use separate profile directories. Run the installer in each edition, or pass an explicit list with `-Rc 'path\to\profile.ps1','path\to\other-profile.ps1'`. These settings apply to PowerShell sessions that load the selected profiles; `cmd.exe` and PowerShell launched with `-NoProfile` can use the full exe path. If local policy blocks script/profile loading, follow your organization's policy; where allowed, `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` permits local profiles (see [Microsoft's execution policy documentation](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies)). The installer does not change execution policy or persistent environment variables.
+
+Open a new PowerShell session, or dot-source each selected profile, then verify:
+
+```powershell
+. $PROFILE.CurrentUserAllHosts
+latexmk version
+& $env:LATEXMK_CLI help
+```
+
+To remove registration, use the same `-Rc` selections if customized:
+
+```powershell
+& ./scripts/install-cli.ps1 -Uninstall
+# Or without a checkout:
+& ([scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/billstark001/latexmk/main/scripts/install-cli.ps1'))) -Uninstall
+```
+
+Only managed profile blocks are removed. Binaries and local builds are retained. Open a new PowerShell session to discard the previous environment.
 
 ## GitHub Release
 
@@ -17,7 +65,7 @@ curl -fsSL https://raw.githubusercontent.com/billstark001/latexmk/main/scripts/i
 
 The installer resolves `latest` once, downloads the matching platform binary and `SHA256SUMS` from that release over HTTPS, verifies SHA-256, then atomically replaces the managed command. Download/checksum failures preserve the old binary and rc registration. Requires curl and either `sha256sum` or `shasum`.
 
-Release assets are `latexmk_linux_amd64`, `latexmk_linux_arm64`, `latexmk_darwin_amd64`, `latexmk_darwin_arm64`, `SHA256SUMS`, and `install-cli.sh`. See [release publishing](DEVELOPMENT.md#cli-releases). Release installation uses published assets, rather than current `main` source. Use a local build for features listed under [Unreleased](../CHANGELOG.md#unreleased).
+Release assets are `latexmk_linux_amd64`, `latexmk_linux_arm64`, `latexmk_darwin_amd64`, `latexmk_darwin_arm64`, `latexmk_windows_amd64.exe`, `latexmk_windows_arm64.exe`, `SHA256SUMS`, `install-cli.sh`, and `install-cli.ps1`. See [release publishing](DEVELOPMENT.md#cli-releases). Release installation uses published assets, rather than current `main` source. Use a local build for features listed under [Unreleased](../CHANGELOG.md#unreleased).
 
 ## Local build
 

@@ -22,6 +22,17 @@ All notable changes to latexmk are documented in this file. Entries follow the c
 
 ## [Unreleased]
 
+## @latexmk/cli [0.4.3] - 2026-10-22
+
+### Added
+
+- Build and publish Windows amd64/arm64 CLI executables, with SHA-256 checksums and a PowerShell 5.1/7 installer supporting release/local installation, custom profiles, repeatable registration and uninstall. Test CLI/shared code and both PowerShell editions on native Windows x64 and ARM64 before release publishing.
+
+### Fixed
+
+- Build the CLI with an `.exe` suffix on Windows, preserve portable slash-separated SyncTeX source mappings, and apply credential/configuration hard-deny rules without regard to Windows path casing. Isolate cleanup-plan test caches and account for platform-specific permissions, symlink privileges and directory names.
+- Keep Unicode registration paths readable in Windows PowerShell 5.1 when an existing profile uses ANSI or BOM-less UTF-8, escape typographic single quotes, and deduplicate profile path aliases before updating them. Detect native ARM64 from machine-scoped environment when an emulated x64 shell reports AMD64. Pin and verify Windows CI toolchain architectures and PowerShell editions.
+
 ## @latexmk/cli [0.4.2] - 2026-10-22
 
 ### Added
