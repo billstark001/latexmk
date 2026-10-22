@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -93,6 +94,9 @@ func TestManifestCanDisableGitIgnore(t *testing.T) {
 }
 
 func TestManifestPreservesWhitespaceInGitRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows strips trailing spaces from directory names")
+	}
 	root := filepath.Join(t.TempDir(), "repository ")
 	if err := os.Mkdir(root, 0o755); err != nil {
 		t.Fatal(err)

@@ -106,7 +106,7 @@ func runCacheClean(args []string) int {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return fail(errors.New(".latexmk-cache must be a real directory"))
 		}
-		if err := fs.RemoveAll(filepath.Join(".latexmk-cache", "aux")); err != nil {
+		if err := fs.RemoveAll(client.AuxiliaryCachePath()); err != nil {
 			return fail(err)
 		}
 		removed = true

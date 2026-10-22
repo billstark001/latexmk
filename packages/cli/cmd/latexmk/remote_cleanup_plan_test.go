@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -10,7 +11,7 @@ import (
 )
 
 func TestRemoteCleanupPlanIsPrivateAndContainsNoToken(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateCleanupCache(t)
 	report := protocol.CleanupReport{
 		ProjectID:  "project-test",
 		Scope:      "results",
@@ -30,7 +31,7 @@ func TestRemoteCleanupPlanIsPrivateAndContainsNoToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm()&0o077 != 0 {
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("plan permissions = %o, want private", info.Mode().Perm())
 	}
 	payload, err := os.ReadFile(path)
@@ -65,7 +66,7 @@ func TestParseRemoteCleanupRequiresPlanForApply(t *testing.T) {
 }
 
 func TestCleanupPlanRejectsSymlinkedDirectoryOnLoad(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateCleanupCache(t)
 	report := protocol.CleanupReport{
 		ProjectID:  "paper",
 		Scope:      "results",
@@ -96,7 +97,7 @@ func TestCleanupPlanRejectsSymlinkedDirectoryOnLoad(t *testing.T) {
 }
 
 func TestCleanupPlanRejectsMalformedServerURL(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateCleanupCache(t)
 	report := protocol.CleanupReport{
 		ProjectID:  "paper",
 		Scope:      "results",
@@ -108,4 +109,12 @@ func TestCleanupPlanRejectsMalformedServerURL(t *testing.T) {
 			t.Errorf("accepted server %q", server)
 		}
 	}
+}
+
+func isolateCleanupCache(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CACHE_HOME", dir)
+	t.Setenv("LocalAppData", dir)
 }

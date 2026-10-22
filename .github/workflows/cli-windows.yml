@@ -1,0 +1,71 @@
+name: Windows CLI checks
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            architecture: x64
+            goarch: amd64
+          - os: windows-11-arm
+            architecture: arm64
+            goarch: arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      GOWORK: 'off'
+      CGO_ENABLED: '0'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/cli/go.mod
+          architecture: ${{ matrix.architecture }}
+          cache-dependency-path: packages/cli/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          architecture: ${{ matrix.architecture }}
+      - name: Verify native toolchain architecture
+        run: |
+          if ((go env GOHOSTARCH) -ne '${{ matrix.goarch }}' -or (go env GOARCH) -ne '${{ matrix.goarch }}') {
+            throw 'Go must build and run natively for this Windows runner'
+          }
+          if ((node -p process.arch) -ne '${{ matrix.architecture }}') {
+            throw 'Node must run natively for this Windows runner'
+          }
+      - name: Test CLI on Windows
+        run: go test -timeout 5m ./...
+        working-directory: packages/cli
+      - name: Test shared filesystem and protocol on Windows
+        run: go test -timeout 5m ./...
+        working-directory: packages/shared
+      - name: Build native exe with the package build script
+        run: node ../../scripts/build-cli.mjs
+        working-directory: packages/cli
+      - name: Test PowerShell 7 installer
+        run: |
+          if ($PSVersionTable.PSVersion.Major -ne 7) { throw 'Expected PowerShell 7' }
+          . ./scripts/install-cli.ps1
+          if ((Get-LatexmkArchitecture) -ne '${{ matrix.goarch }}') { throw 'Installer selected the wrong OS architecture' }
+          ./scripts/install-cli.test.ps1 -Binary ./packages/cli/dist/latexmk.exe
+      - name: Test Windows PowerShell 5.1 installer
+        shell: powershell
+        run: |
+          if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {
+            throw 'Expected Windows PowerShell 5.1'
+          }
+          . ./scripts/install-cli.ps1
+          if ((Get-LatexmkArchitecture) -ne '${{ matrix.goarch }}') { throw 'Installer selected the wrong OS architecture' }
+          ./scripts/install-cli.test.ps1 -Binary ./packages/cli/dist/latexmk.exe

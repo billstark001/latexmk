@@ -8,6 +8,8 @@ permissions:
   contents: read
 
 jobs:
+  windows:
+    uses: ./.github/workflows/cli-windows.yml
   installer:
     strategy:
       matrix:

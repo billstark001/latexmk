@@ -12,6 +12,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  windows:
+    uses: ./.github/workflows/cli-windows.yml
   build:
     runs-on: ubuntu-latest
     steps:
@@ -38,17 +40,20 @@ jobs:
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][a-zA-Z0-9.-]+)?$ ]] || exit 1
           mkdir -p dist/cli-release
           build_date=$(git show -s --format=%cI HEAD)
-          for target in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do
+          for target in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64 windows_amd64 windows_arm64; do
+            suffix=
+            if [[ "$target" == windows_* ]]; then suffix=.exe; fi
             (
               cd packages/cli
               GOOS="${target%_*}" GOARCH="${target#*_}" go build -trimpath \
                 -ldflags "-s -w -X main.version=${RELEASE_TAG#v} -X main.commit=$GITHUB_SHA -X main.buildDate=$build_date" \
-                -o "../../dist/cli-release/latexmk_$target" ./cmd/latexmk
+                -o "../../dist/cli-release/latexmk_$target$suffix" ./cmd/latexmk
             )
           done
           cp scripts/install-cli.sh dist/cli-release/install-cli.sh
+          cp scripts/install-cli.ps1 dist/cli-release/install-cli.ps1
           cd dist/cli-release
-          sha256sum latexmk_* install-cli.sh > SHA256SUMS
+          sha256sum latexmk_* install-cli.sh install-cli.ps1 > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: cli-release
@@ -56,7 +61,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: build
+    needs: [build, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write

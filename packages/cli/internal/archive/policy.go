@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
@@ -57,7 +58,7 @@ func newPolicy(opts Options) (*filePolicy, error) {
 			for _, name := range names {
 				rel, err := filepath.Rel(root, name)
 				if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-					p.files[filepath.ToSlash(rel)] = true
+					p.files[policyFileKey(filepath.ToSlash(rel))] = true
 				}
 			}
 		}
@@ -74,7 +75,7 @@ func newPolicy(opts Options) (*filePolicy, error) {
 		if err != nil {
 			return nil, err
 		}
-		p.files[filepath.ToSlash(filepath.Clean(name))] = true
+		p.files[policyFileKey(filepath.ToSlash(filepath.Clean(name)))] = true
 		p.patterns = append(p.patterns, strings.Split(string(data), "\n")...)
 	}
 	p.local = compileIgnoreLines(p.patterns...)
@@ -105,7 +106,7 @@ func (p *filePolicy) excluded(rel string, directory bool) (bool, string, error) 
 	if directory {
 		value += "/"
 	}
-	if p.files[rel] || p.deny.MatchesPath(value) {
+	if p.files[policyFileKey(rel)] || p.deny.MatchesPath(policyFileKey(value)) {
 		return true, "local configuration or credential", nil
 	}
 	if matched, rule := p.local.MatchesPathHow(value); matched {
@@ -140,6 +141,15 @@ func (p *filePolicy) excluded(rel string, directory bool) (bool, string, error) 
 		return true, last.Line, nil
 	}
 	return false, "", nil
+}
+
+// Windows paths can name the same credential with different casing. Protocol
+// paths retain their spelling; only hard-deny comparisons are case insensitive.
+func policyFileKey(name string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(name)
+	}
+	return name
 }
 
 func (p *filePolicy) nestedMatcher(base string) (*ignoreMatcher, error) {

@@ -70,13 +70,23 @@ func TestRealtimeRetriesTransientDiagnosticDownload(t *testing.T) {
 	}
 	var downloads atomic.Int32
 	var jobReads atomic.Int32
+	var recoveredReports atomic.Int32
+	var submitted atomic.Bool
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/uploads/plans":
 			_ = json.NewEncoder(w).Encode(protocol.UploadPlan{UploadID: "upl_test"})
 		case "/v1/sessions/ses_test":
+			// After recovery, allow another report to finish before stopping on
+			// the next event. This verifies deduplication without a short timer.
+			if downloads.Load() >= 2 && recoveredReports.Add(1) == 2 {
+				cancel()
+			}
 			_ = json.NewEncoder(w).Encode(session)
 		case "/v1/sessions/ses_test/revisions":
+			submitted.Store(true)
 			_ = json.NewEncoder(w).Encode(job)
 		case "/v1/jobs/job_failed":
 			jobReads.Add(1)
@@ -96,6 +106,9 @@ func TestRealtimeRetriesTransientDiagnosticDownload(t *testing.T) {
 				case <-r.Context().Done():
 					return
 				case <-ticker.C:
+					if !submitted.Load() {
+						continue
+					}
 					_, _ = fmt.Fprintf(
 						w,
 						"event: session\nid: %d\ndata: {\"sequence\":%d,\"type\":\"finished\",\"status\":\"failed\"}\n\n",
@@ -110,19 +123,17 @@ func TestRealtimeRetriesTransientDiagnosticDownload(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	c, err := client.New(server.URL, "", time.Second, false)
+	c, err := client.New(server.URL, "", 10*time.Second, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	c.ProjectRoot, c.ProjectID, c.UploadMode = root, "paper", "all"
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
 	_, _, stderr := captureCommandOutput(t, func() int {
 		return runLiveSession(
 			ctx,
 			c,
 			protocol.CompileRequest{Entry: "main.tex", Engine: "xelatex"},
-			compileOptions{timeout: time.Second, outDir: t.TempDir()},
+			compileOptions{timeout: 10 * time.Second, outDir: t.TempDir()},
 			protocol.Metadata{Capabilities: protocol.Capabilities{MaxFiles: 10, MaxExpandedBytes: 1024}},
 			session,
 			liveObservation{},
@@ -133,6 +144,9 @@ func TestRealtimeRetriesTransientDiagnosticDownload(t *testing.T) {
 	}
 	if jobReads.Load() != 2 {
 		t.Fatalf("already processed failure was fetched again: reads=%d", jobReads.Load())
+	}
+	if recoveredReports.Load() < 2 {
+		t.Fatal("session stopped before checking later events for duplicate diagnostics")
 	}
 }
 

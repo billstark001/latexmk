@@ -1,9 +1,9 @@
 {
   "name": "@latexmk/cli",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "private": true,
   "scripts": {
-    "build": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\" && go build -trimpath -o dist/latexmk ./cmd/latexmk",
+    "build": "node ../../scripts/build-cli.mjs",
     "test": "cross-env GOWORK=off go test ./...",
     "lint": "cross-env GOWORK=off go tool -modfile=../../tools/go.mod golangci-lint run --config ../../.golangci.yml ./...",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
