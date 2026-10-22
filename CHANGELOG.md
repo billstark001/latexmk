@@ -22,6 +22,10 @@ All notable changes to latexmk are documented in this file. Entries follow the c
 
 ## [Unreleased]
 
+### Changed
+
+- Stop CLI-only changes from triggering automatic application-image publication. Keep ordinary CI and CLI releases independent; manual nonpublishing image workflows remain available for CLI/server integration checks.
+
 ## @latexmk/cli [0.4.3] - 2026-10-22
 
 ### Added
