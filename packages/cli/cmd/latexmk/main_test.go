@@ -219,6 +219,58 @@ func TestParseCompileArgsWatchOptions(t *testing.T) {
 	}
 }
 
+func TestParseCompileArgsAdaptiveDebounce(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		args         []string
+		wantAdaptive bool
+		wantDebounce time.Duration
+		wantError    string
+	}{
+		{
+			name:         "explicit opt-in",
+			args:         []string{"--watch-adaptive-debounce", "--realtime", "--watch-debounce=150ms"},
+			wantAdaptive: true,
+			wantDebounce: 150 * time.Millisecond,
+		},
+		{
+			name:         "fixed zero debounce",
+			args:         []string{"--realtime", "--watch-debounce=0s"},
+			wantDebounce: 0,
+		},
+		{
+			name:      "ordinary watch",
+			args:      []string{"--watch", "--watch-adaptive-debounce"},
+			wantError: "--watch-adaptive-debounce requires --realtime",
+		},
+		{
+			name:      "adaptive with zero debounce",
+			args:      []string{"--realtime", "--watch-adaptive-debounce", "--watch-debounce=0s"},
+			wantError: "--watch-adaptive-debounce requires a positive watch debounce",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := compileOptions{
+				timeout:       time.Minute,
+				watchInterval: 500 * time.Millisecond,
+				watchDebounce: 500 * time.Millisecond,
+				watchMaxWait:  2500 * time.Millisecond,
+			}
+			err := parseCompileArgs(append(tc.args, "main.tex"), &opts)
+			if tc.wantError != "" {
+				if err == nil || err.Error() != tc.wantError {
+					t.Fatalf("error = %v, want %q", err, tc.wantError)
+				}
+				return
+			}
+			if err != nil || !opts.realtime ||
+				opts.adaptiveWatch != tc.wantAdaptive || opts.watchDebounce != tc.wantDebounce {
+				t.Fatalf("adaptive options = %#v, error = %v", opts, err)
+			}
+		})
+	}
+}
+
 func TestParseCompileArgsDetach(t *testing.T) {
 	opts := compileOptions{timeout: time.Minute}
 	if err := parseCompileArgs([]string{"--detach", "--json", "main.tex"}, &opts); err != nil {

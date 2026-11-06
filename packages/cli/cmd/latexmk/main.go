@@ -73,6 +73,7 @@ type compileOptions struct {
 	watchInterval  time.Duration
 	watchDebounce  time.Duration
 	watchMaxWait   time.Duration
+	adaptiveWatch  bool
 	insecure       bool
 	entry          string
 	exclude        []string
@@ -731,6 +732,8 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 			opts.realtime, opts.watch = true, true
 		case a == "--watch":
 			opts.watch = true
+		case a == "--watch-adaptive-debounce":
+			opts.adaptiveWatch = true
 		case a == "--watch-interval" || strings.HasPrefix(a, "--watch-interval="):
 			v, err := value("--watch-interval")
 			if err != nil {
@@ -785,6 +788,12 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 	}
 	if opts.watch && opts.watchMaxWait <= 0 {
 		return errors.New("watch max wait must be positive")
+	}
+	if opts.adaptiveWatch && !opts.realtime {
+		return errors.New("--watch-adaptive-debounce requires --realtime")
+	}
+	if opts.adaptiveWatch && opts.watchDebounce == 0 {
+		return errors.New("--watch-adaptive-debounce requires a positive watch debounce")
 	}
 	return config.ValidateNaming(config.NamingConfig{Scope: opts.nameScope, TimeZone: opts.nameTimeZone})
 }
@@ -1464,6 +1473,7 @@ Compile options:
   --watch                      Ordinary jobs after changes; prefer --realtime
   --watch-interval 500ms       Refresh selection and poll selected files
   --watch-debounce 500ms       Wait for rapid edits to settle before compiling
+  --watch-adaptive-debounce    Adjust the settling window during --realtime
   --watch-max-wait 2.5s        Compile after this bound even during continuous edits
 
 The executable may be symlinked as xelatex, lualatex, or pdflatex.

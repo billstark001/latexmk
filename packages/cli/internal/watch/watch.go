@@ -29,12 +29,45 @@ type Tracker struct {
 	// RefreshInterval batches native event hints before rediscovering membership.
 	// Zero refreshes selection for every event and poll.
 	RefreshInterval time.Duration
-	targets         []Target
-	states          map[string]fileState
-	refreshed       time.Time
-	interval        time.Duration
-	debounce        time.Duration
-	maxWait         time.Duration
+	// AdaptiveDebounce extends the quiet window when distinct changes arrive close together.
+	AdaptiveDebounce   bool
+	targets            []Target
+	states             map[string]fileState
+	refreshed          time.Time
+	interval           time.Duration
+	debounce           time.Duration
+	maxWait            time.Duration
+	lastDistinctChange time.Time
+}
+
+const adaptiveDebounceLimit = 500 * time.Millisecond
+
+type settleWindow struct {
+	firstChange time.Time
+	quiet       time.Duration
+}
+
+func (t *Tracker) observeChange(now time.Time, quiet time.Duration, distinct bool) time.Duration {
+	if !t.AdaptiveDebounce || t.debounce == 0 || !distinct {
+		return quiet
+	}
+	previous := t.lastDistinctChange
+	t.lastDistinctChange = now
+	if gap := now.Sub(previous); !previous.IsZero() && gap > 0 && gap < adaptiveDebounceLimit {
+		// Keep the window open for one more change at the observed cadence,
+		// plus a cushion for differences in save and notification timing.
+		quiet = max(quiet, min(adaptiveDebounceLimit, gap+t.debounce/2))
+	}
+	return quiet
+}
+
+func (t *Tracker) settleDelay(now time.Time, window *settleWindow, distinct bool) time.Duration {
+	if window.firstChange.IsZero() {
+		window.firstChange = now
+		window.quiet = t.debounce
+	}
+	window.quiet = t.observeChange(now, window.quiet, distinct)
+	return min(window.quiet, max(0, t.maxWait-now.Sub(window.firstChange)))
 }
 
 func New(targets []Target, interval, debounce, maxWait time.Duration) (*Tracker, error) {
@@ -123,7 +156,7 @@ func (t *Tracker) Wait(ctx context.Context) ([]string, error) {
 	defer settle.Stop()
 	settle.Stop()
 	pending := make(map[string]struct{})
-	var firstChange time.Time
+	var window settleWindow
 	byPath := make(map[string]Target, len(t.targets))
 	indexTargets := func() {
 		clear(byPath)
@@ -132,24 +165,18 @@ func (t *Tracker) Wait(ctx context.Context) ([]string, error) {
 		}
 	}
 	indexTargets()
-	arm := func() {
-		now := time.Now()
-		if firstChange.IsZero() {
-			firstChange = now
-		}
-		delay := min(t.debounce, max(0, t.maxWait-now.Sub(firstChange)))
-		settle.Reset(delay)
+	arm := func(distinct bool) {
+		settle.Reset(t.settleDelay(time.Now(), &window, distinct))
 	}
-	reconcile := func(eventPath string, refresh bool) (bool, error) {
-		changed := false
+	reconcile := func(eventPath string, refresh bool) (changed, distinct bool, err error) {
 		if t.Refresh != nil && refresh {
 			targets, err := t.Refresh()
 			if err != nil {
-				return false, err
+				return false, false, err
 			}
 			targets, err = normalizeTargets(targets)
 			if err != nil {
-				return false, err
+				return false, false, err
 			}
 			{
 				next := make(map[string]bool, len(targets))
@@ -157,14 +184,14 @@ func (t *Tracker) Wait(ctx context.Context) ([]string, error) {
 					next[target.Path] = true
 					if _, exists := t.states[target.Path]; !exists {
 						pending[target.Name] = struct{}{}
-						changed = true
+						changed, distinct = true, true
 					}
 				}
 				for _, target := range t.targets {
 					if !next[target.Path] {
 						pending[target.Name] = struct{}{}
 						delete(t.states, target.Path)
-						changed = true
+						changed, distinct = true, true
 					}
 				}
 				t.targets = targets
@@ -175,23 +202,25 @@ func (t *Tracker) Wait(ctx context.Context) ([]string, error) {
 		}
 		for _, target := range t.targets {
 			current := statFile(target.Path)
-			if current == t.states[target.Path] && filepath.Clean(eventPath) != filepath.Clean(target.Path) {
+			stateChanged := current != t.states[target.Path]
+			if !stateChanged && filepath.Clean(eventPath) != filepath.Clean(target.Path) {
 				continue
 			}
 			t.states[target.Path] = current
 			pending[target.Name] = struct{}{}
 			changed = true
+			distinct = distinct || stateChanged
 		}
-		return changed, nil
+		return changed, distinct, nil
 	}
 	refreshDue := func() bool {
 		return t.RefreshInterval <= 0 || time.Since(t.refreshed) >= t.RefreshInterval || events == nil ||
 			len(watched) == 0
 	}
-	if changed, err := reconcile("", refreshDue()); err != nil {
+	if changed, distinct, err := reconcile("", refreshDue()); err != nil {
 		return nil, err
 	} else if changed {
-		arm()
+		arm(distinct)
 	}
 	for {
 		select {
@@ -208,18 +237,22 @@ func (t *Tracker) Wait(ctx context.Context) ([]string, error) {
 			}
 			if t.RefreshInterval > 0 {
 				if target, known := byPath[filepath.Clean(event.Name)]; known {
-					t.states[target.Path] = statFile(target.Path)
+					current := statFile(target.Path)
+					// An unchanged stat still triggers capture. It may be a
+					// same-metadata save or another notification for one save.
+					distinct := current != t.states[target.Path]
+					t.states[target.Path] = current
 					pending[target.Name] = struct{}{}
-					arm()
+					arm(distinct)
 				} else if len(pending) == 0 {
 					// New members are discovered once after the burst. Unrelated
 					// output writes never delay an already pending source change.
-					arm()
+					arm(false)
 				}
-			} else if changed, err := reconcile(event.Name, true); err != nil {
+			} else if changed, distinct, err := reconcile(event.Name, true); err != nil {
 				return nil, err
 			} else if changed {
-				arm()
+				arm(distinct)
 			}
 		case _, ok := <-watcherErrors:
 			if !ok {
@@ -227,29 +260,35 @@ func (t *Tracker) Wait(ctx context.Context) ([]string, error) {
 				continue
 			}
 			// Overflow and backend failures invalidate every event assumption.
-			if _, err := reconcile("", true); err != nil {
+			_, distinct, err := reconcile("", true)
+			if err != nil {
 				return nil, err
 			}
 			for _, target := range t.targets {
 				pending[target.Name] = struct{}{}
 			}
 			if len(pending) > 0 {
-				arm()
+				arm(distinct)
 			}
 		case <-ticker.C:
-			if changed, err := reconcile("", refreshDue()); err != nil {
+			if changed, distinct, err := reconcile("", refreshDue()); err != nil {
 				return nil, err
 			} else if changed {
-				arm()
+				arm(distinct)
 			}
 		case <-settle.C:
 			if t.RefreshInterval > 0 {
-				if _, err := reconcile("", true); err != nil {
+				_, distinct, err := reconcile("", true)
+				if err != nil {
 					return nil, err
+				}
+				if distinct {
+					// Newly discovered changes still contribute to the next burst's history.
+					t.observeChange(time.Now(), window.quiet, true)
 				}
 			}
 			if len(pending) == 0 {
-				firstChange = time.Time{}
+				window = settleWindow{}
 				continue
 			}
 			result := make([]string, 0, len(pending))

@@ -24,6 +24,7 @@ import zlib
 
 POLL_SECONDS = 0.005
 BURST_SECONDS = 0.230
+BETWEEN_SAMPLES_SECONDS = 0.550
 DIAGNOSTIC_PREFIX = "realtime_diagnostics "
 CLIENT_STAGES = ("capture", "submit_state", "upload", "commit", "report_state", "result_metadata", "download_publish")
 SERVER_STAGES = (
@@ -138,8 +139,9 @@ def wait_publication(process, output, expected, marker, pointer=None):
     raise TimeoutError(f"expected snapshot {expected} for {marker}; latest was {last_seen}")
 
 
-def collect_case(args, base, token, fixture, debounce, mode, asset, block, run_index, repetitions):
-    case = f"{fixture}-{debounce}-{mode}"
+def collect_case(args, base, token, condition, asset, block, run_index, repetitions):
+    fixture, debounce, mode, adaptive = condition
+    case = f"{fixture}-{debounce}-{mode}" + ("-adaptive" if adaptive else "")
     log_path = args.output / f"{case}-block{block}.log"
     project_id = f"diagnostics-{case}-{block}"
     with_assets = fixture == "graphic-bib"
@@ -176,7 +178,10 @@ def collect_case(args, base, token, fixture, debounce, mode, asset, block, run_i
         entry.write_bytes(initial)
         cmd = [str(args.cli), "--realtime", "--watch-debounce", f"{debounce}ms", "--server-cache",
                "reuse" if mode == "reuse" else "none", "--local-cache", "none", "--project-id", project_id,
-               "--out-dir", str(output), "main.tex"]
+               "--out-dir", str(output)]
+        if adaptive:
+            cmd.append("--watch-adaptive-debounce")
+        cmd.append("main.tex")
         samples = []
         with log_path.open("w", encoding="utf-8") as log:
             process = subprocess.Popen(cmd, cwd=project, env=env, stdout=log, stderr=log)
@@ -184,9 +189,15 @@ def collect_case(args, base, token, fixture, debounce, mode, asset, block, run_i
                 warmup, pointer, _ = wait_publication(process, output, snapshot_id(project_id, static_files, initial), marker)
                 session = warmup["sessionId"]
                 previous_revision = warmup["revision"]
+                previous_save_ns = None
                 workloads = [("single", 1), ("burst", 3)]
                 for workload, saves_per_sample in (workloads if block == 1 else reversed(workloads)):
                     for _ in range(repetitions):
+                        if previous_save_ns is not None:
+                            deadline = previous_save_ns + round(BETWEEN_SAMPLES_SECONDS * 1e9)
+                            remaining = (deadline - time.monotonic_ns()) / 1e9
+                            if remaining > 0:
+                                time.sleep(remaining)
                         saves = []
                         for index in range(saves_per_sample):
                             sequence += 1
@@ -199,6 +210,7 @@ def collect_case(args, base, token, fixture, debounce, mode, asset, block, run_i
                             save = atomic_save(entry, staged, data)
                             save["snapshot_id"] = snapshot_id(project_id, static_files, data)
                             saves.append(save)
+                        previous_save_ns = saves[-1]["monotonic_ns"]
                         published, _, detected = wait_publication(process, output, saves[-1]["snapshot_id"], marker, pointer)
                         if published["sessionId"] != session or published["revision"] <= previous_revision:
                             raise RuntimeError("measured saves crossed sessions or did not advance the revision")
@@ -225,6 +237,7 @@ def collect_case(args, base, token, fixture, debounce, mode, asset, block, run_i
             raise RuntimeError(f"CLI exited with status {process.returncode}; see {log_path}")
     return {
         "case": case, "fixture": fixture, "debounce_ms": debounce, "mode": mode, "session_id": session,
+        "debounce_policy": "adaptive" if adaptive else "fixed",
         "block": block, "run_index": run_index,
         "static_input_bytes": sum(record["size"] for record in static_files), "warmup": warmup, "samples": samples,
         "cli_events": read_events(log_path.read_text(encoding="utf-8", errors="replace"), DIAGNOSTIC_PREFIX),
@@ -265,6 +278,7 @@ def summarize(cases, server_logs):
             sample["admitted_job_ids"] = [commits[revision]["job_id"] for revision in revisions]
             if sample["admitted_job_ids"][-1] != job_id or job_id not in server_by_job:
                 raise RuntimeError(f"cannot join server and CLI timings for {case['case']} job {job_id}")
+            sample["executed_job_ids"] = [admitted for admitted in sample["admitted_job_ids"] if admitted in server_by_job]
             commit = commits[job["revision"]]
             attempt = attempts[(case["session_id"], commit["attempt"])]
             related = attempt + [event for event in job_events[job_id] if event not in attempt]
@@ -279,16 +293,20 @@ def summarize(cases, server_logs):
             if "download_publish" not in sample.get("client_ms", {}):
                 raise RuntimeError(f"missing publication timings for {case['case']} job {job_id}")
             sample["server_ms"] = {key: server_by_job[job_id][key] for key in SERVER_STAGES if key in server_by_job[job_id]}
-        group = grouped.setdefault(case["case"], {key: case[key] for key in ("case", "fixture", "debounce_ms", "mode")})
+        group = grouped.setdefault(case["case"], {
+            key: case[key] for key in ("case", "fixture", "debounce_ms", "debounce_policy", "mode")
+        })
         group.setdefault("samples", []).extend(case["samples"])
     for group in grouped.values():
         for workload in ("single", "burst"):
             samples = [sample for sample in group["samples"] if sample["workload"] == workload]
-            summary = {key: group[key] for key in ("case", "fixture", "debounce_ms", "mode")}
+            summary = {key: group[key] for key in ("case", "fixture", "debounce_ms", "debounce_policy", "mode")}
             summary.update({
                 "workload": workload, "n": len(samples),
                 "admitted_total": sum(len(sample["admitted_job_ids"]) for sample in samples),
                 "admitted_per_sample": percentile_summary([len(sample["admitted_job_ids"]) for sample in samples]),
+                "executed_total": sum(len(sample["executed_job_ids"]) for sample in samples),
+                "executed_per_sample": percentile_summary([len(sample["executed_job_ids"]) for sample in samples]),
                 "workspace_reuse_total": sum(bool(sample["job"]["result"].get("workspaceReuse")) for sample in samples),
                 "last_save_to_preview_ms": percentile_summary([sample["last_save_to_preview_ms"] for sample in samples]),
                 "first_save_to_preview_ms": percentile_summary([sample["first_save_to_preview_ms"] for sample in samples]),
@@ -314,37 +332,42 @@ def markdown(summaries, image):
         "two blocks. Each block starts each condition with a new session and one untimed initial preview.",
         "Each burst has three atomic saves spaced 230 ms apart. Timing starts after rename and ends when the verified final",
         "snapshot first appears in `current.json` (5 ms poll interval). PDF hash and text validation run after timing.",
-        "P50 is the median and p95 uses the nearest rank. Milliseconds throughout.", "",
+        "Each sample starts at least 550 ms after the previous final rename so adaptive save history can expire.",
+        "P50 is the median and p95 uses the nearest rank. Milliseconds throughout. For adaptive rows, 150 ms is the",
+        "configured base debounce. Executed counts include admitted jobs with a server worker-stage record.", "",
     ]
     for fixture in ("tiny", "graphic-bib"):
         rows = [row for row in summaries if row["fixture"] == fixture]
         lines.extend([
             f"## {fixture}", "",
-            "| Saves | Debounce | Mode | n | Last save p50 | Last save p95 | First save p50 | First save p95 | Admitted (total) | Reused (final jobs) |",
-            "| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| Saves | Debounce | Mode | n | Last save p50 | Last save p95 | First save p50 | First save p95 | Final queue p50 | Final queue p95 | Admitted | Executed | Reused (final jobs) |",
+            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ])
         for row in rows:
             last = row["last_save_to_preview_ms"]
             first = row["first_save_to_preview_ms"]
+            queue = row["server_ms"].get("queue_wait_ms")
             lines.append(
-                f"| {row['workload']} | {row['debounce_ms']} | {row['mode']} | {row['n']} | "
+                f"| {row['workload']} | {row['debounce_policy']} {row['debounce_ms']} | {row['mode']} | {row['n']} | "
                 f"{metric(last)} | {metric(last, 'p95')} | {metric(first)} | {metric(first, 'p95')} | "
-                f"{row['admitted_total']} | {row['workspace_reuse_total']} |"
+                f"{metric(queue)} | {metric(queue, 'p95')} | "
+                f"{row['admitted_total']} | {row['executed_total']} | {row['workspace_reuse_total']} |"
             )
         lines.extend([
             "", "Median stages for the jobs that published the final save in each sample.", "",
-            "| Saves | Debounce | Mode | Save → submit | Capture | Upload | Commit | Queue | Server execute | Compile runner | Execute overhead | Result archive | Cache publish | Download & publish |",
-            "| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| Saves | Debounce | Mode | Save → submit | Capture | Upload | Commit | Server execute | Compile runner | Execute overhead | Result archive | Cache publish | Download & publish |",
+            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ])
         for row in rows:
             client = row["client_ms"]
             server = row["server_ms"]
             stages = [client.get(key) for key in ("last_save_to_submit_start", "capture", "upload", "commit")]
             stages += [server.get(key) for key in (
-                "queue_wait_ms", "execution_ms", "compile_runner_ms", "execute_overhead_ms", "result_archive_ms", "cache_publish_ms",
+                "execution_ms", "compile_runner_ms", "execute_overhead_ms", "result_archive_ms", "cache_publish_ms",
             )]
             stages.append(client.get("download_publish"))
-            lines.append(f"| {row['workload']} | {row['debounce_ms']} | {row['mode']} | " + " | ".join(map(metric, stages)) + " |")
+            lines.append(f"| {row['workload']} | {row['debounce_policy']} {row['debounce_ms']} | {row['mode']} | "
+                         + " | ".join(map(metric, stages)) + " |")
         lines.append("")
     lines.extend([
         "The compile runner and execute overhead are subdivisions of server execute. The raw JSON includes per-stage sample",
@@ -360,6 +383,7 @@ def main():
     parser.add_argument("--cli", type=Path, default=Path("packages/cli/dist/latexmk"))
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--repetitions", type=int, default=30, help="Samples per case and workload across both blocks")
+    parser.add_argument("--adaptive", action="store_true", help="Also compare 150 ms adaptive debounce")
     args = parser.parse_args()
     if not re.fullmatch(r".+@sha256:[a-f0-9]{64}", args.image):
         parser.error("--image must be a digest-pinned application image")
@@ -394,16 +418,17 @@ def main():
         base = "http://127.0.0.1:" + port
         wait_ready(base, token)
         asset = png_asset()
-        matrix = [(fixture, debounce, mode) for fixture in ("tiny", "graphic-bib") for debounce, mode in (
-            (500, "fresh"), (150, "reuse"), (150, "fresh"), (500, "reuse"),
-        )]
+        policies = [(500, "fresh", False), (150, "reuse", False), (150, "fresh", False), (500, "reuse", False)]
+        if args.adaptive:
+            policies[2:2] = [(150, "fresh", True), (150, "reuse", True)]
+        matrix = [(fixture, *policy) for fixture in ("tiny", "graphic-bib") for policy in policies]
         block_sizes = ((args.repetitions + 1) // 2, args.repetitions // 2)
         for block, repetitions in enumerate(block_sizes, start=1):
             if repetitions == 0:
                 continue
-            for fixture, debounce, mode in (matrix if block == 1 else reversed(matrix)):
+            for condition in (matrix if block == 1 else reversed(matrix)):
                 run_index = len(raw["cases"]) + 1
-                raw["cases"].append(collect_case(args, base, token, fixture, debounce, mode, asset, block, run_index, repetitions))
+                raw["cases"].append(collect_case(args, base, token, condition, asset, block, run_index, repetitions))
                 raw_path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
     finally:
         if started:

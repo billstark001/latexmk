@@ -2,7 +2,7 @@ name: realtime-diagnostics
 
 on:
   push:
-    branches: [codex/realtime-diagnostics]
+    branches: [codex/realtime-diagnostics, codex/realtime-adaptive-debounce]
 
 permissions:
   contents: read
@@ -10,7 +10,7 @@ permissions:
 jobs:
   measure:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 65
     env:
       IMAGE: ghcr.io/billstark001/latexmk@sha256:297249142f07723a1504cbc5ae8713b865f4989adc86d89d3b34d0229bf55fcb
     steps:
@@ -44,10 +44,15 @@ jobs:
           fi
       - name: Measure realtime latency
         run: |
+          benchmark_options=()
+          if [[ "$GITHUB_REF_NAME" == codex/realtime-adaptive-debounce ]]; then
+            benchmark_options+=(--adaptive)
+          fi
           python3 scripts/realtime-diagnostics.py \
             --image "$IMAGE" \
             --controller-binary packages/server/dist/latexmk-server \
-            --output dist/realtime-diagnostics
+            --output dist/realtime-diagnostics \
+            "${benchmark_options[@]}"
       - name: Add measurements to run summary
         if: always()
         run: |

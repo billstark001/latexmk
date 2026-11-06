@@ -122,6 +122,7 @@ func observeLive(
 			return observation
 		}
 		tracker.RefreshInterval = 2 * time.Second
+		tracker.AdaptiveDebounce = opts.adaptiveWatch
 		refresh := tracker.Refresh
 		tracker.Refresh = func() ([]projectwatch.Target, error) {
 			started := diagnostics.start()

@@ -11,6 +11,65 @@ import (
 	"time"
 )
 
+func TestAdaptiveDebounceFollowsDistinctChangesAcrossWaits(t *testing.T) {
+	tracker := Tracker{AdaptiveDebounce: true, debounce: 150 * time.Millisecond, maxWait: 2500 * time.Millisecond}
+	start := time.Unix(0, 0)
+	var window settleWindow
+	for _, step := range []struct {
+		name        string
+		atMS        int
+		newWindow   bool
+		distinct    bool
+		wantDelayMS int
+	}{
+		{"first save", 0, false, true, 150},
+		{"same-metadata notification", 5, false, false, 150},
+		{"unknown hint after first Wait", 180, true, false, 150},
+		{"second save", 230, false, true, 305},
+		{"third save", 460, false, true, 305},
+		{"slow window cap", 950, true, true, 500},
+		{"history expired", 1500, true, true, 150},
+	} {
+		if step.newWindow {
+			window = settleWindow{}
+		}
+		got := tracker.settleDelay(start.Add(time.Duration(step.atMS)*time.Millisecond), &window, step.distinct)
+		if want := time.Duration(step.wantDelayMS) * time.Millisecond; got != want {
+			t.Errorf("%s: delay = %s, want %s", step.name, got, want)
+		}
+	}
+}
+
+func TestAdaptiveDebounceRespectsConfiguredTiming(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		adaptive bool
+		baseMS   int
+		maxMS    int
+		wantMS   int
+	}{
+		{"disabled", false, 150, 2500, 150},
+		{"zero debounce", true, 0, 2500, 0},
+		{"long debounce", true, 700, 2500, 700},
+		{"maximum wait", true, 150, 400, 170},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tracker := Tracker{
+				AdaptiveDebounce: test.adaptive,
+				debounce:         time.Duration(test.baseMS) * time.Millisecond,
+				maxWait:          time.Duration(test.maxMS) * time.Millisecond,
+			}
+			start := time.Unix(0, 0)
+			var window settleWindow
+			tracker.settleDelay(start, &window, true)
+			got := tracker.settleDelay(start.Add(230*time.Millisecond), &window, true)
+			if want := time.Duration(test.wantMS) * time.Millisecond; got != want {
+				t.Fatalf("delay = %s, want %s", got, want)
+			}
+		})
+	}
+}
+
 func TestTrackerDebouncesRapidChanges(t *testing.T) {
 	root := t.TempDir()
 	file := filepath.Join(root, "main.tex")
