@@ -1,0 +1,61 @@
+name: realtime-diagnostics
+
+on:
+  push:
+    branches: [codex/realtime-diagnostics]
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      IMAGE: ghcr.io/billstark001/latexmk@sha256:297249142f07723a1504cbc5ae8713b865f4989adc86d89d3b34d0229bf55fcb
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache-dependency-path: |
+            packages/cli/go.sum
+            packages/server/go.sum
+      - name: Build CLI
+        working-directory: packages/cli
+        env:
+          GOWORK: 'off'
+        run: go build -trimpath -o dist/latexmk ./cmd/latexmk
+      - name: Build instrumented controller
+        working-directory: packages/server
+        env:
+          CGO_ENABLED: '0'
+          GOWORK: 'off'
+        run: go build -trimpath -o dist/latexmk-server ./cmd/server
+      - name: Pull pinned application image
+        run: docker pull --platform linux/amd64 "$IMAGE"
+      - name: Install PDF validation tool
+        run: |
+          if ! command -v pdftotext >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y poppler-utils
+          fi
+      - name: Measure realtime latency
+        run: |
+          python3 scripts/realtime-diagnostics.py \
+            --image "$IMAGE" \
+            --controller-binary packages/server/dist/latexmk-server \
+            --output dist/realtime-diagnostics
+      - name: Add measurements to run summary
+        if: always()
+        run: |
+          if test -f dist/realtime-diagnostics/summary.md; then
+            cat dist/realtime-diagnostics/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: realtime-diagnostics
+          path: dist/realtime-diagnostics/

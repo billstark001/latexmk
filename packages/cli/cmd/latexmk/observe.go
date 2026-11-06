@@ -46,9 +46,10 @@ func newSourceTracker(
 }
 
 type liveObservation struct {
-	changed chan struct{}
-	reload  chan struct{}
-	errors  chan error
+	changed     chan struct{}
+	reload      chan struct{}
+	errors      chan error
+	diagnostics liveDiagnostics
 }
 
 // Lease renewal must continue while capture, upload or result downloads block
@@ -91,12 +92,16 @@ func observeLive(
 	invalidate context.CancelCauseFunc,
 ) liveObservation {
 	observation := liveObservation{
-		changed: make(chan struct{}, 1),
-		reload:  make(chan struct{}, 1),
-		errors:  make(chan error, 1),
+		changed:     make(chan struct{}, 1),
+		reload:      make(chan struct{}, 1),
+		errors:      make(chan error, 1),
+		diagnostics: newLiveDiagnostics(),
 	}
+	diagnostics := observation.diagnostics
 	{
+		started := diagnostics.start()
 		selection, err := c.SelectionPaths(request.Entry, request.Engine)
+		diagnostics.record(started, liveDiagnostic{Event: "observe_reconcile", Trigger: "initial", OK: err == nil})
 		if err != nil {
 			observation.errors <- err
 			return observation
@@ -119,7 +124,9 @@ func observeLive(
 		tracker.RefreshInterval = 2 * time.Second
 		refresh := tracker.Refresh
 		tracker.Refresh = func() ([]projectwatch.Target, error) {
+			started := diagnostics.start()
 			targets, err := refresh()
+			diagnostics.record(started, liveDiagnostic{Event: "observe_reconcile", OK: err == nil})
 			if err != nil {
 				return tracker.targets, nil
 			} // Freeze rechecks policy before every upload.
@@ -145,6 +152,7 @@ func observeLive(
 						return
 					}
 				}
+				diagnostics.record(time.Time{}, liveDiagnostic{Event: "observe_ready", OK: true})
 				select {
 				case observation.changed <- struct{}{}:
 				default:
@@ -155,7 +163,7 @@ func observeLive(
 	return observation
 }
 
-func observeSession(ctx context.Context, c *client.Client, id string) <-chan struct{} {
+func observeSession(ctx context.Context, c *client.Client, id string, diagnostics liveDiagnostics) <-chan struct{} {
 	changed := make(chan struct{}, 1)
 	go func() {
 		after := uint64(0)
@@ -166,6 +174,10 @@ func observeSession(ctx context.Context, c *client.Client, id string) <-chan str
 				if event.Type != "finished" && event.Type != "resync" {
 					return
 				}
+				diagnostics.record(time.Time{}, liveDiagnostic{
+					Event: "event_received", SessionID: id, JobID: event.JobID,
+					Revision: event.Revision, Trigger: event.Type, OK: true,
+				})
 				select {
 				case changed <- struct{}{}:
 				default:

@@ -758,6 +758,8 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	m.logger.Info("compile job started", "job_id", id, "worker", worker, "owner_id", rec.OwnerID)
 	workerStarted := time.Now()
 	var materializeTime, executionTime, archiveTime, persistenceTime, cacheTime time.Duration
+	var runnerTimeMS int64
+	var workspaceReuse, coldRetry bool
 	defer func() {
 		queueTime := time.Duration(0)
 		if !rec.Job.CreatedAt.IsZero() {
@@ -767,6 +769,8 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 			"job_id", id, "session_id", rec.Job.SessionID, "revision", rec.Job.Revision,
 			"queue_wait_ms", queueTime.Milliseconds(), "materialize_ms", materializeTime.Milliseconds(),
 			"execution_ms", executionTime.Milliseconds(), "result_archive_ms", archiveTime.Milliseconds(),
+			"compile_runner_ms", runnerTimeMS, "execute_overhead_ms", max(0, executionTime.Milliseconds()-runnerTimeMS),
+			"workspace_reuse", workspaceReuse, "cold_retry", coldRetry,
 			"completion_persist_ms", persistenceTime.Milliseconds(), "cache_publish_ms", cacheTime.Milliseconds(),
 			"worker_total_ms", time.Since(workerStarted).Milliseconds(),
 		)
@@ -799,6 +803,11 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	rec.InvalidateCheckpoint = executed.invalidateCheckpoint
 	executionTime = time.Since(started)
 	output := executed.output
+	// The worker reports the inner compile duration before the public result
+	// replaces it with the entire execution time. A retry reports its final attempt.
+	runnerTimeMS = output.Result.DurationMS
+	workspaceReuse = output.Result.WorkspaceReuse
+	coldRetry = executed.cache != nil && executed.cache.ColdRetry
 	output.Result.SessionID, output.Result.Revision = rec.Job.SessionID, rec.Job.Revision
 	output.Result.DurationMS = executionTime.Milliseconds()
 	output.Result.CompileCache = executed.cache
