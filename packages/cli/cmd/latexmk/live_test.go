@@ -24,6 +24,7 @@ import (
 )
 
 func TestRealtimeRetriesTransientDiagnosticDownload(t *testing.T) {
+	t.Setenv("LATEXMK_REALTIME_DIAGNOSTICS", "1")
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte("source"), 0600); err != nil {
 		t.Fatal(err)
@@ -136,7 +137,7 @@ func TestRealtimeRetriesTransientDiagnosticDownload(t *testing.T) {
 			compileOptions{timeout: 10 * time.Second, outDir: t.TempDir()},
 			protocol.Metadata{Capabilities: protocol.Capabilities{MaxFiles: 10, MaxExpandedBytes: 1024}},
 			session,
-			liveObservation{},
+			liveObservation{timing: newLiveTiming()},
 		)
 	})
 	if downloads.Load() != 2 || !strings.Contains(stderr, result.Error) {
@@ -147,6 +148,20 @@ func TestRealtimeRetriesTransientDiagnosticDownload(t *testing.T) {
 	}
 	if recoveredReports.Load() < 2 {
 		t.Fatal("session stopped before checking later events for duplicate diagnostics")
+	}
+	var downloadEvents []liveTimingEvent
+	for _, event := range readLiveTiming(t, stderr) {
+		if event.Event == "download_diagnostic" {
+			downloadEvents = append(downloadEvents, event)
+		}
+	}
+	if len(downloadEvents) != 2 || downloadEvents[0].OK || !downloadEvents[1].OK {
+		t.Fatalf("download retry timing was not recorded: %+v", downloadEvents)
+	}
+	for _, event := range downloadEvents {
+		if event.SessionID != session.ID || event.JobID != job.ID || event.Revision != 1 || event.DurationNS <= 0 {
+			t.Fatalf("failed/successful download lost its correlation or timing: %+v", event)
+		}
 	}
 }
 
@@ -178,6 +193,7 @@ func TestRealtimeSettingsChangeCancelsInFlightOperations(t *testing.T) {
 			controlFiles:  []string{cfg},
 		},
 		cancel,
+		nil,
 	)
 	if err := os.WriteFile(cfg, []byte("{\"outDir\":\"changed\"}"), 0600); err != nil {
 		t.Fatal(err)
@@ -252,7 +268,7 @@ func TestRealtimeUploadPolicyChangesCancelInFlightOperations(t *testing.T) {
 					watchInterval: 20 * time.Millisecond,
 					watchDebounce: 10 * time.Millisecond,
 					watchMaxWait:  time.Second,
-				}, cancel)
+				}, cancel, nil)
 			if err := os.WriteFile(policy, []byte("# changed policy\n"), 0600); err != nil {
 				t.Fatal(err)
 			}

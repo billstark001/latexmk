@@ -1,8 +1,8 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -23,7 +23,7 @@ if grep -q FAIL main.tex; then
   exit 1
 fi
 if test -f main.aux; then
-  if grep -q COLDONLY main.tex; then exit 3; fi
+  if grep -q COLDONLY main.tex; then sleep 0.05; exit 3; fi
   test "$(cat main.aux)" = good || exit 2
   echo warm > main.pdf
 else
@@ -57,6 +57,7 @@ printf 'INPUT main.tex\nOUTPUT main.aux\nOUTPUT main.pdf\n' > main.fls
 	if err != nil {
 		t.Fatal(err)
 	}
+	var logs bytes.Buffer
 	m := New(
 		cfg,
 		protocol.Metadata{},
@@ -64,7 +65,7 @@ printf 'INPUT main.tex\nOUTPUT main.aux\nOUTPUT main.pdf\n' > main.fls
 		projects,
 		nil,
 		nil,
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		slog.New(slog.NewJSONHandler(&logs, nil)),
 	)
 	req := protocol.CompileRequest{
 		ProtocolVersion: protocol.Version,
@@ -88,6 +89,7 @@ printf 'INPUT main.tex\nOUTPUT main.aux\nOUTPUT main.pdf\n' > main.fls
 		if job.Result == nil {
 			t.Fatalf("no result: %+v", job)
 		}
+		requireCompileStageLog(t, logs.Bytes(), job)
 		return job
 	}
 	first := run("source", req)
@@ -120,6 +122,11 @@ printf 'INPUT main.tex\nOUTPUT main.aux\nOUTPUT main.pdf\n' > main.fls
 	retry := run("COLDONLY", req)
 	if retry.Status != "succeeded" || !retry.Result.CompileCache.ColdRetry {
 		t.Fatal("warm failure did not retry cold")
+	}
+	retryStage := requireCompileStageLog(t, logs.Bytes(), retry)
+	if *retryStage.ExecutionMS-*retryStage.CompileRunnerMS < 20 {
+		t.Fatalf("failed warm attempt entered final runner timing: execution_ms=%d compile_runner_ms=%d",
+			*retryStage.ExecutionMS, *retryStage.CompileRunnerMS)
 	}
 	disabled := req
 	disabled.Auxiliary.Server = "none"

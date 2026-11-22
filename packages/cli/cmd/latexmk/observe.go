@@ -49,6 +49,7 @@ type liveObservation struct {
 	changed chan struct{}
 	reload  chan struct{}
 	errors  chan error
+	timing  *liveTiming
 }
 
 // Lease renewal must continue while capture, upload or result downloads block
@@ -89,14 +90,18 @@ func observeLive(
 	request protocol.CompileRequest,
 	opts compileOptions,
 	invalidate context.CancelCauseFunc,
+	timing *liveTiming,
 ) liveObservation {
 	observation := liveObservation{
 		changed: make(chan struct{}, 1),
 		reload:  make(chan struct{}, 1),
 		errors:  make(chan error, 1),
+		timing:  timing,
 	}
 	{
+		started := timing.start()
 		selection, err := c.SelectionPaths(request.Entry, request.Engine)
+		timing.record(started, liveTimingEvent{Event: "observe_reconcile", Trigger: "initial", OK: err == nil})
 		if err != nil {
 			observation.errors <- err
 			return observation
@@ -119,7 +124,9 @@ func observeLive(
 		tracker.RefreshInterval = 2 * time.Second
 		refresh := tracker.Refresh
 		tracker.Refresh = func() ([]projectwatch.Target, error) {
+			started := timing.start()
 			targets, err := refresh()
+			timing.record(started, liveTimingEvent{Event: "observe_reconcile", OK: err == nil})
 			if err != nil {
 				return tracker.targets, nil
 			} // Freeze rechecks policy before every upload.
@@ -145,6 +152,7 @@ func observeLive(
 						return
 					}
 				}
+				timing.record(time.Time{}, liveTimingEvent{Event: "observe_ready", OK: true})
 				select {
 				case observation.changed <- struct{}{}:
 				default:
@@ -155,7 +163,7 @@ func observeLive(
 	return observation
 }
 
-func observeSession(ctx context.Context, c *client.Client, id string) <-chan struct{} {
+func observeSession(ctx context.Context, c *client.Client, id string, timing *liveTiming) <-chan struct{} {
 	changed := make(chan struct{}, 1)
 	go func() {
 		after := uint64(0)
@@ -166,6 +174,10 @@ func observeSession(ctx context.Context, c *client.Client, id string) <-chan str
 				if event.Type != "finished" && event.Type != "resync" {
 					return
 				}
+				timing.record(time.Time{}, liveTimingEvent{
+					Event: "event_received", SessionID: id, JobID: event.JobID,
+					Revision: event.Revision, Trigger: event.Type, OK: true,
+				})
 				select {
 				case changed <- struct{}{}:
 				default:

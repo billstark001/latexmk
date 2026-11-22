@@ -141,3 +141,7 @@ Collect at least:
 - cache sweep errors and reclaimed bytes.
 
 Logs are JSON and include `request_id`; they do not log project content, tokens, or database URLs.
+
+`compile job stages` logs include queue, materialization, execution, result archive, persistence, cache publication and total worker timings, correlated by job/session/revision. `compile_runner_ms` is nested in execution and covers the final compiler attempt plus artifact collection; `execute_overhead_ms` is the remainder and may include an earlier failed warm attempt. `workspace_reuse` and `cold_retry` distinguish those paths. Do not sum nested measurements into the total again.
+
+Client-side stage timing is off unless that CLI process sets `LATEXMK_REALTIME_DIAGNOSTICS=1`. It writes `realtime_diagnostics` JSON lines to stderr. Use [controlled realtime measurements](REALTIME.md#stage-timing-and-controlled-measurements) to correlate client/server phases; enabling this variable on the server does not instrument a remote CLI.

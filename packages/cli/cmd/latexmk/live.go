@@ -31,9 +31,12 @@ func runLive(c *client.Client, request protocol.CompileRequest, opts compileOpti
 			code = reloadLiveSettings
 		}
 	}()
+	timing := newLiveTiming()
+	started := timing.start()
 	operation, finish := context.WithTimeout(ctx, opts.timeout)
 	meta, err := c.Metadata(operation)
 	finish()
+	timing.record(started, liveTimingEvent{Event: "metadata", OK: err == nil})
 	if err != nil {
 		return fail(err)
 	}
@@ -49,13 +52,14 @@ func runLive(c *client.Client, request protocol.CompileRequest, opts compileOpti
 	if request.Auxiliary.Server == "reuse" {
 		mode = "reuse"
 	}
-	observation := observeLive(ctx, c, request, opts, cancel)
+	observation := observeLive(ctx, c, request, opts, cancel, timing)
 	creationKey, err := liveIdempotencyKey()
 	if err != nil {
 		return fail(err)
 	}
 	for ctx.Err() == nil {
 		operation, finish := context.WithTimeout(ctx, opts.timeout)
+		started := timing.start()
 		session, err := c.CreateSession(
 			operation,
 			protocol.SessionRequest{
@@ -66,6 +70,7 @@ func runLive(c *client.Client, request protocol.CompileRequest, opts compileOpti
 			},
 		)
 		finish()
+		timing.record(started, liveTimingEvent{Event: "session_create", SessionID: session.ID, OK: err == nil})
 		if err != nil {
 			if permanentLiveError(err) {
 				return fail(err)
@@ -109,7 +114,8 @@ func runLiveSession(
 ) int {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	events := observeSession(ctx, c, session.ID)
+	timing := observation.timing
+	events := observeSession(ctx, c, session.ID, timing)
 	pollInterval := 5 * time.Second
 	if ttl := meta.Capabilities.SessionTTLMS; ttl > 0 && ttl < 15_000 {
 		pollInterval = max(time.Millisecond, time.Duration(ttl)*time.Millisecond/3)
@@ -150,11 +156,21 @@ func runLiveSession(
 	recovery := client.MissingFileRecovery{}
 	publishedJobID, diagnosticJobID := "", ""
 	displayed := uint64(0)
-	submit := func() error {
+	var attempt, pendingAttempt uint64
+	submit := func(trigger string) error {
 		operation, finish := context.WithTimeout(ctx, opts.timeout)
 		defer finish()
+		attempt++
+		timing.record(time.Time{}, liveTimingEvent{
+			Event: "submit_start", SessionID: session.ID, Attempt: attempt, Trigger: trigger, OK: true,
+		})
 		acceptPending := func() error {
+			started := timing.start()
 			job, err := c.CommitRevision(operation, *pending)
+			timing.record(started, liveTimingEvent{
+				Event: "commit", SessionID: pending.SessionID, JobID: job.ID, Revision: job.Revision,
+				Attempt: pendingAttempt, OK: err == nil,
+			})
 			if err != nil {
 				var failure *client.HTTPError
 				if errors.As(err, &failure) && failure.StatusCode == http.StatusConflict {
@@ -181,7 +197,15 @@ func runLiveSession(
 		if captured != nil {
 			previous = captured.Frozen
 		}
-		frozen, err := c.FreezeSnapshot(operation, request, recovery.Additional, meta, previous)
+		capture := func() (*client.CapturedSnapshot, error) {
+			started := timing.start()
+			frozen, err := c.FreezeSnapshot(operation, request, recovery.Additional, meta, previous)
+			timing.record(started, liveTimingEvent{
+				Event: "capture", SessionID: session.ID, Attempt: attempt, OK: err == nil,
+			})
+			return frozen, err
+		}
+		frozen, err := capture()
 		if err != nil {
 			return err
 		}
@@ -208,7 +232,7 @@ func runLiveSession(
 		for _, file := range frozen.Files {
 			if opts.naming != nil && file.Path == buildOptions.pdfExport {
 				_ = frozen.Close()
-				frozen, err = c.FreezeSnapshot(operation, request, recovery.Additional, meta, previous)
+				frozen, err = capture()
 				if err != nil {
 					return err
 				}
@@ -227,7 +251,11 @@ func runLiveSession(
 			dirty = false
 			return nil
 		}
+		started := timing.start()
 		state, err := c.GetSession(operation, session.ID)
+		timing.record(started, liveTimingEvent{
+			Event: "submit_state", SessionID: session.ID, Attempt: attempt, OK: err == nil,
+		})
 		if err != nil {
 			return err
 		}
@@ -237,11 +265,16 @@ func runLiveSession(
 		if err != nil {
 			return err
 		}
+		started = timing.start()
 		prepared, err := c.PrepareRevision(operation, session, request, frozen.Frozen, key)
+		timing.record(started, liveTimingEvent{
+			Event: "upload", SessionID: session.ID, Attempt: attempt, OK: err == nil,
+		})
 		if err != nil {
 			return err
 		}
 		pending = &prepared
+		pendingAttempt = attempt
 		pendingFiles = append([]projectarchive.File(nil), frozen.Files...)
 		pendingExport = buildOptions
 		keepReservation = true
@@ -251,10 +284,18 @@ func runLiveSession(
 		dirty = false
 		return nil
 	}
-	report := func() error {
+	report := func(reportTrigger string) error {
 		operation, finish := context.WithTimeout(ctx, opts.timeout)
 		defer finish()
+		started := timing.start()
 		state, err := c.GetSession(operation, session.ID)
+		var unreportedJob string
+		if state.LastSuccessfulJobID != publishedJobID {
+			unreportedJob = state.LastSuccessfulJobID
+		}
+		timing.record(started, liveTimingEvent{
+			Event: "report_state", SessionID: session.ID, JobID: unreportedJob, Trigger: reportTrigger, OK: err == nil,
+		})
 		if err != nil {
 			return err
 		}
@@ -262,13 +303,27 @@ func runLiveSession(
 		pruneExports(state)
 		// Deliver a completed success even if newer input is pending, but never move
 		// backwards. Consumers can compare its revision with the session's wanted one.
+		getJob := func(id string) (protocol.Job, error) {
+			started := timing.start()
+			job, err := c.GetJob(operation, id)
+			timing.record(started, liveTimingEvent{
+				Event: "result_metadata", SessionID: session.ID, JobID: id, Revision: job.Revision,
+				Trigger: reportTrigger, OK: err == nil,
+			})
+			return job, err
+		}
 		if state.LastSuccessfulJobID != "" && state.LastSuccessfulJobID != publishedJobID {
-			job, err := c.GetJob(operation, state.LastSuccessfulJobID)
+			job, err := getJob(state.LastSuccessfulJobID)
 			if err != nil {
 				return err
 			}
 			if job.Revision > displayed {
+				started := timing.start()
 				out, root, err := c.DownloadLiveResult(operation, job, request, opts.outDir)
+				timing.record(started, liveTimingEvent{
+					Event: "download_publish", SessionID: session.ID, JobID: job.ID, Revision: job.Revision,
+					Trigger: reportTrigger, OK: err == nil && out.Result.Success,
+				})
 				if err != nil {
 					return err
 				}
@@ -282,7 +337,12 @@ func runLiveSession(
 						}
 					}
 					publishedOptions.outDir = root
-					if err := exportPDF(publishedOptions, out); err != nil {
+					started = timing.start()
+					err := exportPDF(publishedOptions, out)
+					timing.record(started, liveTimingEvent{
+						Event: "export", SessionID: session.ID, JobID: job.ID, Revision: job.Revision, OK: err == nil,
+					})
+					if err != nil {
 						return err
 					}
 					releaseBuildNaming(publishedOptions)
@@ -312,7 +372,7 @@ func runLiveSession(
 		if state.LatestJobID == "" || state.LatestJobID == publishedJobID || state.LatestJobID == diagnosticJobID {
 			return nil
 		}
-		job, err := c.GetJob(operation, state.LatestJobID)
+		job, err := getJob(state.LatestJobID)
 		if err != nil {
 			return err
 		}
@@ -325,7 +385,12 @@ func runLiveSession(
 			diagnosticJobID = job.ID
 			return nil
 		}
+		started = timing.start()
 		out, _, err := c.DownloadLiveResult(operation, job, request, opts.outDir)
+		timing.record(started, liveTimingEvent{
+			Event: "download_diagnostic", SessionID: session.ID, JobID: job.ID, Revision: job.Revision,
+			Trigger: reportTrigger, OK: err == nil,
+		})
 		if err != nil {
 			return err
 		}
@@ -376,29 +441,29 @@ func runLiveSession(
 			return fail(err)
 		case <-observation.changed:
 			recovery.Rounds = 0
-			if code := handle(submit()); code != -2 {
+			if code := handle(submit("watch")); code != -2 {
 				return code
 			}
 		case <-trigger:
-			if code := handle(submit()); code != -2 {
+			if code := handle(submit("initial_or_recovery")); code != -2 {
 				return code
 			}
 		case <-verify.C:
-			if code := handle(submit()); code != -2 {
+			if code := handle(submit("verification")); code != -2 {
 				return code
 			}
 		case <-poll.C:
-			if code := handle(report()); code != -2 {
+			if code := handle(report("poll")); code != -2 {
 				return code
 			}
 			// Retry disconnected uploads even when no further editor event occurs.
 			if dirty {
-				if code := handle(submit()); code != -2 {
+				if code := handle(submit("retry")); code != -2 {
 					return code
 				}
 			}
 		case <-events:
-			if code := handle(report()); code != -2 {
+			if code := handle(report("event")); code != -2 {
 				return code
 			}
 		}
