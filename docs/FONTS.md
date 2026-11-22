@@ -68,6 +68,10 @@ Full also registers legacy Type 1 fonts: Caladea's Type 1 bold face can shadow i
 
 The project does not distribute these originals. Supply files only under a license permitting use on your Linux compilation server and, if applicable, image distribution. A local Windows/macOS installation or PDF embedding permission alone is not a server redistribution grant. See [Microsoft's font redistribution FAQ](https://learn.microsoft.com/en-us/typography/fonts/font-faq) and the [Apple software license applicable to your purchase](https://www.apple.com/legal/sla/). If your license does not permit this deployment, select an alternative above.
 
+For project-specific fonts, prefer a [file resource](RESOURCES.md) with `kind: "font"`, a stable project-relative `mount`, explicit license files and a separate redistribution decision. The CLI freezes the bytes once, the server caches them under owner authorization, and each compile uses a private copy. Filename/`Path` selection works independently of system font registration. On a baseline supporting name lookup, the runner generates private Fontconfig configuration and writable caches; LuaLaTeX also receives the private font directories and cache location. A file-only publishing baseline does not gain name lookup from the working server.
+
+Publishing a resource requires `bundle`, `provided` or `omit` in the publication plan. A private font marked `omit` cannot help the final package compile. Use another target with explicit replacement font settings when needed. arXiv supports XeLaTeX, but its documented TeX Live font lookup is primarily by filename; uploaded fonts are distributed with the submission. Consult [arXiv's environment notes](https://info.arxiv.org/help/faq/texlive.html) and verify against the registered target baseline.
+
 For a private derived **runtime** image, place authorized font files in `licensed-fonts/` beside this Dockerfile:
 
 ```dockerfile
@@ -90,6 +94,8 @@ volumes:
 ```
 
 Ensure directories are searchable and files readable by UID 10001. Restart the container after adding fonts; do not mount over the whole fonts directory. Validate the actual selected family with `fc-list` and a compilation, since a read-only filesystem cannot save system Fontconfig caches.
+
+That mount only changes the service container. It is sufficient for native compilation, but disposable isolated workers do not inherit service mounts. For isolated compilation, use a registered resource or include the fonts in the worker's runtime image.
 
 For project-local fonts, upload the font files with your project (include them in the upload manifest or use `--include-file 'fonts/**'`; confirm the selection with `--dry-run`) and select exact filenames to avoid name collisions:
 

@@ -43,6 +43,17 @@ Benchmarks beside the tests measure nested ignore evaluation, missing-file log e
 
 ## Local integration checks
 
+The resource protocol can be exercised across the actual native CLI and server with a deterministic compiler fixture, without installing TeX or pulling an image:
+
+```sh
+pnpm --filter @latexmk/cli --filter @latexmk/server build
+python3 scripts/resources-e2e.py \
+  --cli packages/cli/dist/latexmk \
+  --server-binary packages/server/dist/latexmk-server
+```
+
+This checks resource lock/fetch, blob transfer, repeated warm compilation, font-content invalidation, source ZIP/font/license capture, and failure when an omitted font would otherwise be borrowed from the working environment. The fixture uses temporary projects, an isolated configuration directory and a localhost development server; it removes all temporary files and starts no Docker containers. It verifies protocol composition and isolation, not actual TeX rendering or equivalence to arXiv. Resource unit tests separately cover archive checksums, expansion limits, private catalog authorization, worker transport, independent source/cache quotas, and target-only final verification.
+
 Standard unit checks do not require local TeX or Docker. Optional engine tests require Python 3, Docker, and a **prebuilt local image** containing latexmk, pdfLaTeX, XeLaTeX, BibTeX, makeindex and the fonts/packages used by the fixture. Supply a Linux controller binary matching the image architecture and a host CLI. For an arm64 image, for example:
 
 ```sh

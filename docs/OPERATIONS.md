@@ -26,6 +26,8 @@ Database migration adds immutable snapshot fields to queued jobs. Historical fin
 
 For Railway Serverless, the state directory is deliberately in `/tmp`; cache reuse lasts only for the running instance. For Lightsail and always-on Railway, the generated Compose configuration uses a named volume. A volume is helpful for repeated work on one paper, but it is not a database backup.
 
+Package archives and prepared resource environments have a separate quota under `STATE_DIR/environments`, excluded from source/result accounting. Presets bound this cache independently: serverless uses 64 MiB total / 8 MiB per environment, Lightsail 512 MiB / 64 MiB, and always-on Railway 128 MiB / 16 MiB. All presets prepare at most one environment at a time. Override these with bundler `--resource-cache-bytes`, `--max-resource-bytes`, `--resource-owner-bytes`, `--max-resource-files` and `--max-resource-prepares`, or edit the generated environment file. Size the filesystem and tmpfs for both caches, active workspaces and dependency preparation's temporary expansion.
+
 ## Baseline sizing
 
 For a research-group instance start with:
@@ -57,6 +59,17 @@ TikZ, complex fonts, Glossaries, Biber, and large images substantially increase 
 | `LATEXMK_MAX_UPLOAD_SESSIONS` | `64` |
 | `LATEXMK_MAX_LOG_BYTES` | `8MiB` per stream |
 | `LATEXMK_MAX_STATE_BYTES` | `2GiB` |
+| `LATEXMK_RESOURCE_CACHE_DIR` | `STATE_DIR/environments`; separately accounted |
+| `LATEXMK_RESOURCE_CACHE_BYTES` | `4GiB`, including package archives and prepared trees |
+| `LATEXMK_MAX_RESOURCE_BYTES` | `512MiB` expanded per environment |
+| `LATEXMK_MAX_RESOURCE_FILES` | `20000` per environment |
+| `LATEXMK_RESOURCE_OWNER_BYTES` | `1GiB` of resource manifests per owner |
+| `LATEXMK_MAX_RESOURCE_ENVIRONMENTS` | `64` per owner |
+| `LATEXMK_MAX_CONCURRENT_RESOURCE_PREPARES` | `2` |
+| `LATEXMK_RESOURCE_PREPARE_TIMEOUT` | `5m` |
+| `LATEXMK_RESOURCE_RETENTION` | `168h` |
+| `LATEXMK_RESOURCE_REGISTRY_FILE` | empty; administrator's baseline/resource JSON |
+| `LATEXMK_RUNTIME_INVENTORY_DIR` | `/usr/local/lib/latexmk` |
 | `LATEXMK_RESULT_RETENTION` | `168h` |
 | `LATEXMK_SNAPSHOT_RETENTION` | `168h` |
 | `LATEXMK_BLOB_RETENTION` | `168h` |
@@ -69,6 +82,10 @@ TikZ, complex fonts, Glossaries, Biber, and large images substantially increase 
 | `LATEXMK_CORS_ORIGINS` | empty (same-origin); comma-separated exact Dashboard origins |
 
 Invalid booleans, durations, byte sizes, resource limits, or CORS origins fail server startup instead of silently falling back. A CORS origin must be an exact `http://` or `https://` origin; `*` and path-bearing URLs are rejected.
+
+The resource directory cannot contain project state or overlap its managed source/result/checkpoint subtrees. Resource collection removes expired, unpinned environments and unreferenced blobs/archives; queued/running jobs and live sessions retain leases. A removed cache entry can be prepared again from its lock. Catalog resources retain their owner and export policy even when file contents are deduplicated. Do not use a public font catalog entry for a private installation merely to obtain cache reuse.
+
+The administrator registry has `default`, `baselines` and `resources` fields. Baselines use the public inventory schema from [API](API.md#resource-environments), with a digest-pinned runner `image`, TeX Live snapshot, installed package revisions, engines, toolchain and `fontLookup` (`files` or `names`). Registering alternate baselines requires an already isolated controller with `LATEXMK_RUNNER_IMAGE` and a unique namespace; native compilation deployments cannot add Docker execution through the registry. All distinct images are checked at startup and must include the matching application worker binary. Resource entries have `ref`, a server-only `directory`, `kind`, `redistribution`, `licenseFiles`, optional exact `files`, and `owners` (empty means the catalog entry is public). Projects reference the immutable `ref`; they never choose a host directory or runner image. Register a genuine target-specific image and inventory before claiming target-environment verification; changing an inventory label does not reproduce a publishing service.
 
 `LATEXMK_RESULT_RETENTION` also bounds terminal job metadata. Shutdown first stops HTTP admission, then cancels and waits for compile workers up to `LATEXMK_SHUTDOWN_TIMEOUT`.
 

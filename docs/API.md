@@ -86,6 +86,25 @@ Clients must validate every returned path is below their local output root and s
 
 Every v2 endpoint requires authentication and never returns project source files. Content is addressed by SHA-256 and isolated by authenticated principal.
 
+Resource environments extend protocol 2 through the `resourceEnvironments` and `publicationVerification` capabilities. Source upload plans may set `request.environmentDigest` to a prepared, authorized environment's 64-character SHA-256 identity. Queued jobs and realtime sessions pin that environment; results echo `environmentDigest`. System packages and managed resource files do not enter the project's recorder input list. The legacy multipart endpoint does not accept resource environments.
+
+### Resource environments
+
+These endpoints require compilation authentication. Environment digests identify content, not permission to use or export another owner's resources.
+
+| Endpoint | Request / result |
+| --- | --- |
+| `GET /v1/environments` | `{ "baselines": [...], "default": "default" }`; registered runtime inventories |
+| `POST /v1/environments/resolve` | `baseline`, `resources`, `provided`, `requires`; returns the resolved environment and missing blob hashes |
+| `PUT /v1/environments/{digest}/blobs/{sha256}` | Exact declared resource bytes, verified by size and SHA-256 |
+| `POST /v1/environments/{digest}/prepare` | Empty body; prepares the authorized environment and returns its manifest |
+| `GET /v1/environments/{digest}` | Owner-authorized manifest and cache availability |
+| `GET /v1/environments/{digest}/resources/{resourceID}/blobs/{sha256}` | Exports a declared blob only when that specific resource permits redistribution |
+
+Resolve accepts transport manifests, not client paths, Docker images, shell commands or repository overrides. Each resource has an `id`, `type`, optional `kind`/`mount`, and package requirements, registered `ref`, or resource-relative `files` (`path`, `size`, `sha256`). `provided` checks the selected baseline and never installs missing packages. The current portable contract verifies baseline-provided TeX Live packages; file/server resources requiring exact project paths must be bundled or represented by a separate target's explicit baseline requirements.
+
+An environment contains its `digest`, full `baseline` identity, resolved `resources`, `provided`, `requires`, added TeX Live `packages` (revision and checksum), `ready` and `missing`. Availability is excluded from the content identity. Clients must verify the returned digest against the manifest and the compile result against the requested environment before publishing artifacts. See [resource configuration](RESOURCES.md).
+
 ### `POST /v1/uploads/plans`
 
 Submits the project manifest and compile request. The server validates paths, per-blob size, project size, session capacity, and other limits; it creates a 15-minute upload session and returns only hashes whose content is absent.

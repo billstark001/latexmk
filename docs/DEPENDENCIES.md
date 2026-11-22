@@ -1,6 +1,6 @@
 # Client dependency selection
 
-The default client upload mode is `auto`. It builds the normal policy-filtered manifest first, then selects literal dependencies starting from the entry TeX file. The scanner never reads a path that Git-ignore, the denylist, symlink checks, or the project-root boundary removed from that manifest.
+The default client upload mode is `auto`. It builds the normal policy-filtered manifest first, then selects literal dependencies starting from the entry TeX file. The scanner never reads a project path that Git-ignore, the denylist, symlink checks, or the project-root boundary removed from that manifest. Explicit [managed resources](RESOURCES.md) have a separate capture/authorization policy and contribute logical mounted candidates for discovery; their bytes do not join the source upload.
 
 ## Supported references
 
@@ -27,7 +27,7 @@ Bare class, package and bibliography-style names absent from the allowed manifes
 
 `import` directories are project-root-relative; `subimport` extends the active import directory. Nested inputs search import directories before the project root. Paths are normalized in that context before enforcing the root boundary. Ordinary `input` does not become relative to its containing file. Import search paths are restored on return. Graphics paths, extension lists, font defaults and SVG settings obey braced groups, `begingroup`/`endgroup` and environments.
 
-Font options work before or after the name, and around the control-sequence argument of `newfontfamily`. Explicit upright, bold, italic, bold-italic, slanted, swash and small-caps faces support nested face features. Named system fonts are not missing project files. System font availability and arbitrary OpenType feature code are not inferred. See the [fontspec documentation](https://github.com/latex3/fontspec/blob/main/fontspec-doc-fontsel.tex).
+Font options work before or after the name, and around the control-sequence argument of `newfontfamily`. Explicit upright, bold, italic, bold-italic, slanted, swash and small-caps faces support nested face features. Named system fonts are not missing project files. A resolved baseline inventory can satisfy a bare font filename when no project/managed file has that name; only the external inventory candidate is removed from source transport. Same-named project files retain precedence. Offline previews use inventory only from a valid matching resource lock and do not contact a server to guess missing fonts. Arbitrary OpenType feature code is not inferred. See the [fontspec documentation](https://github.com/latex3/fontspec/blob/main/fontspec-doc-fontsel.tex).
 
 Inline plot tables and whole table macros are data, not filenames. Their literal `pgfplotstableread` loaders remain discoverable independently. Computed filenames still require explicit selection.
 
@@ -107,7 +107,7 @@ latexmk files --include-file 'figures/**/*.pdf' main.tex
 
 `--explain` checks a project-relative regular file against upload policy without reading its contents. Directories, special files and symlinks are not uploadable. This does not resolve entry dependencies; the normal preview reports actual selected files and their reasons. Preview, compilation and watch share selection code. Only selected files are hashed and charged against the upload byte limit; candidate enumeration keeps its separate file-count bound.
 
-Watch refreshes the dependency set while waiting, detecting new glob matches, deleted files, renamed files, and changed policy files. Project/user JSON, dotenv and CLI settings remain fixed for a watch session; restart to reload them.
+Watch refreshes the dependency set while waiting, detecting new glob matches, deleted files, renamed files, and changed policy files. Changes to watched project/user JSON, dotenv, credentials, the resource lock or selected resource files rebuild configuration and the environment before a new watch/realtime session. CLI flags remain fixed for the invocation.
 
 ## Limits
 
@@ -123,7 +123,7 @@ Catcode changes, arbitrary global assignments, dynamic graphics rules, complex f
 
 ## Recorder cache
 
-The server runs `latexmk` with `-recorder`. It parses `.fls` `INPUT` records after compilation and returns only normalized paths for regular files inside the disposable project workspace. TeX Live system paths, absolute container paths, paths outside the workspace, and symlink escapes are not returned.
+The server runs `latexmk` with `-recorder`. It parses `.fls` `INPUT` records after compilation and returns only normalized paths for regular files inside the disposable project workspace. TeX Live system paths, managed resource destinations, absolute container paths, paths outside the workspace, and symlink escapes are not returned.
 
 After a successful compile, the client stores these relative paths in:
 
@@ -131,7 +131,7 @@ After a successful compile, the client stores these relative paths in:
 .latexmk-cache/dependencies.json
 ```
 
-The cache is keyed by entry file and engine, written atomically with mode 0600 where supported, and excluded from uploads by default. A cached path is selected only if it is also present in the current Git-ignore/denylist-filtered manifest. Changing policy therefore cannot make an old cache restore a denied file.
+The cache is keyed by entry file, engine and resolved environment digest, written atomically with mode 0600 where supported, and excluded from uploads by default. A cached path is selected only if it is also present in the current Git-ignore/denylist-filtered manifest. Changing policy therefore cannot make an old cache restore a denied file.
 
 History is additive and can be stale after edits. It never marks a dynamic reference as covered merely because a non-entry file was accepted; the same applies to unrelated explicit files. Missing literals, malformed commands, dynamic references and out-of-root paths remain unresolved in `auto`. Use a reviewed manifest for computed inputs, or review all candidates before `all`:
 
@@ -181,3 +181,9 @@ Project/user configuration and environment variables are resolved once at startu
 For extensionless `\includegraphics`, automatic selection uses the ordered graphics extensions supplied by the selected registered engine driver. The built-ins mirror `pdftex.def`, `luatex.def` and `xetex.def`; see [engine registration](ENGINES.md). For example, pdfLaTeX and LuaLaTeX choose `plot.png` before `plot.PDF`, while XeLaTeX chooses `plot.PDF` first. Suffix case is preserved for the Linux server. `\DeclareGraphicsExtensions` overrides these defaults within its TeX scope. Custom drivers or conversion packages that change graphics rules still require explicit selection when static discovery cannot model their behavior.
 
 Real pdfLaTeX/XeLaTeX driver checks, including a case-sensitive competing-image fixture, are available through the opt-in [local integration checks](DEVELOPMENT.md#local-integration-checks).
+
+## Managed resources and opaque server inputs
+
+Declared local resources are captured independently, contribute their logical mount paths during discovery and are stripped from the ordinary source manifest. Their original source directories are reserved, even in `all` mode. Registered server resources can contribute external manifest candidates after resolution without exporting their private bytes to the client. The scanner does not recursively parse an opaque server resource's TeX contents; project files loaded indirectly by such code may need explicit `includeFiles`/manifest selection or the normal bounded missing-file retry. A resource declaration does not expand macros or make an unrelated computed input resolved.
+
+`files` and `--dry-run` remain offline and cannot promise that uncached server resources or fonts exist. Publication previews label pending inventories/exports and do not claim a verified ZIP. Resource members, source upload members and final publication members are distinct manifests; use [resources](RESOURCES.md) and the [pack plan](PACKING.md) to inspect their respective roles.

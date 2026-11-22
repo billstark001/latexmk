@@ -22,6 +22,8 @@ export LATEXMK_CLI="${LATEXMK_CLI:-latexmk}"
 
 `doctor` checks health and metadata and reports the selected credential source. Use `meta --json` if detailed engine/toolchain capabilities are needed. Resolve readiness failures before submitting a compile.
 
+Check `help` and server capabilities before using resource environments or named publications; these follow the checkout and may be newer than an installed release. `resources inspect --target NAME --json` and `files` are offline previews. `resources lock` resolves and writes `.latexmk-resources.lock.json`; `resources fetch` uploads missing authorized files and prepares the server cache. Do not execute those mutating commands in a project the user permitted only for reading.
+
 The default `auto` mode selects recognized dependencies and permitted recorder history. For dynamic inputs, supplement with `--include-file 'figures/**/*.pdf'`, JSON `includeFiles`, or a manifest. Every user-authored list supports glob; quote CLI globs so the shell does not expand them. `manifest` is a strict list plus the entry; it does not prove dependency completeness. Git/ignore and mandatory credential/path rules still apply. Ordinary `.gitkeep` is a placeholder. Use `files --explain PATH main.tex` to investigate exclusions. Do not silently switch to `all` or disable Git filtering to make a compile succeed.
 
 ## Compile and retain outputs
@@ -57,9 +59,21 @@ PDF, SyncTeX and diagnostics are independent of auxiliary retention. Local `none
 
 `cache clean` removes local auxiliary cache contents while preserving project identity and dependency history. `clean ENTRY` removes supported generated extensions next to an entry; avoid it where similarly named files are maintained inputs. Remote cleanup uses its existing preview and digest-validated apply flow. Pass only supported CLI options; arbitrary TeX/latexmk options are rejected.
 
+## Resource environments
+
+Honor `resources`, `defaultResources`, target resource lists, `requires` and `resourceOptions`. A target's explicit resource list replaces the defaults; `[]` disables them. Resource `path` is inside the project root and `mount` is its logical build path. Explicit local resources are frozen separately from ordinary source/Git selection, while credential and confinement checks still apply. An unused resource's original directory stays excluded even with upload mode `all`.
+
+Use `--resource ID` to add a declared resource, `--without-resource ID` to remove one, or `--no-resources` to clear selection when the user requests a different environment. `--frozen-lockfile` rejects changed declarations or bytes; `--lockfile FILE` selects another project-relative lock. `--prepare-timeout` bounds preparation while compilation keeps its own timeout. Missing TeX packages use TeX Live package names (`algorithms`, not `algorithm`), resolved from the server's fixed snapshot. New binaries remain administrator-managed runtime capabilities.
+
+For fonts, distinguish exact file references from family-name lookup. Prefer filename/`Path` for portable targets; a font file's presence does not mean a publishing service registers its family name. Do not invent substitutions or rewrite the project's TeX font settings to hide an unavailable font. Fontconfig, luaotfload and traditional TeX font maps are different activation mechanisms; use the supported resource/baseline behavior and report unmet requirements.
+
 ## Pack sources
 
 Use `pack --dry-run --json --target theory` to preview an offline source ZIP. `pack --mode arxiv` verifies a cold build and includes supported generated bibliography/index files, so it needs the configured service. `--output-template 'release/{entry.stem}-{datetime:compact}-{git.commit:8}.zip'` chooses a contextual name and is mutually exclusive with literal `--output`. Pack does not use PDF exports or PDF retention. Inspect the pack report before relying on it for submission; creating a ZIP does not submit it anywhere.
+
+For configured publications, use `pack --publication NAME --dry-run --explain --json`, then the same command without preview flags. A publication selects its complete target; do not combine it with entry/target/engine overrides. Managed resources need explicit `bundle`, `provided` or `omit` decisions. Bundling requires allowed redistribution and retains license files; `provided` checks the target baseline without installing anything; `omit` must survive final compilation without that resource. Choose another build target for alternate fonts or processors.
+
+Read `verification.scope` and `environmentDigest`: `server-environment` proves the captured package on this service, while `target-environment` proves it on the registered target baseline. `verify: "target"` / `--verify-in ENVIRONMENT` requires that actual baseline; no fallback is permitted. Final verification uses only ZIP members and the baseline, with no working font/package overlay or missing-file recovery. Generated bibliography files must use the target-compatible toolchain. arXiv's live environment can change, so do not describe server-only verification as arXiv compatibility.
 
 ## References
 
@@ -69,6 +83,7 @@ These upstream guides follow `main`; check installed CLI support. In a source ch
 - [Configuration](https://github.com/billstark001/latexmk/blob/main/docs/CONFIGURATION.md): authentication precedence, declaring-file-relative paths, dotenv, targets and output defaults.
 - [Naming](https://github.com/billstark001/latexmk/blob/main/docs/NAMING.md): template formats, watch/realtime context and export cleanup boundaries.
 - [Dependencies](https://github.com/billstark001/latexmk/blob/main/docs/DEPENDENCIES.md): glob syntax, policy controls, scanner limitations and missing-file retry boundaries.
+- [Resources](https://github.com/billstark001/latexmk/blob/main/docs/RESOURCES.md): resource declarations, immutable locks, private cache reuse, font lookup and publication dispositions.
 - [Auxiliary files](https://github.com/billstark001/latexmk/blob/main/docs/AUXILIARY.md): retention, transfer expiry, reuse compatibility and cleanup.
 - [Realtime](https://github.com/billstark001/latexmk/blob/main/docs/REALTIME.md): lease renewal, previews and isolated checkpoints.
 - [Packing](https://github.com/billstark001/latexmk/blob/main/docs/PACKING.md): offline source ZIPs and verified arXiv packages.

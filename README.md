@@ -2,6 +2,8 @@
 
 A remote LaTeX compiler for small research groups. A Go CLI selects project dependencies and sends an immutable source snapshot to a Go server. Each job compiles in an isolated workspace and returns PDF, SyncTeX and diagnostics. Optional server auxiliary caches reduce repeated compilation passes. Realtime sessions provide continuous previews, and `pack` exports portable source ZIPs.
 
+Projects can declare extra TeX Live packages, fonts and file resources without rebuilding the runtime image. Resources are locked by content, prepared in a bounded server cache, and attached to jobs by an immutable environment digest. Named publications select a build target, resource export rules and an optional independently registered verification environment. See [resources](docs/RESOURCES.md) and [source packages](docs/PACKING.md).
+
 This documentation follows `main`. Changes newer than the latest published release require local builds; see the [changelog](CHANGELOG.md) for component versions.
 
 ## Install the CLI

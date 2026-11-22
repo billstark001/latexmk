@@ -22,6 +22,12 @@ All notable changes to latexmk are documented in this file. Entries follow the c
 
 ## [Unreleased]
 
+### Added
+
+- Declare TeX Live, local file/font and registered server resources; resolve and lock immutable environments, prefetch verified package archives, and reuse prepared resource trees across jobs. Bind compilation, dependency history and realtime sessions to the selected environment, with separate owner authorization and cache quotas.
+- Export named publications with explicit bundle/provided/omit resource policies, license-file preservation, explainable member plans and verification evidence. Target verification builds bibliography/index files and the exact final package against a registered baseline without borrowing working resources.
+- Add resource limits to deployment presets, resource/target compatibility tests, and resource and publication guidance to the remote compilation skill.
+
 ### Changed
 
 - Stop CLI-only changes from triggering automatic application-image publication. Keep ordinary CI and CLI releases independent; manual nonpublishing image workflows remain available for CLI/server integration checks.
