@@ -7,6 +7,8 @@ The deployment bundler has two independent build paths:
 
 Both support `--profile slim|full`. The slim profile retains the existing CJK, XeLaTeX, Biber, and LaTeX collection set; full retains the complete base distribution. Resource presets (`railway-serverless`, `lightsail-tokyo`, `railway`) are independent of the runtime profile.
 
+Extra project macro packages and fonts can use [resource environments](../../docs/RESOURCES.md) instead of another runtime build. Bundles emit a separately bounded resource cache on the same persistent volume (or ephemeral tmpfs for serverless). Resource byte/file/preparation limits can be overridden through `--resource-cache-bytes`, `--max-resource-bytes`, `--resource-owner-bytes`, `--max-resource-files` and `--max-resource-prepares`. Administrator catalogs and independent publishing baselines are configured at service startup; no publishing platform is silently emulated by the slim/full choice.
+
 ## Local builds
 
 ```sh

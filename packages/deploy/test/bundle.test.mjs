@@ -57,6 +57,10 @@ test('serverless preset emits bounded ephemeral-cache settings', async () => {
     const env = await readFile(path.join(out, '.env.example'), 'utf8');
     assert.match(env, /LATEXMK_MAX_CONCURRENT_COMPILES=1/);
     assert.match(env, /LATEXMK_MAX_STATE_BYTES=256MiB/);
+    assert.match(env, /LATEXMK_RESOURCE_CACHE_BYTES=64MiB/);
+    assert.match(env, /LATEXMK_MAX_RESOURCE_BYTES=8MiB/);
+    assert.match(env, /LATEXMK_MAX_CONCURRENT_RESOURCE_PREPARES=1/);
+    assert.match(env, /LATEXMK_RESOURCE_CACHE_DIR=\/tmp\/latexmk-state\/environments/);
     assert.match(env, /LATEXMK_RESULT_RETENTION=24h/);
     assert.match(env, /LATEXMK_STATE_DIR=\/tmp\/latexmk-state/);
     assert.match(env, /DATABASE_URL=postgres:\/\/latexmk:replace-with-external-secret/);
@@ -72,6 +76,53 @@ test('serverless preset emits bounded ephemeral-cache settings', async () => {
     assert.doesNotMatch(dockerfile, /--mount=type=cache/);
     assert.match(dockerfile, /RUN go mod download/);
     assert.equal(railway.deploy.healthcheckPath, '/healthz');
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('resource limits can be overridden without changing the runtime image', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'latexmk-resource-deploy-'));
+  try {
+    const out = path.join(temp, 'app');
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.join(root, 'src', 'index.ts'),
+        'bundle',
+        '--out',
+        out,
+        '--resource-cache-bytes',
+        '256MiB',
+        '--max-resource-bytes',
+        '64MiB',
+        '--resource-owner-bytes',
+        '128MiB',
+        '--max-resource-files',
+        '3000',
+        '--max-resource-prepares',
+        '1',
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const env = await readFile(path.join(out, '.env.example'), 'utf8');
+    assert.match(env, /LATEXMK_RESOURCE_CACHE_BYTES=256MiB/);
+    assert.match(env, /LATEXMK_MAX_RESOURCE_FILES=3000/);
+    assert.match(env, /LATEXMK_RESOURCE_OWNER_BYTES=128MiB/);
+    const dockerfile = await readFile(path.join(out, 'Dockerfile'), 'utf8');
+    assert.doesNotMatch(dockerfile, /tlmgr install/);
+    for (const [flag, value] of [
+      ['--max-resource-files', '0'],
+      ['--resource-cache-bytes', '64MiB\nPORT=1'],
+    ]) {
+      const invalid = spawnSync(
+        process.execPath,
+        [path.join(root, 'src', 'index.ts'), 'bundle', '--out', path.join(temp, 'invalid'), flag, value],
+        { encoding: 'utf8' },
+      );
+      assert.notEqual(invalid.status, 0);
+    }
   } finally {
     await rm(temp, { recursive: true, force: true });
   }

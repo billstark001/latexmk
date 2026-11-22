@@ -21,6 +21,11 @@ const DEPLOYMENT_PRESETS = {
     maxFiles: '2000',
     maxLogBytes: '2MiB',
     maxStateBytes: '256MiB',
+    resourceCacheBytes: '64MiB',
+    maxResourceBytes: '8MiB',
+    resourceOwnerBytes: '64MiB',
+    maxResourceFiles: '4000',
+    maxResourcePrepares: '1',
     maxUploadSessions: '16',
     resultRetention: '24h',
     snapshotRetention: '48h',
@@ -42,6 +47,11 @@ const DEPLOYMENT_PRESETS = {
     maxFiles: '5000',
     maxLogBytes: '4MiB',
     maxStateBytes: '3GiB',
+    resourceCacheBytes: '512MiB',
+    maxResourceBytes: '64MiB',
+    resourceOwnerBytes: '256MiB',
+    maxResourceFiles: '10000',
+    maxResourcePrepares: '1',
     maxUploadSessions: '64',
     resultRetention: '168h',
     snapshotRetention: '168h',
@@ -63,6 +73,11 @@ const DEPLOYMENT_PRESETS = {
     maxFiles: '5000',
     maxLogBytes: '4MiB',
     maxStateBytes: '512MiB',
+    resourceCacheBytes: '128MiB',
+    maxResourceBytes: '16MiB',
+    resourceOwnerBytes: '128MiB',
+    maxResourceFiles: '8000',
+    maxResourcePrepares: '1',
     maxUploadSessions: '32',
     resultRetention: '72h',
     snapshotRetention: '72h',
@@ -115,6 +130,11 @@ function parseBundleOptions(args: string[], command: 'bundle' | 'runtime-bundle'
       engines: { type: 'string' },
       'compile-timeout': { type: 'string' },
       'max-concurrent': { type: 'string' },
+      'resource-cache-bytes': { type: 'string' },
+      'max-resource-bytes': { type: 'string' },
+      'resource-owner-bytes': { type: 'string' },
+      'max-resource-files': { type: 'string' },
+      'max-resource-prepares': { type: 'string' },
       'server-source': { type: 'string' },
       'shared-source': { type: 'string' },
       push: { type: 'boolean' },
@@ -171,6 +191,11 @@ function parseBundleOptions(args: string[], command: 'bundle' | 'runtime-bundle'
     stateDir: '/var/lib/latexmk',
     stateVolume: true,
     ...preset,
+    resourceCacheBytes: values['resource-cache-bytes'] ?? preset?.resourceCacheBytes ?? '512MiB',
+    maxResourceBytes: values['max-resource-bytes'] ?? preset?.maxResourceBytes ?? '64MiB',
+    resourceOwnerBytes: values['resource-owner-bytes'] ?? preset?.resourceOwnerBytes ?? '256MiB',
+    maxResourceFiles: values['max-resource-files'] ?? preset?.maxResourceFiles ?? '10000',
+    maxResourcePrepares: values['max-resource-prepares'] ?? preset?.maxResourcePrepares ?? '2',
     compileTimeout: values['compile-timeout'] ?? preset?.compileTimeout ?? '2m',
     maxConcurrent: values['max-concurrent'] ?? preset?.maxConcurrent ?? '2',
     serverSource: path.resolve(values['server-source'] ?? path.join(repoRoot, 'packages', 'server')),
@@ -180,8 +205,20 @@ function parseBundleOptions(args: string[], command: 'bundle' | 'runtime-bundle'
     ['--engines', options.engines],
     ['--compile-timeout', options.compileTimeout],
     ['--max-concurrent', options.maxConcurrent],
+    ['--resource-cache-bytes', options.resourceCacheBytes],
+    ['--max-resource-bytes', options.maxResourceBytes],
+    ['--resource-owner-bytes', options.resourceOwnerBytes],
+    ['--max-resource-files', options.maxResourceFiles],
+    ['--max-resource-prepares', options.maxResourcePrepares],
   ]) {
     if (/[\r\n\0]/.test(value)) throw new Error(`${name} must be a single configuration value`);
+  }
+  for (const name of ['maxResourceFiles', 'maxResourcePrepares'] as const) {
+    if (!/^[1-9][0-9]*$/.test(options[name])) throw new Error(`${name} must be a positive integer`);
+  }
+  for (const name of ['resourceCacheBytes', 'maxResourceBytes', 'resourceOwnerBytes'] as const) {
+    if (!/^[1-9][0-9]*(?:[KMGT]i?B?|[kmgt])?$/.test(options[name]))
+      throw new Error(`${name} must be a positive byte quantity`);
   }
   if (!/^[1-9][0-9]*$/.test(options.maxConcurrent)) throw new Error('--max-concurrent must be a positive integer');
   if (!['slim', 'full'].includes(options.profile)) throw new Error('--profile must be slim or full');
@@ -494,6 +531,15 @@ function renderEnv(options: BundleOptions) {
     `LATEXMK_MAX_FILES=${options.maxFiles}`,
     `LATEXMK_MAX_LOG_BYTES=${options.maxLogBytes}`,
     `LATEXMK_MAX_STATE_BYTES=${options.maxStateBytes}`,
+    `LATEXMK_RESOURCE_CACHE_DIR=${options.stateDir}/environments`,
+    `LATEXMK_RESOURCE_CACHE_BYTES=${options.resourceCacheBytes}`,
+    `LATEXMK_MAX_RESOURCE_BYTES=${options.maxResourceBytes}`,
+    `LATEXMK_RESOURCE_OWNER_BYTES=${options.resourceOwnerBytes}`,
+    `LATEXMK_MAX_RESOURCE_FILES=${options.maxResourceFiles}`,
+    `LATEXMK_MAX_CONCURRENT_RESOURCE_PREPARES=${options.maxResourcePrepares}`,
+    'LATEXMK_RESOURCE_PREPARE_TIMEOUT=5m',
+    `LATEXMK_RESOURCE_RETENTION=${options.blobRetention}`,
+    'LATEXMK_RESOURCE_REGISTRY_FILE=',
     `LATEXMK_MAX_UPLOAD_SESSIONS=${options.maxUploadSessions}`,
     `LATEXMK_RESULT_RETENTION=${options.resultRetention}`,
     `LATEXMK_SNAPSHOT_RETENTION=${options.snapshotRetention}`,
@@ -684,6 +730,11 @@ Options:
   --engines LIST               Comma-separated server engine allowlist
   --compile-timeout DURATION   Server compile timeout
   --max-concurrent N           Maximum simultaneous compiles
+  --resource-cache-bytes SIZE  Package archive and environment cache budget
+  --max-resource-bytes SIZE    Expanded resource limit per environment
+  --resource-owner-bytes SIZE  Resource manifest budget per owner
+  --max-resource-files N       Resource file limit per environment
+  --max-resource-prepares N    Maximum simultaneous resource preparations
   --allow-shell-escape         Explicitly permit shell escape
   --build                      Run docker buildx build after bundling
   --save FILE                  Export the built image with docker save
