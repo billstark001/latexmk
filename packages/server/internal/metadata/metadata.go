@@ -104,6 +104,7 @@ func Collect(cfg config.Config, build BuildInfo) protocol.Metadata {
 			MaxRealtimeSessions:     cfg.MaxRealtimeSessions,
 			SessionTTLMS:            cfg.RealtimeSessionTTL.Milliseconds(),
 			CompileCache:            cfg.CompileCacheRetention > 0 && cfg.MaxCompileCacheBytes > 0,
+			MaxCompileCacheBytes:    cfg.MaxCompileCacheBytes,
 			AuxiliaryRetention:      true,
 			CompileCacheRetentionMS: cfg.CompileCacheRetention.Milliseconds(),
 			Engines:                 append([]string(nil), cfg.Engines...),

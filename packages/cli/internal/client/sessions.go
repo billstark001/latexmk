@@ -189,15 +189,27 @@ func (c *Client) StreamSessionEvents(
 	return readSessionEvents(resp.Body, after, receive)
 }
 
-func ValidateRealtimeRequest(request protocol.CompileRequest, meta protocol.Metadata) error {
+func (c *Client) ValidateRealtimeRequest(request protocol.CompileRequest, meta protocol.Metadata) error {
 	if err := validateResourceCapability(request, meta); err != nil {
 		return err
 	}
 	if err := validateAuxiliaryCapability(request, meta); err != nil {
 		return err
 	}
-	if request.Auxiliary.Server == "reuse" && !meta.Capabilities.IsolatedWorkspaces {
-		return &CapabilityError{Capability: "isolated reusable workspaces"}
+	isolated := meta.Capabilities.IsolatedWorkspaces
+	if c.SelectedBaseline != nil {
+		isolated = c.SelectedBaseline.Image != ""
+	}
+	if request.Auxiliary.Server == "reuse" {
+		if !meta.Capabilities.CompileCache {
+			return &CapabilityError{Capability: "server compile cache"}
+		}
+		if !isolated {
+			return &CapabilityError{Capability: "isolated reusable workspaces"}
+		}
+	}
+	if isolated && request.ShellEscape {
+		return errors.New("isolated realtime workspaces do not allow shell escape")
 	}
 	return nil
 }

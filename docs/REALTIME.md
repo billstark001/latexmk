@@ -11,7 +11,33 @@ pnpm --filter @latexmk/cli build
 packages/cli/dist/latexmk --realtime --server-cache reuse main.tex
 ```
 
-`--realtime` requires the `realtimeSessions` metadata capability. `reuse` also requires `isolatedWorkspaces` and `compileCache`. It does not silently downgrade when the runner is unavailable. `--realtime` supports one entry or one configured target; it cannot be combined with `--detach` or `--target all`. Existing `watch` and `--watch` continue to submit ordinary independent jobs.
+`--realtime` requires the `realtimeSessions` metadata capability. `reuse` also requires `compileCache` and an isolated image for the selected runtime. With resource environments, the selected baseline's image takes precedence over the controller's default `isolatedWorkspaces` capability. It does not silently downgrade when the runner is unavailable. `--realtime` supports one entry or one configured target; it cannot be combined with `--detach` or `--target all`. Existing `watch` and `--watch` continue to submit ordinary independent jobs.
+
+## Configure and diagnose reuse
+
+Enable the policy explicitly; `--realtime` alone does not select reuse:
+
+```json
+{
+  "auxiliary": { "local": "none", "server": "reuse" }
+}
+```
+
+Then run `latexmk --realtime main.tex`, or use `latexmk --realtime --server-cache reuse --target paper` for a configured target. Reuse is most useful when stable graphics and bibliography inputs let latexmk retain intermediate work across `.tex` edits. A changed `.bib`, image, style, input membership or environment starts cold. The first build also starts cold; support and policy selection do not imply a warm cache hit.
+
+Inspect the same choices without compiling:
+
+```sh
+latexmk doctor --target paper
+latexmk doctor --realtime --server-cache reuse --target paper --json
+latexmk doctor --realtime --server-cache reuse --environment journal-runtime main.tex
+```
+
+Doctor reports the requested realtime mode, effective cache policy, selected workspace, server cache limits and selected baseline, together with reason codes and suggested actions. `supported` describes runtime and server support; `enabled` additionally requires realtime and reuse to be selected without a reported blocker. A selected `reuse` mode that cannot run is reported as blocked, not changed to `fresh`. A native baseline can be unsupported even when the default runner is isolated; an isolated registered baseline can support reuse on a controller whose default runtime is native.
+
+The server must enable sessions and reusable compile state (`LATEXMK_MAX_REALTIME_SESSIONS`, positive `LATEXMK_COMPILE_CACHE_RETENTION` and `LATEXMK_MAX_COMPILE_CACHE_BYTES`), and provide the queued/incremental transport needed by the selected environment. An image baseline needs a digest-pinned application image and Docker access on the controller. Shell escape is incompatible with isolated reuse. See [runner configuration](#runner-configuration) for the administrator settings.
+
+Doctor only reads health, metadata, baseline inventory and an existing local resource lock. It does not create a project identity, capture resource bytes, resolve/prepare an environment, write a lock or start a session. `matching-recorded-requirements` compares declarations using recorded file manifests; it does not check local source paths, include/exclude matches, contents, package availability or cache residency. Inspect `resourceContentsChecked`, baseline state and blocking reasons before treating the report as readiness evidence. Successful health checks do not prove that a document compiles.
 
 ## Revision and preview behavior
 
@@ -77,6 +103,26 @@ Configuring a runner moves every queued job into a worker, including ordinary on
 Workers have no network, host bind mounts, Docker socket or controller credentials. They run as UID 10001 with a read-only image, dropped capabilities, no-new-privileges, PID/CPU/memory limits and size/inode-limited tmpfs. `/work` is `noexec`; `/tmp` permits execution for Biber's bundled Perl interpreter and shared libraries, with an independent 128 MiB / 8192-inode bound. TeX and bibliography tools are treated as untrusted code inside the container boundary; `noexec` is an additional restriction on the source/build mount rather than the execution security boundary. Shell escape is rejected in isolated jobs. Source copies are read-only and outputs use a separate build directory. Transport and checkpoint extraction reuse root-confined regular file validation and bounded hash verification. Cancelling an attempt kills its process group and force-removes its named container.
 
 The controller needs Docker access, which is a host administrative privilege. Use a dedicated daemon/VM or a controlled broker boundary for untrusted tenants; container isolation shares a kernel and does not provide a microVM security model. Only the controller receives that access. No runner mounts production source/state volumes. A platform without Docker access can use fresh sessions, but cannot enable this isolated reuse backend.
+
+## Stage timing and controlled measurements
+
+CLI timing is explicitly enabled and writes structured lines to stderr, leaving normal output unchanged:
+
+```sh
+LATEXMK_REALTIME_DIAGNOSTICS=1 latexmk --realtime --server-cache reuse main.tex 2>realtime.log
+```
+
+Each `realtime_diagnostics {JSON}` line records a fixed event name, Unix `time_ns`, optional monotonic `duration_ns`, success, and session/job/revision/attempt identifiers. Events cover observation, capture, upload, revision admission, SSE notification, result reads, verified local publication and PDF export. They contain no source paths, request contents, credentials or remote error text. Omit the environment variable for ordinary use.
+
+Server `compile job stages` records correlate by job/session/revision. `compile_runner_ms` measures the final attempt's compiler and artifact collection; `execute_overhead_ms` is the remaining server execution duration. That remainder can include transport, container startup, checkpoint restoration and an earlier failed warm attempt. It is not a separate measurement of each operation. `workspace_reuse` and `cold_retry` identify those cases. Existing queue, materialization, result archive, persistence, cache publication and total worker measurements remain available; nested timings must not be added to their enclosing execution duration.
+
+The `realtime-diagnostics` GitHub workflow runs only through `workflow_dispatch`, with `image` (a digest-pinned application base) and `samples` (2–50 per condition/workload, default 10). It builds the CLI and server from the selected commit, derives one temporary image, and uses that same image digest for the controller and every worker on one runner. A disposable loopback registry gives the derived image its immutable reference; no external registry or release is published.
+
+The benchmark compares fixed 500 ms and 150 ms debounce, fresh and reuse, a tiny document and a generated 3 MiB graphic plus Biber, and single saves versus three saves 230 ms apart. It reverses condition/workload order over two blocks with fresh sessions and untimed warm-up. Default debounce remains 500 ms; no adaptive algorithm is included.
+
+Artifacts retain `raw.json`, `summary.md`, server and per-case CLI logs, binary checksums and build/image logs, including partial results on failure. Metadata identifies the commit, original and measured image digests, runner, binaries, server configuration and sampling settings. Raw samples preserve both first/last-save-to-preview latency, individual stage events, percentile summaries, failed samples and intermediate jobs. Submission counts are unique admitted revisions; execution counts are jobs that actually started, excluding replaced pending revisions. Commit retries are deduplicated. These counts are distinct from capture attempts and from a cold retry within one job.
+
+P50 is the median and p95 uses nearest rank. Preview timing ends when a matching `current.json` is observed with 5 ms polling; PDF hash and content validation follows the timing boundary. This is a localhost CI workload, not evidence of WAN latency or production concurrency. Compare raw counts and failures as well as percentiles. Smaller debounce can advance a single save while admitting more intermediate work during a burst.
 
 ## Reproducible local checks
 

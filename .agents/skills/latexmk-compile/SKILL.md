@@ -20,7 +20,7 @@ export LATEXMK_CLI="${LATEXMK_CLI:-latexmk}"
 "$LATEXMK_CLI" doctor
 ```
 
-`doctor` checks health and metadata and reports the selected credential source. Use `meta --json` if detailed engine/toolchain capabilities are needed. Resolve readiness failures before submitting a compile.
+`doctor` checks health and metadata and reports the selected credential source. On CLI 0.5.0 or newer, use `doctor --target NAME --server-cache reuse --json` to inspect reuse support for that target and its selected resource baseline. Read the reported reasons and actions before changing configuration; support, requested policy and an actual warm cache hit are separate facts. Doctor does not prepare resources, write locks or start sessions. Use `meta --json` for the server's raw engine/toolchain capabilities. Resolve readiness failures before submitting a compile.
 
 Check `help` and server capabilities before using resource environments or named publications; these follow the checkout and may be newer than an installed release. `resources inspect --target NAME --json` and `files` are offline previews. `resources lock` resolves and writes `.latexmk-resources.lock.json`; `resources fetch` uploads missing authorized files and prepares the server cache. Do not execute those mutating commands in a project the user permitted only for reading.
 
@@ -56,6 +56,8 @@ Watch/realtime default to `naming.scope: "invocation"`, freezing naming context 
 Retention defaults to all distinct successful exports. Set `pdfRetention: {"keepLast": 5}` or `--pdf-keep-last 5` only when bounded retention is wanted; `--pdf-keep-last all` disables it. Cleanup is scoped to recorded exports for the same project/entry/target/engine and preserves edited or foreign files. Keep `.latexmk-cache/exports/` to retain ownership and upload exclusions; use an ignored output directory for exclusions independent of history. Template exports and bounded retention require attached result downloads.
 
 PDF, SyncTeX and diagnostics are independent of auxiliary retention. Local `none|cache|output` and server `none|retain|reuse` policies are separate; `serverTTL` bounds auxiliary retention. No-config defaults are `none`, while legacy JSON may retain its previous `output` behavior. Server `reuse` restores compatible portable state for ordinary jobs, or an isolated full checkpoint for realtime sessions, and requires the corresponding server capabilities; `--force` starts cold. Local caching never implicitly uploads cached files.
+
+For a requested latency investigation, `LATEXMK_REALTIME_DIAGNOSTICS=1` enables structured stage records on stderr. Keep it off for ordinary compilation, and consult the realtime guide for the controlled benchmark workflow and measurement boundaries. Fixed 500 ms debounce remains the default; a faster single save does not establish that a shorter debounce improves a burst of saves.
 
 `cache clean` removes local auxiliary cache contents while preserving project identity and dependency history. `clean ENTRY` removes supported generated extensions next to an entry; avoid it where similarly named files are maintained inputs. Remote cleanup uses its existing preview and digest-validated apply flow. Pass only supported CLI options; arbitrary TeX/latexmk options are rejected.
 

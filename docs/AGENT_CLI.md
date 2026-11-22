@@ -64,6 +64,12 @@ Stable error codes currently include:
 - `result_unavailable`;
 - `artifact_not_found`.
 
+## Doctor
+
+`doctor --realtime --server-cache reuse --target NAME --json` retains the existing metadata fields at the top level and adds `doctor` with target/entry/engine, status and realtime diagnostics. `meta --json` remains raw metadata without a doctor report. This is the existing unversioned JSON interface, not the envelope shown above.
+
+`doctor.realtime` separates requested policy/workspace, infrastructure `supported`, and configuration `enabled`. It includes server limits, selected baseline/source/state, resource-lock state, `resourceContentsChecked`, structured `reasons` (`code`, `message`, `blocking`) and suggested `actions`. Doctor only reads service/baseline metadata and existing local lock data. An available runtime or matching recorded requirement is not a verified prepared environment, a cache hit or a successful build. Health/report success can coexist with `doctor.status: "attention"`; inspect blockers before requesting reuse.
+
 ## Pack
 
 `latexmk pack --json` returns command `pack`, with mode, output, entry, engine, files, `requiresBuild`, `verified`, optional `buildJobId`, and warnings in `data`. Each member reports `path`, `size`, `sha256` and its selection `reason`; private capture paths are never included. `engine` remains an opaque string key. Dry-run previews of arXiv/verified packages report pending build work explicitly; see [source packages](PACKING.md). Both pack modes preserve the same envelope and error/exit-status contract.

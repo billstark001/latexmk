@@ -16,6 +16,8 @@ Readiness check. When full PostgreSQL or PGlite socket is configured, it perform
 
 Public server, image, toolchain, cache-retention, and resource-limit metadata. It never includes secrets, database URLs, or user data.
 
+`capabilities.maxCompileCacheBytes` reports the maximum uncompressed reusable state per cache. `compileCache` is true only when retention and this limit are positive. `isolatedWorkspaces` describes the controller's default runtime; a resource-bound request uses its resolved baseline's image to determine isolation. Clients must not use the default-runtime flag to override an explicitly selected baseline.
+
 ## `POST /v1/compile`
 
 Both synchronous compile requests and queued upload-plan requests accept an optional `auxiliary` object:

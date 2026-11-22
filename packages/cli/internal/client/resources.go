@@ -170,9 +170,10 @@ func validateResourceCapability(request protocol.CompileRequest, meta protocol.M
 	return nil
 }
 
-// SetBaseline supplies inventory-only font fallbacks. Project files with the
-// same name retain precedence and remain ordinary captured source members.
+// SetBaseline binds runtime policy checks and inventory-only font fallbacks to
+// the selected environment. Project files with the same name retain precedence.
 func (c *Client) SetBaseline(baseline resources.Baseline) {
+	c.SelectedBaseline = &baseline
 	byName := make(map[string]projectarchive.File)
 	for _, font := range baseline.Fonts {
 		name := path.Base(font.File)

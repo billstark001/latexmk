@@ -42,6 +42,8 @@ latexmk remote clean --scope cache
 
 The following describes portable auxiliary reuse for one-shot compilation and ordinary watch jobs. Realtime `reuse` restores a full checkpoint in a new isolated worker instead; see [realtime workspaces](REALTIME.md#fresh-and-reusable-workspaces).
 
+For realtime setup, run `latexmk doctor --realtime --server-cache reuse --target NAME --json`. It explains the selected baseline, cache policy and blockers without preparing resources or starting a session. See [reuse configuration and diagnosis](REALTIME.md#configure-and-diagnose-reuse); local auxiliary retention alone does not enable realtime reuse.
+
 `reuse` is the existing opt-in warm-start implementation. It requires the server compile-cache capability. `--force` starts cold and refreshes compatible state after success.
 
 Each job still materializes its immutable sources into a fresh workspace and runs latexmk. Reuse warms `.aux`, `.toc`, `.lof`, `.lot`, `.out`, `.bbl`, `.nav` and `.snm` files from a previous successful compile, reducing repeated passes. It does not return an old PDF or restore `.fls`, `.fdb_latexmk`, `.run.xml` or other records tied to an old workspace. Files containing that workspace's absolute path cannot be cached. Uploaded source files, including supplied `.bbl` files, are never replaced by cached outputs.

@@ -123,9 +123,9 @@ func run(args []string) int {
 		case "init":
 			return runInit(argv[1:])
 		case "meta":
-			return runMeta(argv[1:], false)
+			return runMeta(argv[1:])
 		case "doctor":
-			return runMeta(argv[1:], true)
+			return runDoctor(argv[1:])
 		case "clean":
 			return runClean(argv[1:])
 		case "cache":
@@ -997,7 +997,7 @@ func metadataArguments() *argv.Options[metadataOptions] {
 	return changes
 }
 
-func runMeta(args []string, doctor bool) int {
+func runMeta(args []string) int {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fail(err)
@@ -1015,14 +1015,8 @@ func runMeta(args []string, doctor bool) int {
 		return fail(errors.New("metadata commands do not accept positional arguments"))
 	}
 	server, timeout, insecure, jsonOutput := opts.server, opts.timeout, opts.insecure, opts.jsonOutput
-	if doctor {
-		reportDoctorProjectCache(cwd, cfg.ProjectRoot, jsonOutput)
-	}
 	if err := cfg.Authenticate(cfg.ProjectRoot); err != nil {
 		return fail(err)
-	}
-	if doctor && !jsonOutput {
-		terminalFprintln(os.Stderr, "authentication:", cfg.TokenSource)
 	}
 	c, err := client.New(server, cfg.Token, timeout, insecure)
 	if err != nil {
@@ -1030,11 +1024,6 @@ func runMeta(args []string, doctor bool) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	if doctor {
-		if err := c.Health(ctx); err != nil {
-			return fail(fmt.Errorf("health check failed: %w", err))
-		}
-	}
 	meta, err := c.Metadata(ctx)
 	if err != nil {
 		return fail(err)
@@ -1043,6 +1032,11 @@ func runMeta(args []string, doctor bool) int {
 		_ = json.NewEncoder(os.Stdout).Encode(meta)
 		return 0
 	}
+	printMetadata(meta)
+	return 0
+}
+
+func printMetadata(meta protocol.Metadata) {
 	terminalPrintf(
 		"service: %s %s\nprotocol: %d\nprofile: %s\nauth: %s\ndatabase: %s\nengines: %s\n",
 		meta.Service,
@@ -1063,10 +1057,6 @@ func runMeta(args []string, doctor bool) int {
 			terminalPrintf("%s: %s\n", name, v)
 		}
 	}
-	if doctor {
-		terminalPrintln("status: healthy")
-	}
-	return 0
 }
 
 func runInit(args []string) int {

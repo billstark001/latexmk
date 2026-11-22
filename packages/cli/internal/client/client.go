@@ -25,10 +25,12 @@ import (
 	cliresources "github.com/billstark001/latexmk/packages/cli/internal/resources"
 	"github.com/billstark001/latexmk/packages/shared/jsonutil"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/resources"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 type Client struct {
+	SelectedBaseline *resources.Baseline
 	BaselineFiles    []projectarchive.File
 	CacheEnvironment string
 	ResourceFiles    []projectarchive.File

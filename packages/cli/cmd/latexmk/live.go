@@ -43,7 +43,7 @@ func runLive(c *client.Client, request protocol.CompileRequest, opts compileOpti
 	if !meta.Capabilities.RealtimeSessions {
 		return fail(&client.CapabilityError{Capability: "realtime sessions"})
 	}
-	if err := client.ValidateRealtimeRequest(request, meta); err != nil {
+	if err := c.ValidateRealtimeRequest(request, meta); err != nil {
 		return fail(err)
 	}
 	request.RecordInputs = meta.Capabilities.DependencyInputs

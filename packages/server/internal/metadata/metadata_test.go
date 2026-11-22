@@ -24,6 +24,30 @@ func TestValidateToolchain(t *testing.T) {
 	}
 }
 
+func TestCollectReportsCacheCapacityAndActivation(t *testing.T) {
+	// No local toolchain is required to report configuration capabilities.
+	t.Setenv("PATH", t.TempDir())
+	for _, test := range []struct {
+		name      string
+		retention time.Duration
+		bytes     int64
+		enabled   bool
+	}{
+		{"enabled", time.Hour, 1 << 20, true},
+		{"retention-disabled", 0, 1 << 20, false},
+		{"capacity-disabled", time.Hour, 0, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			meta := Collect(config.Config{
+				CompileCacheRetention: test.retention, MaxCompileCacheBytes: test.bytes,
+			}, BuildInfo{})
+			if meta.Capabilities.CompileCache != test.enabled || meta.Capabilities.MaxCompileCacheBytes != test.bytes {
+				t.Fatalf("cache capability = %#v", meta.Capabilities)
+			}
+		})
+	}
+}
+
 var customEngineCounter atomic.Uint64
 
 type customEngine struct{}

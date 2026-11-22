@@ -191,6 +191,7 @@ type Capabilities struct {
 	MaxRealtimeSessions     int      `json:"maxRealtimeSessions"`
 	SessionTTLMS            int64    `json:"sessionTtlMs"`
 	CompileCache            bool     `json:"compileCache"`
+	MaxCompileCacheBytes    int64    `json:"maxCompileCacheBytes"`
 	AuxiliaryRetention      bool     `json:"auxiliaryRetention"`
 	CompileCacheRetentionMS int64    `json:"compileCacheRetentionMs"`
 	Engines                 []string `json:"engines"`
