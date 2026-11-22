@@ -32,6 +32,7 @@ type CompileCache struct {
 }
 
 type CompileRequest struct {
+	EnvironmentDigest  string           `json:"environmentDigest,omitempty"`
 	Auxiliary          AuxiliaryOptions `json:"auxiliary,omitempty"`
 	ProtocolVersion    int              `json:"protocolVersion"`
 	Entry              string           `json:"entry"`
@@ -56,6 +57,7 @@ type Artifact struct {
 }
 
 type CompileResult struct {
+	EnvironmentDigest  string        `json:"environmentDigest,omitempty"`
 	SessionID          string        `json:"sessionId,omitempty"`
 	Revision           uint64        `json:"revision,omitempty"`
 	SourceRoot         string        `json:"sourceRoot,omitempty"`
@@ -182,6 +184,8 @@ type Metadata struct {
 }
 
 type Capabilities struct {
+	ResourceEnvironments    bool     `json:"resourceEnvironments"`
+	PublicationVerification bool     `json:"publicationVerification"`
 	RealtimeSessions        bool     `json:"realtimeSessions"`
 	IsolatedWorkspaces      bool     `json:"isolatedWorkspaces"`
 	MaxRealtimeSessions     int      `json:"maxRealtimeSessions"`
