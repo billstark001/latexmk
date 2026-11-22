@@ -39,24 +39,29 @@ func Sources(files []projectarchive.File, entry, mode string) ([]projectarchive.
 		return nil, err
 	}
 	var selected []projectarchive.File
-	stem := strings.TrimSuffix(path.Base(entry), path.Ext(entry))
 	for _, file := range files {
-		if mode == "arxiv" {
-			for _, component := range strings.Split(file.Path, "/") {
-				if strings.HasPrefix(component, ".") {
-					return nil, fmt.Errorf(
-						"arxiv removes hidden files; selected dependency %q cannot be packaged",
-						file.Path,
-					)
-				}
-			}
-			if file.Path == stem+".pdf" || intermediate(file.Path) {
-				continue
-			}
+		keep, err := keepSource(file.Path, entry, mode)
+		if err != nil {
+			return nil, err
 		}
-		selected = append(selected, file)
+		if keep {
+			selected = append(selected, file)
+		}
 	}
 	return selected, nil
+}
+
+func keepSource(name, entry, mode string) (bool, error) {
+	if mode != "arxiv" {
+		return true, nil
+	}
+	for _, component := range strings.Split(name, "/") {
+		if strings.HasPrefix(component, ".") {
+			return false, fmt.Errorf("arxiv removes hidden files; selected dependency %q cannot be packaged", name)
+		}
+	}
+	stem := strings.TrimSuffix(path.Base(entry), path.Ext(entry))
+	return name != stem+".pdf" && !intermediate(name), nil
 }
 
 func intermediate(name string) bool {
