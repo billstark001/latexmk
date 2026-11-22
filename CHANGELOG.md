@@ -22,15 +22,21 @@ All notable changes to latexmk are documented in this file. Entries follow the c
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-23
+
 ### Added
 
 - Declare TeX Live, local file/font and registered server resources; resolve and lock immutable environments, prefetch verified package archives, and reuse prepared resource trees across jobs. Bind compilation, dependency history and realtime sessions to the selected environment, with separate owner authorization and cache quotas.
 - Export named publications with explicit bundle/provided/omit resource policies, license-file preservation, explainable member plans and verification evidence. Target verification builds bibliography/index files and the exact final package against a registered baseline without borrowing working resources.
 - Add resource limits to deployment presets, resource/target compatibility tests, and resource and publication guidance to the remote compilation skill.
+- Add explicitly enabled realtime CLI stage timing and correlated server execution timing. Provide a manually triggered performance workflow with raw samples, percentile summaries, submission/execution counts and immutable build/image provenance; fixed debounce behavior remains unchanged.
+- Diagnose realtime reuse against the selected target, resource baseline and server limits, with actionable human and JSON doctor reports that do not prepare resources or create sessions.
 
 ### Changed
 
 - Stop CLI-only changes from triggering automatic application-image publication. Keep ordinary CI and CLI releases independent; manual nonpublishing image workflows remain available for CLI/server integration checks.
+- Parse Go command options through urfave/cli, removing handwritten parsers and repeated credential/publication scans. Preserve public spellings and ordered overrides; accept explicit boolean values, stop at the first syntax error, and classify compile/cache configuration errors with exit status `2`.
+- Align all workspace packages, executable defaults, deployment defaults and the CLI user agent on the coordinated `0.5.0` release line.
 
 ## @latexmk/cli [0.4.3] - 2026-10-22
 
