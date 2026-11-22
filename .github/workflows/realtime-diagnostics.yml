@@ -1,0 +1,137 @@
+name: realtime-diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Digest-pinned application image used as the TeX/Docker CLI base
+        type: string
+        required: true
+      samples:
+        description: Samples per condition and workload, split across two reversed blocks (2–50)
+        type: string
+        default: '10'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      BASE_IMAGE: ${{ inputs.image }}
+      SAMPLES: ${{ inputs.samples }}
+      OUTPUT: dist/realtime-diagnostics
+      REGISTRY: latexmk-diagnostics-registry-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache-dependency-path: |
+            packages/cli/go.sum
+            packages/server/go.sum
+            packages/shared/go.sum
+      - name: Validate manual inputs
+        run: |
+          mkdir -p "$OUTPUT"
+          python3 - <<'PY' 2>&1 | tee "$OUTPUT/inputs.log"
+          import importlib.util
+          import os
+          spec = importlib.util.spec_from_file_location('diagnostics', 'scripts/realtime-diagnostics.py')
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module.pinned_image(os.environ['BASE_IMAGE'])
+          module.sample_count(os.environ['SAMPLES'])
+          print('Validated digest-pinned image and sample count')
+          PY
+      - name: Build host CLI and Linux server from this commit
+        env:
+          GOWORK: 'off'
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist/diagnostic-image packages/cli/dist
+          (cd packages/cli && go build -trimpath -ldflags "-X main.commit=$GITHUB_SHA" -o dist/latexmk ./cmd/latexmk) 2>&1 | tee "$OUTPUT/build-cli.log"
+          (cd packages/server && GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-X main.commit=$GITHUB_SHA" -o ../../dist/diagnostic-image/latexmk-server ./cmd/server) 2>&1 | tee "$OUTPUT/build-server.log"
+          sha256sum packages/cli/dist/latexmk dist/diagnostic-image/latexmk-server > "$OUTPUT/binaries.sha256"
+      - name: Build one disposable controller and worker image
+        id: candidate
+        run: |
+          docker run --detach --name "$REGISTRY" --publish 127.0.0.1:5000:5000 registry:3 > "$OUTPUT/registry.log"
+          docker pull --platform linux/amd64 "$BASE_IMAGE" 2>&1 | tee "$OUTPUT/pull.log"
+          cat > dist/diagnostic-image/Dockerfile <<'DOCKERFILE'
+          ARG BASE_IMAGE
+          FROM ${BASE_IMAGE}
+          COPY --chmod=0755 latexmk-server /usr/local/bin/latexmk-server
+          DOCKERFILE
+          candidate="localhost:5000/latexmk-diagnostics:$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          echo "tag=$candidate" >> "$GITHUB_OUTPUT"
+          docker build --pull=false --platform linux/amd64 --build-arg "BASE_IMAGE=$BASE_IMAGE" --tag "$candidate" dist/diagnostic-image 2>&1 | tee "$OUTPUT/build-image.log"
+          # This is the only push: an unauthenticated loopback registry on this runner.
+          docker push "$candidate" 2>&1 | tee "$OUTPUT/local-registry.log"
+          reference=$(docker inspect --format '{{index .RepoDigests 0}}' "$candidate")
+          echo "image=$reference" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$BASE_IMAGE" > "$OUTPUT/base-image.txt"
+          printf '%s\n' "$reference" > "$OUTPUT/measured-image.txt"
+      - name: Install PDF validation tool
+        run: |
+          if ! command -v pdftotext >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y poppler-utils
+          fi
+      - name: Measure static debounce and workspace conditions
+        env:
+          DIAGNOSTIC_IMAGE: ${{ steps.candidate.outputs.image }}
+        run: |
+          python3 scripts/realtime-diagnostics.py \
+            --image "$DIAGNOSTIC_IMAGE" \
+            --base-image "$BASE_IMAGE" \
+            --cli packages/cli/dist/latexmk \
+            --samples "$SAMPLES" \
+            --output "$OUTPUT" 2>&1 | tee "$OUTPUT/benchmark.log"
+      - name: Add complete or partial measurements to run summary
+        if: always()
+        run: |
+          if test -f "$OUTPUT/summary.md"; then
+            cat "$OUTPUT/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Remove disposable image references
+        if: always()
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.tag }}
+          DIAGNOSTIC_IMAGE: ${{ steps.candidate.outputs.image }}
+        run: |
+          # Fallback if the benchmark was terminated before its own finally cleanup.
+          if test -f "$OUTPUT/raw.json"; then
+            python3 - <<'PYTHON'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          metadata = json.loads((Path(os.environ['OUTPUT']) / 'raw.json').read_text())['metadata']
+          namespace = metadata.get('runner_namespace')
+          if namespace:
+              result = subprocess.run(['docker', 'ps', '-aq', '--filter', 'label=latexmk.runner.namespace=' + namespace], capture_output=True, text=True)
+              identifiers = result.stdout.split()
+              if identifiers:
+                  subprocess.run(['docker', 'rm', '--force', *identifiers], check=False)
+          controller = metadata.get('controller_container')
+          if controller:
+              subprocess.run(['docker', 'rm', '--force', '-v', controller], check=False)
+          PYTHON
+          fi
+          for image in "$DIAGNOSTIC_IMAGE" "$CANDIDATE" "$BASE_IMAGE"; do
+            if test -n "$image"; then docker image rm "$image" || true; fi
+          done
+          docker rm --force -v "$REGISTRY" || true
+          docker image rm registry:3 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: realtime-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/realtime-diagnostics/
+          if-no-files-found: warn

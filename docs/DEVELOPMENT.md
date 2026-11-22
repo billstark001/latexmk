@@ -47,6 +47,8 @@ Benchmarks beside the tests measure nested ignore evaluation, missing-file log e
 
 ## Local integration checks
 
+The manual `realtime-diagnostics` workflow compares fixed debounce and workspace policies using one runner/image. Its offline tests run in `pnpm test` and exercise event joins, percentile/count calculations, partial-failure artifacts and cleanup with mocked Docker/PDF commands. Run them directly with `python3 -m unittest discover -s scripts -p realtime_diagnostics_test.py` (or set `PYTHONDONTWRITEBYTECODE=1` to suppress Python caches). Actual measurements require the deliberately dispatched CI job or an explicitly authorized Docker environment; ordinary unit checks do not start containers. See [measurement boundaries and artifacts](REALTIME.md#stage-timing-and-controlled-measurements).
+
 The resource protocol can be exercised across the actual native CLI and server with a deterministic compiler fixture, without installing TeX or pulling an image:
 
 ```sh
