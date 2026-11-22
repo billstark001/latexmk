@@ -23,6 +23,7 @@ import (
 	"github.com/billstark001/latexmk/packages/server/internal/compile"
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/project"
+	"github.com/billstark001/latexmk/packages/server/internal/resources"
 	"github.com/billstark001/latexmk/packages/server/internal/sandbox"
 	"github.com/billstark001/latexmk/packages/server/internal/store"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
@@ -57,12 +58,14 @@ type jobStore interface {
 }
 
 type Manager struct {
-	cfg      config.Config
-	meta     protocol.Metadata
-	runner   *compile.Runner
-	projects *project.Manager
-	db       jobStore
-	logger   *slog.Logger
+	cfg             config.Config
+	meta            protocol.Metadata
+	runner          *compile.Runner
+	projects        *project.Manager
+	db              jobStore
+	logger          *slog.Logger
+	environments    *resources.Manager
+	environmentPins map[string]*resources.Lease
 
 	mu                 sync.Mutex
 	admissionMu        sync.Mutex
@@ -85,6 +88,7 @@ func New(
 	runner *compile.Runner,
 	projects *project.Manager,
 	db *store.Postgres,
+	environments *resources.Manager,
 	logger *slog.Logger,
 ) *Manager {
 	var persistence jobStore
@@ -92,12 +96,14 @@ func New(
 		persistence = db
 	}
 	return &Manager{
-		cfg:      cfg,
-		meta:     meta,
-		runner:   runner,
-		projects: projects,
-		db:       persistence,
-		logger:   logger,
+		cfg:             cfg,
+		meta:            meta,
+		runner:          runner,
+		projects:        projects,
+		db:              persistence,
+		logger:          logger,
+		environments:    environments,
+		environmentPins: make(map[string]*resources.Lease),
 		// Cancellation is cooperative: a cancelled identifier can still be in
 		// the channel until a worker observes it. Extra channel room prevents a
 		// burst of cancellations from blocking an otherwise valid replacement.
@@ -175,6 +181,17 @@ func (m *Manager) Start(ctx context.Context) {
 					m.logger.Warn("discarded queued job with invalid snapshot", "job_id", job.ID, "error", err)
 					continue
 				}
+				if err := m.pinJobEnvironment(rec); err != nil {
+					m.releaseJobInputs(rec)
+					now := time.Now().UTC()
+					_ = m.db.UpdateJob(ctx, job.ID, map[string]any{
+						"status":      "failed",
+						"error":       "queued environment unavailable; prepare resources and submit again",
+						"finished_at": &now,
+					})
+					m.logger.Error("recover job environment", "job_id", job.ID, "error", err)
+					continue
+				}
 				// A crash may leave a job marked running. It is safe to retry:
 				// every execution gets a new isolated workspace and archive.
 				if job.Status == "running" {
@@ -183,7 +200,7 @@ func (m *Manager) Start(ctx context.Context) {
 						job.ID,
 						map[string]any{"status": "queued", "started_at": nil},
 					); err != nil {
-						m.projects.ReleaseSnapshot(rec.Snapshot.ID)
+						m.releaseJobInputs(rec)
 						m.logger.Error("could not reset running job for recovery", "job_id", job.ID, "error", err)
 						continue
 					}
@@ -215,12 +232,12 @@ func (m *Manager) Enqueue(
 	snapshot project.Snapshot,
 	request protocol.CompileRequest,
 ) (protocol.Job, error) {
-	if m.cfg.RunnerImage != "" {
+	if m.cfg.RunnerImage != "" || request.EnvironmentDigest != "" {
 		if err := sandbox.ValidateSourcePaths(snapshot.Files); err != nil {
 			return protocol.Job{}, err
 		}
 	}
-	if err := m.runner.ValidateRequest(request); err != nil {
+	if err := m.ValidateRequest(ownerID, request); err != nil {
 		return protocol.Job{}, err
 	}
 	if snapshot.OwnerID != ownerID {
@@ -266,7 +283,12 @@ func (m *Manager) Enqueue(
 		Request:  request,
 		Snapshot: snapshot,
 	}
+	if err := m.pinJobEnvironment(rec); err != nil {
+		m.admissionMu.Unlock()
+		return protocol.Job{}, err
+	}
 	if err := m.save(ctx, rec); err != nil {
+		m.releaseEnvironment(rec.Job.ID)
 		m.admissionMu.Unlock()
 		return protocol.Job{}, err
 	}
@@ -873,12 +895,12 @@ func (m *Manager) finish(
 			m.deferCompletion(rec)
 			return rec, false
 		}
-		m.projects.ReleaseSnapshot(rec.Snapshot.ID)
+		m.releaseJobInputs(rec)
 		m.logger.Warn("compile job state changed before finish", "job_id", rec.Job.ID)
 		rec.Job = current.Job
 		return rec, current.Job.Status == "succeeded"
 	}
-	m.projects.ReleaseSnapshot(rec.Snapshot.ID)
+	m.releaseJobInputs(rec)
 	m.logger.Info(
 		"compile job finished",
 		"job_id",
@@ -944,7 +966,7 @@ func (m *Manager) cancel(ctx context.Context, id, message string) error {
 	if !changed {
 		return errors.New("job is no longer queued")
 	}
-	m.projects.ReleaseSnapshot(rec.Snapshot.ID)
+	m.releaseJobInputs(rec)
 	m.endPublication(id)
 	return nil
 }
@@ -1075,7 +1097,7 @@ func (m *Manager) retryCompletions(ctx context.Context) {
 		delete(m.completions, rec.Job.ID)
 		m.mu.Unlock()
 		if rec.CompletionFrom == "running" {
-			m.projects.ReleaseSnapshot(rec.Snapshot.ID)
+			m.releaseJobInputs(rec)
 		}
 		m.finishSession(ctx, rec)
 		m.endPublication(rec.Job.ID)

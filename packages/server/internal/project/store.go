@@ -59,9 +59,10 @@ type pinnedSnapshot struct {
 }
 
 type Manager struct {
-	cfg      config.Config
-	db       *store.Postgres
-	stateDir string
+	cfg         config.Config
+	db          *store.Postgres
+	stateDir    string
+	resourceDir string
 
 	mu           sync.Mutex
 	sessions     map[string]session
@@ -86,6 +87,18 @@ func New(cfg config.Config, db *store.Postgres) (*Manager, error) {
 			return nil, fmt.Errorf("create state directory: %w", err)
 		}
 	}
+	resourceDir, err := cfg.ResourceDirectory()
+	if err != nil {
+		return nil, fmt.Errorf("resolve resource cache directory: %w", err)
+	}
+	canonicalState, err := filepath.EvalSymlinks(stateDir)
+	if err != nil {
+		return nil, err
+	}
+	if rel, err := filepath.Rel(canonicalState, resourceDir); err == nil && filepath.IsLocal(rel) {
+		// WalkDir returns names through the original root spelling (e.g. /var on macOS).
+		resourceDir = filepath.Join(stateDir, rel)
+	}
 	// Session leases are process-local; startup never resumes an orphaned checkpoint.
 	stateRoot, err := safefs.Open(stateDir)
 	if err != nil {
@@ -99,7 +112,7 @@ func New(cfg config.Config, db *store.Postgres) (*Manager, error) {
 	if err := errors.Join(cleanupErr, closeErr); err != nil {
 		return nil, err
 	}
-	stateBytes, err := directorySize(stateDir)
+	stateBytes, err := directorySize(stateDir, resourceDir)
 	if err != nil {
 		return nil, fmt.Errorf("measure state directory: %w", err)
 	}
@@ -107,9 +120,10 @@ func New(cfg config.Config, db *store.Postgres) (*Manager, error) {
 		return nil, fmt.Errorf("state directory already exceeds LATEXMK_MAX_STATE_BYTES (%d bytes)", cfg.MaxStateBytes)
 	}
 	return &Manager{
-		cfg:      cfg,
-		db:       db,
-		stateDir: stateDir,
+		cfg:         cfg,
+		db:          db,
+		stateDir:    stateDir,
+		resourceDir: resourceDir,
 		sessions: make(
 			map[string]session,
 		),
@@ -593,7 +607,7 @@ func (m *Manager) Prune(ctx context.Context) (int64, error) {
 		}
 		reclaimed += removed
 	}
-	stateBytes, err := directorySize(m.stateDir)
+	stateBytes, err := directorySize(m.stateDir, m.resourceDir)
 	if err != nil {
 		return 0, fmt.Errorf("measure state directory after sweep: %w", err)
 	}
@@ -678,7 +692,7 @@ func (m *Manager) CollectUnreferencedBlobs(ctx context.Context) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	stateBytes, err := directorySize(m.stateDir)
+	stateBytes, err := directorySize(m.stateDir, m.resourceDir)
 	if err != nil {
 		return 0, fmt.Errorf("measure state directory after cleanup: %w", err)
 	}
@@ -968,11 +982,14 @@ func removeUnreferencedRegularFiles(root string, references map[string]struct{})
 	return reclaimed, err
 }
 
-func directorySize(root string) (int64, error) {
+func directorySize(root, excluded string) (int64, error) {
 	var total int64
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if entry.IsDir() && excluded != "" && path == excluded && path != root {
+			return filepath.SkipDir
 		}
 		if entry.IsDir() || safefs.IsStagedName(entry.Name()) {
 			return nil

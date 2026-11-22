@@ -17,6 +17,7 @@ import (
 	"github.com/billstark001/latexmk/packages/server/internal/platform/process"
 	"github.com/billstark001/latexmk/packages/shared/engine"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/resources"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
@@ -48,7 +49,7 @@ func NewRunner(cfg config.Config) *Runner {
 // Validate checks request policy and opens the entry as a confined regular file.
 // It does not compile the entry or scan its dependencies.
 func (r *Runner) Validate(workspace string, req protocol.CompileRequest) error {
-	if err := r.ValidateRequest(req); err != nil {
+	if err := ValidateRequest(r.Config, req); err != nil {
 		return err
 	}
 	fs, err := safefs.Open(workspace)
@@ -65,7 +66,10 @@ func (r *Runner) Validate(workspace string, req protocol.CompileRequest) error {
 
 // ValidateRequest checks protocol, registered engine and server policy without
 // filesystem access, allowing admission to fail before materializing sources.
-func (r *Runner) ValidateRequest(req protocol.CompileRequest) error {
+func ValidateRequest(cfg config.Config, req protocol.CompileRequest) error {
+	if req.EnvironmentDigest != "" && !resources.ValidDigest(req.EnvironmentDigest) {
+		return errors.New("invalid compilation environment digest")
+	}
 	if req.Auxiliary.Local != "" && req.Auxiliary.Local != "none" && req.Auxiliary.Local != "cache" &&
 		req.Auxiliary.Local != "output" {
 		return errors.New("auxiliary.local must be none, cache, or output")
@@ -82,7 +86,7 @@ func (r *Runner) ValidateRequest(req protocol.CompileRequest) error {
 		return errors.New("auxiliary.server must be none, retain, or reuse")
 	}
 	if req.Auxiliary.Server == "reuse" &&
-		(req.ProtocolVersion != protocol.Version || r.Config.CompileCacheRetention <= 0 || r.Config.MaxCompileCacheBytes <= 0) {
+		(req.ProtocolVersion != protocol.Version || cfg.CompileCacheRetention <= 0 || cfg.MaxCompileCacheBytes <= 0) {
 		return errors.New("server compile cache is not enabled for this request")
 	}
 	if req.ProtocolVersion != 1 && req.ProtocolVersion != protocol.Version {
@@ -91,7 +95,7 @@ func (r *Runner) ValidateRequest(req protocol.CompileRequest) error {
 	if _, err := engine.Default.Lookup(req.Engine); err != nil {
 		return err
 	}
-	if !r.Config.EngineAllowed(req.Engine) {
+	if !cfg.EngineAllowed(req.Engine) {
 		return fmt.Errorf("engine %q is not enabled", req.Engine)
 	}
 	switch req.Interaction {
@@ -99,7 +103,10 @@ func (r *Runner) ValidateRequest(req protocol.CompileRequest) error {
 	default:
 		return fmt.Errorf("unsupported interaction mode %q", req.Interaction)
 	}
-	if req.ShellEscape && !r.Config.AllowShellEscape {
+	if req.ShellEscape && cfg.RunnerImage != "" {
+		return errors.New("isolated compilation does not allow shell escape")
+	}
+	if req.ShellEscape && !cfg.AllowShellEscape {
 		return errors.New("shell escape is disabled by server policy")
 	}
 	if req.JobName != "" && !validJobName(req.JobName) {
@@ -115,6 +122,7 @@ func (r *Runner) ValidateRequest(req protocol.CompileRequest) error {
 type RunOptions struct {
 	BuildDirectory   string
 	PreserveRecorder bool
+	Resources        ResourceInput
 }
 
 // Run compiles in workspace with normal recorder cleanup. The caller owns the
@@ -123,9 +131,8 @@ func (r *Runner) Run(parent context.Context, workspace string, req protocol.Comp
 	return r.RunWithOptions(parent, workspace, req, requestID, RunOptions{})
 }
 
-// RunWithOptions validates policy and entry, waits for local capacity, then runs
-// a bounded compiler process. RunOptions controls recorder preservation and the
-// isolated build directory; failure and cancellation are returned in Output.Result.
+// RunWithOptions compiles an already materialized private workspace. Resource
+// descriptors configure lookups and exclude managed inputs from returned artifacts.
 func (r *Runner) RunWithOptions(
 	parent context.Context,
 	workspace string,
@@ -135,17 +142,22 @@ func (r *Runner) RunWithOptions(
 ) Output {
 	started := time.Now()
 	result := protocol.CompileResult{
-		SourceRoot:      filepath.ToSlash(workspace),
-		ProtocolVersion: protocol.Version,
-		RequestID:       requestID,
-		Entry:           req.Entry,
-		Engine:          req.Engine,
-		ExitCode:        -1,
+		EnvironmentDigest: req.EnvironmentDigest,
+		SourceRoot:        filepath.ToSlash(workspace),
+		ProtocolVersion:   protocol.Version,
+		RequestID:         requestID,
+		Entry:             req.Entry,
+		Engine:            req.Engine,
+		ExitCode:          -1,
 	}
 	if err := r.Validate(workspace, req); err != nil {
 		result.Error = err.Error()
 		result.DurationMS = time.Since(started).Milliseconds()
 		return Output{Result: result}
+	}
+	managed := make(map[string]bool, len(opts.Resources.Files))
+	for _, file := range opts.Resources.Files {
+		managed[file.Path] = true
 	}
 
 	select {
@@ -161,7 +173,7 @@ func (r *Runner) RunWithOptions(
 	ctx, cancel := context.WithTimeout(parent, r.Config.CompileTimeout)
 	defer cancel()
 	if !opts.PreserveRecorder {
-		if err := removeStaleRecorderFiles(workspace); err != nil {
+		if err := removeStaleRecorderFiles(workspace, managed); err != nil {
 			result.Error = err.Error()
 			result.DurationMS = time.Since(started).Milliseconds()
 			return Output{Result: result}
@@ -185,6 +197,12 @@ func (r *Runner) RunWithOptions(
 		result.DurationMS = time.Since(started).Milliseconds()
 		return Output{Result: result}
 	}
+	fontEnvironment, err := resourceFontEnvironment(workspace, opts.Resources)
+	if err != nil {
+		result.Error = err.Error()
+		return Output{Result: result}
+	}
+	env = append(env, fontEnvironment...)
 	executed := process.Run(
 		ctx,
 		process.Spec{Name: "latexmk", Args: args, Dir: workspace, Env: env, MaxOutputBytes: r.Config.MaxLogBytes},
@@ -199,7 +217,7 @@ func (r *Runner) RunWithOptions(
 		result.Error = "compilation timed out"
 	}
 
-	files, collectErr := collectArtifacts(workspace, req, r.Config.MaxArtifactBytes)
+	files, collectErr := collectArtifacts(workspace, req, r.Config.MaxArtifactBytes, opts.BuildDirectory, managed)
 	if collectErr != nil {
 		if result.Error == "" {
 			result.Error = collectErr.Error()
@@ -208,18 +226,6 @@ func (r *Runner) RunWithOptions(
 		}
 		result.Success = false
 	}
-	if opts.BuildDirectory != "" {
-		var generated []File
-		prefix := opts.BuildDirectory + "/"
-		for _, file := range files {
-			if strings.HasPrefix(file.RelativePath, prefix) {
-				file.Workspace = filepath.Join(workspace, opts.BuildDirectory)
-				file.RelativePath = strings.TrimPrefix(file.RelativePath, prefix)
-				generated = append(generated, file)
-			}
-		}
-		files = generated
-	}
 	for _, f := range files {
 		result.Artifacts = append(
 			result.Artifacts,
@@ -227,7 +233,7 @@ func (r *Runner) RunWithOptions(
 		)
 	}
 	if req.RecordInputs {
-		inputFiles, inputErr := collectRecordedInputs(workspace)
+		inputFiles, inputErr := collectRecordedInputs(workspace, managed)
 		if inputErr != nil {
 			if result.Error == "" {
 				result.Error = inputErr.Error()
@@ -236,11 +242,7 @@ func (r *Runner) RunWithOptions(
 			}
 			result.Success = false
 		} else {
-			for _, name := range inputFiles {
-				if !strings.HasPrefix(name, ".latexmk-build/") && !strings.HasPrefix(name, ".latexmk-home/") {
-					result.InputFiles = append(result.InputFiles, name)
-				}
-			}
+			result.InputFiles = inputFiles
 		}
 	}
 	if req.DetectMissingFiles && !result.Success {
@@ -324,7 +326,7 @@ func sandboxEnvironment(workspace string, shellEscape bool) ([]string, error) {
 	}, nil
 }
 
-func removeStaleRecorderFiles(root string) error {
+func removeStaleRecorderFiles(root string, managed map[string]bool) error {
 	scoped, err := safefs.Open(root)
 	if err != nil {
 		return err
@@ -334,20 +336,29 @@ func removeStaleRecorderFiles(root string) error {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() && strings.HasSuffix(strings.ToLower(d.Name()), ".fls") {
+		if d.IsDir() && name == ".latexmk-home" {
+			return fs.SkipDir
+		}
+		if !d.IsDir() && !managed[name] && strings.HasSuffix(strings.ToLower(d.Name()), ".fls") {
 			return scoped.Remove(name)
 		}
 		return nil
 	})
 }
 
-func collectArtifacts(root string, req protocol.CompileRequest, maxBytes int64) ([]File, error) {
+func collectArtifacts(
+	root string,
+	req protocol.CompileRequest,
+	maxBytes int64,
+	buildDir string,
+	managed map[string]bool,
+) ([]File, error) {
 	scoped, err := safefs.Open(root)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = scoped.Close() }()
-	candidates, err := recorderPaths(scoped, "OUTPUT")
+	candidates, err := recorderPaths(scoped, "OUTPUT", managed)
 	if err != nil {
 		return nil, err
 	}
@@ -359,6 +370,10 @@ func collectArtifacts(root string, req protocol.CompileRequest, maxBytes int64) 
 	err = fs.WalkDir(scoped.FS(), ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if d.IsDir() && (name == ".latexmk-home" ||
+			(buildDir != "" && name != "." && name != buildDir && !strings.HasPrefix(name, buildDir+"/"))) {
+			return fs.SkipDir
 		}
 		if !d.IsDir() &&
 			(strings.HasSuffix(strings.ToLower(d.Name()), ".fls") || strings.HasPrefix(d.Name(), stem+".")) &&
@@ -372,12 +387,17 @@ func collectArtifacts(root string, req protocol.CompileRequest, maxBytes int64) 
 	}
 	paths := make([]string, 0, len(candidates))
 	for rel := range candidates {
-		if allowedArtifact(rel) {
+		if allowedArtifact(rel) && !managed[rel] && !strings.HasPrefix(rel, ".latexmk-home/") &&
+			(buildDir == "" || strings.HasPrefix(rel, buildDir+"/")) {
 			paths = append(paths, rel)
 		}
 	}
 	sort.Strings(paths)
 	files := make([]File, 0, len(paths))
+	outputRoot := root
+	if buildDir != "" {
+		outputRoot = filepath.Join(root, buildDir)
+	}
 	var total int64
 	for _, rel := range paths {
 		f, err := scoped.OpenRegular(rel)
@@ -393,11 +413,15 @@ func collectArtifacts(root string, req protocol.CompileRequest, maxBytes int64) 
 			return nil, err
 		}
 		total += size
+		name := rel
+		if buildDir != "" {
+			name = strings.TrimPrefix(rel, buildDir+"/")
+		}
 		files = append(
 			files,
 			File{
-				Workspace:    root,
-				RelativePath: rel,
+				Workspace:    outputRoot,
+				RelativePath: name,
 				Size:         size,
 				SHA256:       hash,
 			},
@@ -406,18 +430,21 @@ func collectArtifacts(root string, req protocol.CompileRequest, maxBytes int64) 
 	return files, nil
 }
 
-func collectRecordedInputs(root string) ([]string, error) {
+func collectRecordedInputs(root string, excluded map[string]bool) ([]string, error) {
 	scoped, err := safefs.Open(root)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = scoped.Close() }()
-	candidates, err := recorderPaths(scoped, "INPUT")
+	candidates, err := recorderPaths(scoped, "INPUT", excluded)
 	if err != nil {
 		return nil, err
 	}
 	paths := make([]string, 0, len(candidates))
 	for rel := range candidates {
+		if excluded[rel] || strings.HasPrefix(rel, ".latexmk-home/") || strings.HasPrefix(rel, ".latexmk-build/") {
+			continue
+		}
 		f, err := scoped.OpenRegular(rel)
 		if err != nil {
 			continue
@@ -432,7 +459,7 @@ func collectRecordedInputs(root string) ([]string, error) {
 }
 
 // recorderPaths shares bounded parsing and PWD handling for input/output records.
-func recorderPaths(scoped *safefs.Root, kind string) (map[string]struct{}, error) {
+func recorderPaths(scoped *safefs.Root, kind string, excluded map[string]bool) (map[string]struct{}, error) {
 	root, err := filepath.Abs(scoped.Name())
 	if err != nil {
 		return nil, err
@@ -446,7 +473,10 @@ func recorderPaths(scoped *safefs.Root, kind string) (map[string]struct{}, error
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || !strings.HasSuffix(strings.ToLower(d.Name()), ".fls") {
+		if d.IsDir() && name == ".latexmk-home" {
+			return fs.SkipDir
+		}
+		if d.IsDir() || excluded[name] || !strings.HasSuffix(strings.ToLower(d.Name()), ".fls") {
 			return nil
 		}
 		data, err := scoped.ReadLimited(name, 16<<20)

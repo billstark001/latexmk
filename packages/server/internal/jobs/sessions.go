@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/billstark001/latexmk/packages/server/internal/project"
+	"github.com/billstark001/latexmk/packages/server/internal/resources"
 	"github.com/billstark001/latexmk/packages/server/internal/sandbox"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
@@ -35,6 +36,7 @@ type revisionReceipt struct {
 	jobID   string
 }
 type liveSession struct {
+	environment  *resources.Lease
 	creationKey  string
 	subscribers  int
 	cacheExpires time.Time
@@ -70,14 +72,28 @@ func (m *Manager) CreateSession(
 	if req.Workspace != "fresh" && req.Workspace != "reuse" {
 		return protocol.Session{}, errors.New("workspace must be fresh or reuse")
 	}
-	if req.Workspace == "reuse" &&
-		(m.cfg.RunnerImage == "" || req.Request.Auxiliary.Server != "reuse" || m.cfg.MaxCompileCacheBytes <= 0) {
-		return protocol.Session{}, errors.New("workspace reuse requires an isolated runner and auxiliary.server=reuse")
-	}
-	if err := m.runner.ValidateRequest(req.Request); err != nil {
+	environment, err := m.pinEnvironment(ownerID, req.Request.EnvironmentDigest)
+	if err != nil {
 		return protocol.Session{}, err
 	}
-	if m.cfg.RunnerImage != "" && req.Request.ShellEscape {
+	transferred := false
+	defer func() {
+		if environment != nil && !transferred {
+			environment.Release()
+		}
+	}()
+	runnerConfig := m.cfg
+	if environment != nil {
+		runnerConfig = environment.RunnerConfig(m.cfg)
+	}
+	if req.Workspace == "reuse" &&
+		(runnerConfig.RunnerImage == "" || req.Request.Auxiliary.Server != "reuse" || m.cfg.MaxCompileCacheBytes <= 0) {
+		return protocol.Session{}, errors.New("workspace reuse requires an isolated runner and auxiliary.server=reuse")
+	}
+	if err := m.ValidateRequest(ownerID, req.Request); err != nil {
+		return protocol.Session{}, err
+	}
+	if runnerConfig.RunnerImage != "" && req.Request.ShellEscape {
 		return protocol.Session{}, errors.New("isolated realtime workspaces do not allow shell escape")
 	}
 	if err := ctx.Err(); err != nil {
@@ -113,6 +129,7 @@ func (m *Manager) CreateSession(
 		return protocol.Session{}, err
 	}
 	s := &liveSession{
+		environment: environment,
 		creationKey: req.IdempotencyKey,
 		ownerID:     ownerID,
 		request:     req.Request,
@@ -126,6 +143,7 @@ func (m *Manager) CreateSession(
 		changed:  make(chan struct{}),
 	}
 	m.sessions[id] = s
+	transferred = true
 	m.publishSessionLocked(s, "created", protocol.Job{})
 	return s.state, nil
 }
@@ -243,7 +261,11 @@ func (m *Manager) SubmitRevision(
 			CreatedAt:  time.Now().UTC(),
 		},
 	}
+	if err := m.pinJobEnvironment(rec); err != nil {
+		return protocol.Job{}, err
+	}
 	if err := m.save(ctx, rec); err != nil {
+		m.releaseEnvironment(rec.Job.ID)
 		return protocol.Job{}, err
 	}
 	transferred = true // The persisted job now owns the prepared snapshot pin.
@@ -441,6 +463,9 @@ func (m *Manager) closeSessionLocked(ctx context.Context, s *liveSession) error 
 		m.projects.ReleaseSnapshot(s.snapshot.ID)
 	}
 	m.clearSessionCacheLocked(s)
+	if s.environment != nil {
+		s.environment.Release()
+	}
 	close(s.changed)
 	delete(m.sessions, s.state.ID)
 	return nil

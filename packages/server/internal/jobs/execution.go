@@ -27,14 +27,43 @@ type execution struct {
 }
 
 func (m *Manager) execute(ctx context.Context, rec record, workspace *compile.Workspace) execution {
+	lease, err := m.pinEnvironment(rec.OwnerID, rec.Request.EnvironmentDigest)
+	if err != nil {
+		return execution{output: failedOutput(rec, err)}
+	}
+	cfg := m.cfg
+	if lease != nil {
+		defer lease.Release()
+		cfg = lease.RunnerConfig(cfg)
+	}
+	inputs, err := resourceInput(lease, cfg)
+	if err != nil {
+		return execution{output: failedOutput(rec, err)}
+	}
 	// Every queued job must leave the controller's daemon credential boundary.
 	// Closing a session cannot cause its job to fall back to a native runner.
-	isolated := m.cfg.RunnerImage != ""
+	isolated := cfg.RunnerImage != ""
 	if isolated {
 		if rec.Job.SessionID == "" {
-			return m.executePortableIsolated(ctx, rec, workspace)
+			return m.executePortableIsolated(ctx, rec, workspace, cfg, inputs)
 		}
-		return m.executeIsolated(ctx, rec, workspace)
+		return m.executeIsolated(ctx, rec, workspace, cfg, inputs)
+	}
+	runner := m.runner
+	if lease != nil {
+		runner = compile.NewRunner(cfg)
+	}
+	runAttempt := func() compile.Output {
+		if err := compile.MaterializeResources(workspace.Project, inputs); err != nil {
+			return failedOutput(rec, err)
+		}
+		return runner.RunWithOptions(
+			ctx,
+			workspace.Project,
+			rec.Request,
+			rec.Job.ID,
+			compile.RunOptions{Resources: inputs},
+		)
 	}
 	e := execution{cacheKey: project.CompileCacheKey(rec.Request, m.meta, m.cfg.CompileCacheEpoch)}
 	if rec.Request.Auxiliary.Server == "reuse" {
@@ -44,7 +73,7 @@ func (m *Manager) execute(ctx context.Context, rec record, workspace *compile.Wo
 		}
 		e.cache = &info
 	}
-	e.output = m.runner.Run(ctx, workspace.Project, rec.Request, rec.Job.ID)
+	e.output = runAttempt()
 	if e.cache != nil && e.cache.Status == "hit" && !e.output.Result.Success && !e.output.Result.TimedOut &&
 		ctx.Err() == nil {
 		e.cache.ColdRetry = true
@@ -57,12 +86,18 @@ func (m *Manager) execute(ctx context.Context, rec record, workspace *compile.Wo
 			e.output = failedOutput(rec, err)
 			return e
 		}
-		e.output = m.runner.Run(ctx, workspace.Project, rec.Request, rec.Job.ID)
+		e.output = runAttempt()
 	}
 	return e
 }
 
-func (m *Manager) executeIsolated(ctx context.Context, rec record, workspace *compile.Workspace) execution {
+func (m *Manager) executeIsolated(
+	ctx context.Context,
+	rec record,
+	workspace *compile.Workspace,
+	cfg config.Config,
+	inputs compile.ResourceInput,
+) execution {
 	e := execution{stamps: make(map[string]int64)}
 	m.admissionMu.Lock()
 	s := m.sessions[rec.Job.SessionID]
@@ -93,19 +128,20 @@ func (m *Manager) executeIsolated(ctx context.Context, rec record, workspace *co
 	if reuse {
 		e.cache = &info
 	}
-	m.runIsolated(ctx, rec, workspace, &e, cachePath)
+	m.runIsolated(ctx, rec, workspace, &e, cachePath, cfg, inputs)
 	return e
 }
 
 func failedOutput(rec record, err error) compile.Output {
 	return compile.Output{
 		Result: protocol.CompileResult{
-			ProtocolVersion: protocol.Version,
-			RequestID:       rec.Job.ID,
-			Entry:           rec.Request.Entry,
-			Engine:          rec.Request.Engine,
-			ExitCode:        -1,
-			Error:           err.Error(),
+			EnvironmentDigest: rec.Request.EnvironmentDigest,
+			ProtocolVersion:   protocol.Version,
+			RequestID:         rec.Job.ID,
+			Entry:             rec.Request.Entry,
+			Engine:            rec.Request.Engine,
+			ExitCode:          -1,
+			Error:             err.Error(),
 		},
 	}
 }
@@ -228,7 +264,13 @@ func (m *Manager) updatePublishedCache(ctx context.Context, rec record, e execut
 
 // Ordinary jobs retain their portable auxiliary policy while moving all TeX
 // execution out of a controller that has access to the Docker daemon.
-func (m *Manager) executePortableIsolated(ctx context.Context, rec record, workspace *compile.Workspace) execution {
+func (m *Manager) executePortableIsolated(
+	ctx context.Context,
+	rec record,
+	workspace *compile.Workspace,
+	cfg config.Config,
+	inputs compile.ResourceInput,
+) execution {
 	e := execution{
 		cacheKey: project.CompileCacheKey(rec.Request, m.meta, m.cfg.CompileCacheEpoch),
 		stamps:   make(map[string]int64),
@@ -261,7 +303,7 @@ func (m *Manager) executePortableIsolated(ctx context.Context, rec record, works
 		}
 		e.cache = &info
 	}
-	m.runIsolated(ctx, rec, workspace, &e, checkpoint)
+	m.runIsolated(ctx, rec, workspace, &e, checkpoint, cfg, inputs)
 	return e
 }
 
@@ -271,6 +313,8 @@ func (m *Manager) runIsolated(
 	workspace *compile.Workspace,
 	e *execution,
 	checkpoint string,
+	cfg config.Config,
+	inputs compile.ResourceInput,
 ) {
 	sourceFiles, sourceErr := m.projects.SourceFiles(rec.Snapshot)
 	if sourceErr != nil {
@@ -280,7 +324,7 @@ func (m *Manager) runIsolated(
 	var err error
 	e.output, e.checkpoint, err = sandbox.Run(
 		ctx,
-		m.cfg,
+		cfg,
 		rec.Request,
 		rec.Job.ID,
 		rec.Snapshot.Files,
@@ -289,6 +333,7 @@ func (m *Manager) runIsolated(
 		sourceFiles,
 		filepath.Join(workspace.Path, "isolated"),
 		e.sessionCheckpoint,
+		inputs,
 	)
 	// A completed compiler error cannot mutate the previous checkpoint: each
 	// attempt restores a private copy. Invalid transport/state is discarded.
@@ -299,7 +344,7 @@ func (m *Manager) runIsolated(
 		// The cold attempt uses a separate transport directory and a new container.
 		e.output, e.checkpoint, err = sandbox.Run(
 			ctx,
-			m.cfg,
+			cfg,
 			rec.Request,
 			rec.Job.ID+"-cold",
 			rec.Snapshot.Files,
@@ -308,6 +353,7 @@ func (m *Manager) runIsolated(
 			sourceFiles,
 			filepath.Join(workspace.Path, "isolated-cold"),
 			e.sessionCheckpoint,
+			inputs,
 		)
 	}
 	if err != nil {

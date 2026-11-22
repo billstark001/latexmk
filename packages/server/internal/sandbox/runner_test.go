@@ -29,6 +29,7 @@ func TestTransportRejectsSourceDescriptorMismatchBeforeStartingWorker(t *testing
 			descriptors,
 			t.TempDir(),
 			false,
+			compile.ResourceInput{},
 		)
 		if err == nil || !strings.Contains(err.Error(), "source descriptor") {
 			t.Fatalf("descriptor mismatch was not rejected before worker startup: %v", err)

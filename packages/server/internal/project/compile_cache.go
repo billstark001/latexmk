@@ -361,7 +361,7 @@ func (m *Manager) DeleteCompileCaches(ownerID, projectID string) (int64, error) 
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return 0, nil
 	}
-	size, err := directorySize(dir)
+	size, err := directorySize(dir, "")
 	if err != nil {
 		return 0, err
 	}

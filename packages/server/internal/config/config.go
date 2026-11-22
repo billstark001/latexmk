@@ -19,16 +19,27 @@ import (
 )
 
 type Config struct {
-	MaxRealtimeRevisionRate     int
-	RunnerNamespace             string
-	MaxRealtimeSessions         int
-	MaxRealtimeSessionsPerOwner int
-	RealtimeSessionTTL          time.Duration
-	RunnerImage                 string
-	RunnerMemoryBytes           int64
-	RunnerWorkspaceBytes        int64
-	RunnerPIDs                  int
-	RunnerCPUs                  int
+	ResourceCacheDir              string
+	ResourceRegistryFile          string
+	ResourceInventoryDir          string
+	MaxResourceBytes              int64
+	MaxResourceFiles              int
+	ResourceCacheBytes            int64
+	ResourceOwnerBytes            int64
+	MaxResourceEnvironments       int
+	MaxConcurrentResourcePrepares int
+	ResourcePrepareTimeout        time.Duration
+	ResourceRetention             time.Duration
+	MaxRealtimeRevisionRate       int
+	RunnerNamespace               string
+	MaxRealtimeSessions           int
+	MaxRealtimeSessionsPerOwner   int
+	RealtimeSessionTTL            time.Duration
+	RunnerImage                   string
+	RunnerMemoryBytes             int64
+	RunnerWorkspaceBytes          int64
+	RunnerPIDs                    int
+	RunnerCPUs                    int
 
 	CompileCacheRetention time.Duration
 	MaxCompileCacheBytes  int64
@@ -245,6 +256,9 @@ func Load() (Config, error) {
 	if v := os.Getenv("LATEXMK_ADDR"); v != "" {
 		cfg.Addr = v
 	}
+	if err := loadResourceConfig(&cfg); err != nil {
+		return Config{}, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -282,6 +296,18 @@ func loadAPIToken() (string, error) {
 // Validate checks a complete configuration, including isolated-runner settings.
 // Compile-cache bytes and realtime session count may be zero to disable them.
 func (c Config) Validate() error {
+	if c.MaxResourceBytes < 0 || c.MaxResourceFiles < 0 || c.ResourceCacheBytes < 0 || c.ResourceOwnerBytes < 0 ||
+		c.MaxResourceEnvironments < 0 || c.MaxConcurrentResourcePrepares < 0 || c.ResourcePrepareTimeout < 0 || c.ResourceRetention < 0 {
+		return fmt.Errorf("resource environment limits cannot be negative")
+	}
+	if c.MaxResourceBytes > (math.MaxInt64-1)/8 || c.ResourceCacheBytes > math.MaxInt64/2 ||
+		c.MaxResourceFiles > 1_000_000 {
+		return fmt.Errorf("resource environment limits overflow transport budgets")
+	}
+	if c.MaxResourceBytes > 0 && ((c.ResourceCacheBytes > 0 && c.ResourceCacheBytes < c.MaxResourceBytes) ||
+		(c.ResourceOwnerBytes > 0 && c.ResourceOwnerBytes < c.MaxResourceBytes)) {
+		return fmt.Errorf("resource cache and owner limits must cover one environment")
+	}
 	if c.MaxRealtimeSessions < 0 || c.RealtimeSessionTTL <= 0 || c.RunnerPIDs <= 0 || c.RunnerCPUs <= 0 ||
 		c.RunnerMemoryBytes <= 0 ||
 		c.RunnerWorkspaceBytes <= 0 ||
@@ -367,6 +393,9 @@ func (c Config) Validate() error {
 	}
 	if c.StateDir == "" {
 		return fmt.Errorf("LATEXMK_STATE_DIR is required")
+	}
+	if _, err := c.ResourceDirectory(); err != nil {
+		return err
 	}
 	if c.DatabaseMode != "postgres" && c.DatabaseMode != "pglite" {
 		return fmt.Errorf("LATEXMK_DATABASE_MODE must be postgres or pglite")

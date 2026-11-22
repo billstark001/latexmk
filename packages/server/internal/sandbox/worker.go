@@ -20,10 +20,14 @@ import (
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/resultarchive"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/resources"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 type workerRequest struct {
+	Resources        workerResources         `json:"resources"`
+	MaxResourceFiles int                     `json:"maxResourceFiles"`
+	MaxResourceBytes int64                   `json:"maxResourceBytes"`
 	ExportCheckpoint bool                    `json:"exportCheckpoint"`
 	Version          int                     `json:"version"`
 	Request          protocol.CompileRequest `json:"request"`
@@ -38,8 +42,15 @@ type workerRequest struct {
 	TimeoutMS        int64                   `json:"timeoutMs"`
 }
 
-const workerProtocolVersion = 2
-const maxWorkerRequestBytes = 4 << 20
+const workerProtocolVersion = 3
+const maxWorkerRequestBytes = 16 << 20
+
+type workerResources struct {
+	Files      []resources.File `json:"files,omitempty"`
+	TexmfFiles []resources.File `json:"texmfFiles,omitempty"`
+	FontDirs   []string         `json:"fontDirs,omitempty"`
+	FontLookup string           `json:"fontLookup,omitempty"`
+}
 
 // Worker runs only inside a dedicated disposable container. Its fixed logical
 // path makes .fdb_latexmk and recorder paths valid across successful checkpoints.
@@ -97,7 +108,7 @@ func runWorker(
 	}
 	runner := compile.NewRunner(cfg)
 
-	if err := runner.ValidateRequest(req.Request); err != nil {
+	if err := compile.ValidateRequest(cfg, req.Request); err != nil {
 		return err
 	}
 	project := filepath.Join(root, "project")
@@ -146,6 +157,13 @@ func runWorker(
 		}
 		return nil
 	}); err != nil {
+		return err
+	}
+	resourceInput, err := req.resourceInput(inbox)
+	if err != nil {
+		return err
+	}
+	if err := compile.MaterializeResources(project, resourceInput); err != nil {
 		return err
 	}
 	build := filepath.Join(project, ".latexmk-build")
@@ -198,7 +216,7 @@ func runWorker(
 		project,
 		req.Request,
 		req.RequestID,
-		compile.RunOptions{BuildDirectory: ".latexmk-build", PreserveRecorder: req.Warm},
+		compile.RunOptions{BuildDirectory: ".latexmk-build", PreserveRecorder: req.Warm, Resources: resourceInput},
 	)
 	result.Result.WorkspaceReuse = req.Warm
 	responsePath := filepath.Join(root, "result.tar.gz")
@@ -251,5 +269,66 @@ func (req workerRequest) validateLimits() error {
 		req.MaxStateBytes > math.MaxInt64-config.CheckpointArchiveOverheadBytes-1 {
 		return errors.New("invalid worker protocol or limits")
 	}
+	if len(req.Resources.Files)+len(req.Resources.TexmfFiles) > 0 &&
+		(req.MaxResourceFiles <= 0 || req.MaxResourceBytes <= 0) {
+		return errors.New("missing worker resource limits")
+	}
 	return nil
+}
+
+func (req workerRequest) resourceInput(inbox string) (compile.ResourceInput, error) {
+	input := compile.ResourceInput{FontDirs: req.Resources.FontDirs, FontLookup: req.Resources.FontLookup}
+	if input.FontLookup != "" && input.FontLookup != "files" && input.FontLookup != "names" {
+		return input, errors.New("invalid font lookup mode")
+	}
+	seen := make(map[string]bool)
+	var total int64
+	for _, group := range []struct {
+		name   string
+		files  []resources.File
+		output *[]compile.ResourceFile
+	}{{"project", req.Resources.Files, &input.Files}, {"texmf", req.Resources.TexmfFiles, &input.TexmfFiles}} {
+		for _, file := range group.files {
+			clean, err := safefs.Clean(file.Path)
+			if err != nil || clean != file.Path || file.Size < 0 || !resources.ValidDigest(file.SHA256) ||
+				file.Size > req.MaxResourceBytes-total || len(seen) >= req.MaxResourceFiles {
+				return input, errors.New("invalid or oversized worker resource manifest")
+			}
+			if group.name == "project" {
+				if _, err := resources.Destination(".", clean); err != nil {
+					return input, err
+				}
+			}
+			name := "resources/" + group.name + "/" + clean
+			if seen[name] {
+				return input, errors.New("duplicate worker resource")
+			}
+			seen[name] = true
+			total += file.Size
+			*group.output = append(*group.output, compile.ResourceFile{Path: clean, File: compile.File{
+				Workspace: inbox, RelativePath: name, Size: file.Size, SHA256: file.SHA256,
+			}})
+		}
+	}
+	root, err := safefs.Open(inbox)
+	if err != nil {
+		return input, err
+	}
+	defer func() { _ = root.Close() }()
+	err = fs.WalkDir(root.FS(), "resources", func(name string, entry fs.DirEntry, err error) error {
+		if errors.Is(err, os.ErrNotExist) && name == "resources" && len(seen) == 0 {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && !seen[name] {
+			return errors.New("undeclared worker resource file")
+		}
+		return nil
+	})
+	if err != nil {
+		return input, err
+	}
+	return input, nil
 }

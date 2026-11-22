@@ -103,6 +103,24 @@ func TestCommandArgsDoesNotAddLuaOptionsToOtherEngines(t *testing.T) {
 	}
 }
 
+func TestRequestValidationAppliesTheEffectiveRunnerPolicy(t *testing.T) {
+	req := protocol.CompileRequest{
+		ProtocolVersion: protocol.Version,
+		Entry:           "main.tex",
+		Engine:          "xelatex",
+		Interaction:     "nonstopmode",
+		ShellEscape:     true,
+	}
+	cfg := config.Config{Engines: []string{"xelatex"}, AllowShellEscape: true}
+	if err := ValidateRequest(cfg, req); err != nil {
+		t.Fatal("native configured shell policy was rejected", err)
+	}
+	cfg.RunnerImage = "configured-image"
+	if err := ValidateRequest(cfg, req); err == nil {
+		t.Fatal("isolated execution inherited native shell escape permission")
+	}
+}
+
 func TestCollectArtifactsIncludesXdvipdfmxPDF(t *testing.T) {
 	root := t.TempDir()
 	files := map[string]string{
@@ -115,7 +133,13 @@ func TestCollectArtifactsIncludesXdvipdfmxPDF(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	artifacts, err := collectArtifacts(root, protocol.CompileRequest{Entry: "main.tex", Engine: "xelatex"}, 1<<20)
+	artifacts, err := collectArtifacts(
+		root,
+		protocol.CompileRequest{Entry: "main.tex", Engine: "xelatex"},
+		1<<20,
+		"",
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +181,7 @@ func TestCollectRecordedInputsOnlyReturnsWorkspaceFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "main.fls"), []byte(fls), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	inputs, err := collectRecordedInputs(root)
+	inputs, err := collectRecordedInputs(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +199,7 @@ func TestCompilerFilesystemRejectsSymlinkArtifactsAndHome(t *testing.T) {
 	if err := os.Symlink(filepath.Join(outside, "secret"), filepath.Join(root, "main.pdf")); err != nil {
 		t.Skip(err)
 	}
-	if _, err := collectArtifacts(root, protocol.CompileRequest{Entry: "main.tex"}, 1<<20); err == nil {
+	if _, err := collectArtifacts(root, protocol.CompileRequest{Entry: "main.tex"}, 1<<20, "", nil); err == nil {
 		t.Fatal("collected external artifact")
 	}
 	if err := os.Symlink(outside, filepath.Join(root, ".latexmk-home")); err != nil {
@@ -202,7 +226,7 @@ func TestRecorderUsesPWDForInputsAndOutputs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	files, err := collectArtifacts(root, protocol.CompileRequest{Entry: "main.tex"}, 1<<20)
+	files, err := collectArtifacts(root, protocol.CompileRequest{Entry: "main.tex"}, 1<<20, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +239,7 @@ func TestRecorderUsesPWDForInputsAndOutputs(t *testing.T) {
 	if !found {
 		t.Fatal("OUTPUT did not honor PWD")
 	}
-	inputs, err := collectRecordedInputs(root)
+	inputs, err := collectRecordedInputs(root, nil)
 	if err != nil || strings.Join(inputs, ",") != "chapter/body.tex" {
 		t.Fatalf("%v %v", inputs, err)
 	}
@@ -242,8 +266,8 @@ func TestRegisteredEngineBuildsWithoutNameSpecificBranches(t *testing.T) {
 		Engine:          name,
 		Interaction:     "nonstopmode",
 	}
-	runner := NewRunner(config.Config{Engines: []string{name}})
-	if err := runner.ValidateRequest(request); err != nil {
+	cfg := config.Config{Engines: []string{name}}
+	if err := ValidateRequest(cfg, request); err != nil {
 		t.Fatal(err)
 	}
 	args, err := commandArgs(request)
@@ -256,8 +280,8 @@ func TestRegisteredEngineBuildsWithoutNameSpecificBranches(t *testing.T) {
 		t.Fatal(args)
 	}
 	request.Engine = "unregistered-but-enabled"
-	runner.Config.Engines = []string{request.Engine}
-	if err := runner.ValidateRequest(request); err == nil {
+	cfg.Engines = []string{request.Engine}
+	if err := ValidateRequest(cfg, request); err == nil {
 		t.Fatal("unregistered engine accepted")
 	}
 	if _, err := commandArgs(request); err == nil {

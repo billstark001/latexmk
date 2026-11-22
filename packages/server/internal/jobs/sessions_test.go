@@ -45,7 +45,15 @@ func sessionManager(t *testing.T) (*Manager, protocol.SessionRequest) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := New(cfg, protocol.Metadata{}, compile.NewRunner(cfg), p, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	m := New(
+		cfg,
+		protocol.Metadata{},
+		compile.NewRunner(cfg),
+		p,
+		nil,
+		nil,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
 	return m, protocol.SessionRequest{
 		IdempotencyKey: "session-key-00000001",
 		ProjectID:      "paper",

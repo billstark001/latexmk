@@ -20,6 +20,7 @@ import (
 	"github.com/billstark001/latexmk/packages/server/internal/jobs"
 	"github.com/billstark001/latexmk/packages/server/internal/metadata"
 	"github.com/billstark001/latexmk/packages/server/internal/project"
+	"github.com/billstark001/latexmk/packages/server/internal/resources"
 	"github.com/billstark001/latexmk/packages/server/internal/sandbox"
 	"github.com/billstark001/latexmk/packages/server/internal/store"
 )
@@ -32,6 +33,18 @@ var (
 
 func main() {
 	if len(os.Args) > 1 {
+		if len(os.Args) == 3 && os.Args[1] == "resource-font-scan" {
+			maxBytes, err := strconv.ParseInt(os.Args[2], 10, 64)
+			if err != nil || maxBytes <= 0 {
+				fmt.Fprintln(os.Stderr, "invalid font scan limit")
+				os.Exit(2)
+			}
+			if err = resources.ScanFont(os.Stdin, os.Stdout, maxBytes); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
+		}
 		if len(os.Args) != 4 || os.Args[1] != "compile-worker" {
 			fmt.Fprintln(os.Stderr, "invalid server invocation")
 			os.Exit(2)
@@ -84,14 +97,36 @@ func main() {
 		logger.Error("project storage initialization failed", "error", err)
 		os.Exit(2)
 	}
-	queue := jobs.New(cfg, meta, runner, projects, db, logger)
+	environments, err := resources.New(cfg, meta)
+	if err != nil {
+		logger.Error("resource environment initialization failed", "error", err)
+		os.Exit(2)
+	}
+	validatedImages := map[string]bool{cfg.RunnerImage: true}
+	for _, baseline := range environments.List() {
+		if baseline.Image == "" || validatedImages[baseline.Image] {
+			continue
+		}
+		effective := cfg
+		effective.RunnerImage = baseline.Image
+		probeCtx, probeCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err := sandbox.Validate(probeCtx, effective)
+		probeCancel()
+		if err != nil {
+			logger.Error("registered runner initialization failed", "baseline", baseline.ID, "error", err)
+			os.Exit(2)
+		}
+		validatedImages[baseline.Image] = true
+	}
+	queue := jobs.New(cfg, meta, runner, projects, db, environments, logger)
 	signalCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	workerCtx, stopWorkers := context.WithCancel(context.Background())
 	defer stopWorkers()
 	projects.Start(workerCtx, logger)
+	environments.Start(workerCtx)
 	queue.Start(workerCtx)
-	apiServer := httpapi.New(cfg, meta, runner, authManager, db, projects, queue, logger)
+	apiServer := httpapi.New(cfg, meta, runner, authManager, db, projects, queue, environments, logger)
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
 		BaseContext:       func(net.Listener) context.Context { return signalCtx },

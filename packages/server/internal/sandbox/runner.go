@@ -19,6 +19,7 @@ import (
 	"github.com/billstark001/latexmk/packages/server/internal/platform/process"
 	"github.com/billstark001/latexmk/packages/server/internal/resultarchive"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/resources"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
@@ -35,6 +36,7 @@ func Run(
 	sourceFiles map[string]compile.File,
 	destination string,
 	exportCheckpoint bool,
+	resourceInput compile.ResourceInput,
 ) (compile.Output, string, error) {
 	if cfg.RunnerImage == "" {
 		return compile.Output{}, "", errors.New("isolated runner is not configured")
@@ -44,6 +46,9 @@ func Run(
 	}
 	warm := checkpoint != ""
 	payload := workerRequest{
+		MaxResourceFiles: cfg.MaxResourceFiles,
+		MaxResourceBytes: cfg.MaxResourceBytes,
+		Resources:        workerResources{FontDirs: resourceInput.FontDirs, FontLookup: resourceInput.FontLookup},
 		Version:          workerProtocolVersion,
 		ExportCheckpoint: exportCheckpoint,
 		Request:          req,
@@ -57,6 +62,30 @@ func Run(
 		MaxLogBytes:      cfg.MaxLogBytes,
 		TimeoutMS:        cfg.CompileTimeout.Milliseconds(),
 	}
+	var resourceMembers []archiveMember
+	var resourceBytes int64
+	for _, group := range []struct {
+		name   string
+		files  []compile.ResourceFile
+		output *[]resources.File
+	}{{"project", resourceInput.Files, &payload.Resources.Files}, {"texmf", resourceInput.TexmfFiles, &payload.Resources.TexmfFiles}} {
+		for _, file := range group.files {
+			name, err := safefs.Clean(file.Path)
+			if err != nil || name != file.Path || file.File.Size < 0 ||
+				file.File.Size > cfg.MaxResourceBytes-resourceBytes || len(resourceMembers) >= cfg.MaxResourceFiles {
+				return compile.Output{}, "", errors.New("resource transport exceeds its manifest limits")
+			}
+			resourceBytes += file.File.Size
+			*group.output = append(
+				*group.output,
+				resources.File{Path: name, Size: file.File.Size, SHA256: file.File.SHA256},
+			)
+			resourceMembers = append(
+				resourceMembers,
+				archiveMember{name: "resources/" + group.name + "/" + name, file: file.File},
+			)
+		}
+	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return compile.Output{}, "", err
@@ -69,6 +98,7 @@ func Run(
 		return compile.Output{}, "", err
 	}
 	members := []archiveMember{{name: "request.json", file: metadata}}
+	members = append(members, resourceMembers...)
 	if len(sourceFiles) != len(sources) {
 		return compile.Output{}, "", errors.New("source descriptors do not match the snapshot")
 	}
@@ -178,7 +208,7 @@ func Run(
 		return compile.Output{}, "", workerError(err)
 	}
 	if result.Result.RequestID != id || result.Result.Entry != req.Entry || result.Result.Engine != req.Engine ||
-		result.Result.ProtocolVersion != protocol.Version {
+		result.Result.ProtocolVersion != protocol.Version || result.Result.EnvironmentDigest != req.EnvironmentDigest {
 		return compile.Output{}, "", errors.New("runner result does not match its compile attempt")
 	}
 	selected := make(map[string]bool, len(sources))
@@ -253,7 +283,7 @@ func containerArgs(cfg config.Config, name string) []string {
 		fmt.Sprintf(
 			"/work:rw,nosuid,nodev,noexec,size=%d,nr_inodes=%d,mode=1777",
 			cfg.RunnerWorkspaceBytes,
-			config.RunnerEntryMultiplier*cfg.MaxFiles+config.RunnerExtraEntries,
+			config.RunnerEntryMultiplier*cfg.MaxFiles+3*cfg.MaxResourceFiles+config.RunnerExtraEntries,
 		),
 		"--tmpfs",
 		// Biber PAR unpacks its interpreter and shared libraries here. Execution is
@@ -265,7 +295,7 @@ func containerArgs(cfg config.Config, name string) []string {
 		cfg.RunnerImage,
 		"compile-worker",
 		strconv.FormatInt(cfg.RunnerWorkspaceBytes, 10),
-		strconv.Itoa(config.RunnerEntryMultiplier*cfg.MaxFiles + config.RunnerExtraEntries),
+		strconv.Itoa(config.RunnerEntryMultiplier*cfg.MaxFiles + 3*cfg.MaxResourceFiles + config.RunnerExtraEntries),
 	}
 }
 

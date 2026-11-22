@@ -26,6 +26,7 @@ import (
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/jobs"
 	"github.com/billstark001/latexmk/packages/server/internal/project"
+	"github.com/billstark001/latexmk/packages/server/internal/resources"
 	"github.com/billstark001/latexmk/packages/server/internal/resultarchive"
 	"github.com/billstark001/latexmk/packages/server/internal/store"
 	"github.com/billstark001/latexmk/packages/shared/jsonutil"
@@ -35,15 +36,16 @@ import (
 // Server owns the Gin engine and exposes the v2 content-addressed upload and
 // queued-job API. The legacy synchronous endpoint is opt-in.
 type Server struct {
-	cfg      config.Config
-	meta     protocol.Metadata
-	runner   *compile.Runner
-	auth     *auth.Manager
-	db       *store.Postgres
-	projects *project.Manager
-	jobs     *jobs.Manager
-	logger   *slog.Logger
-	engine   *gin.Engine
+	cfg          config.Config
+	meta         protocol.Metadata
+	runner       *compile.Runner
+	auth         *auth.Manager
+	db           *store.Postgres
+	projects     *project.Manager
+	jobs         *jobs.Manager
+	environments *resources.Manager
+	logger       *slog.Logger
+	engine       *gin.Engine
 }
 
 // New wires a validated configuration and initialized service dependencies into
@@ -57,18 +59,20 @@ func New(
 	db *store.Postgres,
 	projects *project.Manager,
 	queue *jobs.Manager,
+	environments *resources.Manager,
 	logger *slog.Logger,
 ) *Server {
 	gin.SetMode(gin.ReleaseMode)
 	s := &Server{
-		cfg:      cfg,
-		meta:     meta,
-		runner:   runner,
-		auth:     authManager,
-		db:       db,
-		projects: projects,
-		jobs:     queue,
-		logger:   logger,
+		cfg:          cfg,
+		meta:         meta,
+		runner:       runner,
+		auth:         authManager,
+		db:           db,
+		projects:     projects,
+		jobs:         queue,
+		environments: environments,
+		logger:       logger,
 	}
 	engine := gin.New()
 	engine.Use(s.recover(), s.requestID(), s.cors(), s.securityHeaders(), s.logRequests())
@@ -78,6 +82,12 @@ func New(
 
 	compileAuth := authManager.Middleware(false)
 	adminAuth := authManager.Middleware(true)
+	engine.GET("/v1/environments", compileAuth, s.listEnvironments)
+	engine.POST("/v1/environments/resolve", compileAuth, s.resolveEnvironment)
+	engine.GET("/v1/environments/:digest", compileAuth, s.inspectEnvironment)
+	engine.PUT("/v1/environments/:digest/blobs/:sha", compileAuth, s.putEnvironmentBlob)
+	engine.POST("/v1/environments/:digest/prepare", compileAuth, s.prepareEnvironment)
+	engine.GET("/v1/environments/:digest/resources/:resourceID/blobs/:sha", compileAuth, s.exportEnvironmentBlob)
 	if cfg.EnableLegacyCompile && cfg.RunnerImage == "" {
 		engine.POST("/v1/compile", compileAuth, s.compileLegacy)
 	}
@@ -212,6 +222,10 @@ func (s *Server) compileLegacy(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "server compile cache requires the queued compilation API")
 		return
 	}
+	if request.EnvironmentDigest != "" {
+		writeError(c, http.StatusBadRequest, "resource environments require queued compilation")
+		return
+	}
 	if err := s.runner.Validate(workspace, request); err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
@@ -269,7 +283,7 @@ func (s *Server) planUpload(c *gin.Context) {
 		return
 	}
 	principal, _ := auth.FromContext(c.Request.Context())
-	if err := s.runner.ValidateRequest(request.Request); err != nil {
+	if err := s.jobs.ValidateRequest(principal.ID, request.Request); err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}

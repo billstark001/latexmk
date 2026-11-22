@@ -63,6 +63,7 @@ printf 'INPUT main.tex\nOUTPUT main.aux\nOUTPUT main.pdf\n' > main.fls
 		compile.NewRunner(cfg),
 		projects,
 		nil,
+		nil,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 	req := protocol.CompileRequest{

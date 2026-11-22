@@ -17,6 +17,7 @@ import (
 	"github.com/billstark001/latexmk/packages/server/internal/config"
 	"github.com/billstark001/latexmk/packages/server/internal/jobs"
 	"github.com/billstark001/latexmk/packages/server/internal/project"
+	"github.com/billstark001/latexmk/packages/server/internal/resources"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
@@ -40,8 +41,12 @@ func newTestServer(t *testing.T, legacy bool) *Server {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	runner := compile.NewRunner(cfg)
-	queue := jobs.New(cfg, protocol.Metadata{}, runner, projects, nil, logger)
-	return New(cfg, protocol.Metadata{}, runner, auth.New(cfg, nil), nil, projects, queue, logger)
+	environments, err := resources.New(cfg, protocol.Metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := jobs.New(cfg, protocol.Metadata{}, runner, projects, nil, environments, logger)
+	return New(cfg, protocol.Metadata{}, runner, auth.New(cfg, nil), nil, projects, queue, environments, logger)
 }
 
 func TestLegacyCompileRouteDisabledByDefault(t *testing.T) {
@@ -69,7 +74,7 @@ func TestSessionLeaseEndpointAndAbandonedEventStream(t *testing.T) {
 	cfg := server.cfg
 	cfg.MaxRealtimeSessions, cfg.MaxRealtimeSessionsPerOwner = 4, 4
 	cfg.RealtimeSessionTTL, cfg.ShutdownTimeout = 200*time.Millisecond, time.Second
-	server.jobs = jobs.New(cfg, server.meta, server.runner, server.projects, nil, server.logger)
+	server.jobs = jobs.New(cfg, server.meta, server.runner, server.projects, nil, server.environments, server.logger)
 	ctx, cancel := context.WithCancel(context.Background())
 	server.jobs.Start(ctx)
 	defer func() {

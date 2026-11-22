@@ -62,6 +62,7 @@ func TestQueueAcceptsMultipleJobsAndAllowsQueuedCancellation(t *testing.T) {
 		compile.NewRunner(cfg),
 		projects,
 		nil,
+		nil,
 		slog.New(slog.NewTextHandler(testWriter{t}, nil)),
 	)
 	first, err := manager.Enqueue(context.Background(), "member", snapshot, request)
@@ -144,6 +145,7 @@ func TestSuccessfulCompileRequiresArchivedResult(t *testing.T) {
 		compile.NewRunner(config.Config{MaxConcurrentCompiles: 1}),
 		projects,
 		nil,
+		nil,
 		slog.New(slog.NewTextHandler(testWriter{t}, nil)),
 	)
 	now := time.Now().UTC()
@@ -185,6 +187,7 @@ func TestQueuedJobKeepsSnapshotCapturedAtEnqueue(t *testing.T) {
 		protocol.Metadata{},
 		compile.NewRunner(cfg),
 		projects,
+		nil,
 		nil,
 		slog.New(slog.NewTextHandler(testWriter{t}, nil)),
 	)
@@ -264,6 +267,7 @@ func TestCleanupPlanRejectsChangedTargets(t *testing.T) {
 		compile.NewRunner(cfg),
 		projects,
 		nil,
+		nil,
 		slog.New(slog.NewTextHandler(testWriter{t}, nil)),
 	)
 	now := time.Now().UTC()
@@ -332,6 +336,7 @@ func TestCleanupProjectBlocksActiveJobsAndAppliesExactPreview(t *testing.T) {
 		protocol.Metadata{},
 		compile.NewRunner(cfg),
 		projects,
+		nil,
 		nil,
 		slog.New(slog.NewTextHandler(testWriter{t}, nil)),
 	)
