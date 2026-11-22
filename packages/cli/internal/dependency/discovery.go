@@ -105,6 +105,9 @@ func (d *discoverer) visit(filePath, reason string) error {
 	d.visits++
 	d.visiting[filePath] = true
 	defer delete(d.visiting, filePath)
+	if candidate, ok := d.candidates[filePath]; ok && candidate.External {
+		return nil
+	}
 	if generated, ok := d.generated[filePath]; ok {
 		d.scan(generated.source, generated.content, generated.line)
 		return nil

@@ -290,7 +290,7 @@ func runLiveSession(
 						if err := dependency.SaveCachedInputs(
 							c.ProjectRoot,
 							request.Entry,
-							request.Engine,
+							request.Engine, request.EnvironmentDigest,
 							out.Result.InputFiles,
 						); err != nil {
 							terminalFprintln(os.Stderr, "latexmk: dependency cache:", err)

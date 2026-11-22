@@ -9,15 +9,45 @@ import (
 
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
+	cliresources "github.com/billstark001/latexmk/packages/cli/internal/resources"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
+	sharedresources "github.com/billstark001/latexmk/packages/shared/resources"
 )
 
 func selectionClient(opts compileOptions) *client.Client {
-	return &client.Client{
+	c := &client.Client{
 		ProjectRoot: opts.projectRoot, Exclude: opts.exclude, IgnoreFiles: opts.ignoreFiles,
 		GeneratedFiles: generatedFiles(opts),
 		DenyFiles:      opts.denyFiles, UnmatchedGlob: opts.unmatchedGlob, RespectGitIgnore: opts.gitIgnore,
 		UploadMode: opts.uploadMode, ManifestFile: opts.manifestFile, IncludeFiles: opts.includeFiles}
+	if opts.resourceCapture != nil {
+		c.ResourceFiles = opts.resourceCapture.MountFiles()
+		c.DenyFiles = append(c.DenyFiles, opts.resourceCapture.DenyPaths...)
+	} else {
+		paths, _ := cliresources.PrivatePaths(opts.projectRoot, opts.resourceSpecs)
+		c.DenyFiles = append(c.DenyFiles, paths...)
+	}
+	lockPath := filepath.Join(opts.projectRoot, cliresources.LockName(opts.resourceOptions.LockFile))
+	c.DenyFiles = append(c.DenyFiles, lockPath, lockPath+".guard")
+	if opts.resourceCapture != nil {
+		if lock, err := cliresources.LoadLock(opts.projectRoot, opts.resourceOptions.LockFile); err == nil {
+			req, err := sharedresources.NormalizeRequest(
+				sharedresources.ResolveRequest{
+					Baseline:  opts.environment,
+					Resources: opts.resourceCapture.Resources,
+					Requires:  opts.requires,
+				},
+			)
+			if err == nil {
+				digest, _ := sharedresources.Hash(req)
+				if plan, ok := lock.Plans[resourcePlanKey(opts)]; ok && plan.SpecDigest == digest {
+					c.SetBaseline(plan.Environment.Baseline)
+					c.CacheEnvironment = plan.Environment.Digest
+				}
+			}
+		}
+	}
+	return c
 }
 
 func hasOption(args []string, flag string) bool {
@@ -123,35 +153,41 @@ func exportPDF(opts compileOptions, out client.CompileOutput) error {
 
 func optionsFromConfig(cfg config.Resolved, dryRun bool) compileOptions {
 	return compileOptions{
-		pdfTemplate:  cfg.PDFTemplate,
-		pdfKeepLast:  retentionCount(cfg.PDFRetention),
-		nameScope:    cfg.Naming.Scope,
-		nameTimeZone: cfg.Naming.TimeZone,
-		ignoreFiles:  cfg.IgnoreFiles, denyFiles: cfg.DenyFiles, unmatchedGlob: cfg.UnmatchedGlob,
-		auxiliary:     cfg.Auxiliary,
-		server:        cfg.Server,
-		token:         cfg.Token,
-		projectRoot:   cfg.ProjectRoot,
-		projectID:     cfg.ProjectID,
-		rootMode:      cfg.RootMode,
-		uploadMode:    cfg.UploadMode,
-		manifestFile:  cfg.ManifestFile,
-		includeFiles:  append([]string(nil), cfg.IncludeFiles...),
-		gitIgnore:     cfg.RespectGitIgnore,
-		engine:        cfg.Engine,
-		outDir:        cfg.OutDir,
-		timeout:       cfg.Timeout,
-		interaction:   "nonstopmode",
-		synctex:       true,
-		haltOnError:   true,
-		fileLineError: true,
-		insecure:      cfg.InsecureSkipVerify,
-		exclude:       cfg.Exclude,
-		configPath:    cfg.ConfigPath,
-		dryRun:        dryRun,
-		watchInterval: cfg.Watch.Interval,
-		watchDebounce: cfg.Watch.Debounce,
-		watchMaxWait:  cfg.Watch.MaxWait,
+		resourceSpecs:   cfg.Resources,
+		resourceOptions: cfg.ResourceOptions,
+		resourceIDs:     cfg.DefaultResources,
+		publications:    cfg.Publications,
+		pdfTemplate:     cfg.PDFTemplate,
+		pdfKeepLast:     retentionCount(cfg.PDFRetention),
+		nameScope:       cfg.Naming.Scope,
+		nameTimeZone:    cfg.Naming.TimeZone,
+		ignoreFiles:     cfg.IgnoreFiles,
+		denyFiles:       cfg.DenyFiles,
+		unmatchedGlob:   cfg.UnmatchedGlob,
+		auxiliary:       cfg.Auxiliary,
+		server:          cfg.Server,
+		token:           cfg.Token,
+		projectRoot:     cfg.ProjectRoot,
+		projectID:       cfg.ProjectID,
+		rootMode:        cfg.RootMode,
+		uploadMode:      cfg.UploadMode,
+		manifestFile:    cfg.ManifestFile,
+		includeFiles:    append([]string(nil), cfg.IncludeFiles...),
+		gitIgnore:       cfg.RespectGitIgnore,
+		engine:          cfg.Engine,
+		outDir:          cfg.OutDir,
+		timeout:         cfg.Timeout,
+		interaction:     "nonstopmode",
+		synctex:         true,
+		haltOnError:     true,
+		fileLineError:   true,
+		insecure:        cfg.InsecureSkipVerify,
+		exclude:         cfg.Exclude,
+		configPath:      cfg.ConfigPath,
+		dryRun:          dryRun,
+		watchInterval:   cfg.Watch.Interval,
+		watchDebounce:   cfg.Watch.Debounce,
+		watchMaxWait:    cfg.Watch.MaxWait,
 	}
 }
 
@@ -197,6 +233,13 @@ func applyBuildTarget(opts *compileOptions, cfg config.Resolved, args []string) 
 	}
 	if target.OutDir != "" && !hasOption(args, "--out-dir") && !hasOption(args, "-output-directory") {
 		opts.outDir = target.OutDir
+	}
+	if target.Resources != nil && !opts.resourceExplicit {
+		opts.resourceIDs = append([]string{}, target.Resources...)
+	}
+	opts.requires = target.Requires
+	if target.Environment != "" && !opts.environmentExplicit {
+		opts.environment = target.Environment
 	}
 	opts.includeFiles = append(opts.includeFiles, target.IncludeFiles...)
 	return nil

@@ -659,7 +659,7 @@ func TestProjectManifestDoesNotTreatHistoryAsDynamicCoverage(t *testing.T) {
 	if err := dependency.SaveCachedInputs(
 		root,
 		"main.tex",
-		"xelatex",
+		"xelatex", "",
 		[]string{"main.tex", "chapter.tex"},
 	); err != nil {
 		t.Fatal(err)

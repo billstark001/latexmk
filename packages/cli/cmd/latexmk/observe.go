@@ -198,6 +198,9 @@ func selectedFilesChanged(before, after []projectarchive.File) bool {
 
 func watchTargets(opts compileOptions, files []projectarchive.File) []projectwatch.Target {
 	targets := make([]projectwatch.Target, 0, len(files)+8)
+	for _, file := range append(resourceControlPaths(opts), opts.controlFiles...) {
+		targets = append(targets, projectwatch.Target{Name: "settings resources: " + file, Path: file})
+	}
 	for _, file := range files {
 		targets = append(targets, projectwatch.Target{Name: file.Path, Path: file.Source})
 	}

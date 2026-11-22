@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/billstark001/latexmk/packages/shared/resources"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
@@ -28,16 +29,20 @@ type cacheFile struct {
 }
 
 type cacheEntry struct {
-	Entry      string    `json:"entry"`
-	Engine     string    `json:"engine"`
-	InputFiles []string  `json:"inputFiles"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	Environment string    `json:"environment,omitempty"`
+	Entry       string    `json:"entry"`
+	Engine      string    `json:"engine"`
+	InputFiles  []string  `json:"inputFiles"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 // LoadCachedInputs reads paths recorded by a previous successful compile.
 // The cache contains project-relative paths only and never grants access to a
 // file absent from the current policy-filtered manifest.
-func LoadCachedInputs(root, entry, engine string) ([]string, bool, error) {
+func LoadCachedInputs(root, entry, engine, environment string) ([]string, bool, error) {
+	if environment != "" && !resources.ValidDigest(environment) {
+		return nil, false, errors.New("invalid dependency-cache environment digest")
+	}
 	entry = cleanProjectPath(entry)
 	if entry == "" || entry == "." {
 		return nil, false, errors.New("cache entry path escapes the project root")
@@ -47,7 +52,7 @@ func LoadCachedInputs(root, entry, engine string) ([]string, bool, error) {
 		return nil, false, err
 	}
 	for _, item := range cache.Entries {
-		if item.Entry != entry || item.Engine != engine {
+		if item.Entry != entry || item.Engine != engine || item.Environment != environment {
 			continue
 		}
 		paths, err := normalizeCachedPaths(item.InputFiles)
@@ -61,7 +66,10 @@ func LoadCachedInputs(root, entry, engine string) ([]string, bool, error) {
 
 // SaveCachedInputs atomically stores workspace-local INPUT records from a
 // successful remote compile.
-func SaveCachedInputs(root, entry, engine string, inputFiles []string) error {
+func SaveCachedInputs(root, entry, engine, environment string, inputFiles []string) error {
+	if environment != "" && !resources.ValidDigest(environment) {
+		return errors.New("invalid dependency-cache environment digest")
+	}
 	entry = cleanProjectPath(entry)
 	if entry == "" || entry == "." {
 		return errors.New("cache entry path escapes the project root")
@@ -85,12 +93,21 @@ func SaveCachedInputs(root, entry, engine string, inputFiles []string) error {
 	}
 	next := make([]cacheEntry, 0, len(cache.Entries)+1)
 	for _, item := range cache.Entries {
-		if item.Entry == entry && item.Engine == engine {
+		if item.Entry == entry && item.Engine == engine && item.Environment == environment {
 			continue
 		}
 		next = append(next, item)
 	}
-	next = append(next, cacheEntry{Entry: entry, Engine: engine, InputFiles: paths, UpdatedAt: time.Now().UTC()})
+	next = append(
+		next,
+		cacheEntry{
+			Entry:       entry,
+			Engine:      engine,
+			Environment: environment,
+			InputFiles:  paths,
+			UpdatedAt:   time.Now().UTC(),
+		},
+	)
 	if len(next) > maxCacheKeys {
 		sort.Slice(next, func(i, j int) bool { return next[i].UpdatedAt.After(next[j].UpdatedAt) })
 		next = next[:maxCacheKeys]
@@ -99,7 +116,10 @@ func SaveCachedInputs(root, entry, engine string, inputFiles []string) error {
 		if next[i].Entry != next[j].Entry {
 			return next[i].Entry < next[j].Entry
 		}
-		return next[i].Engine < next[j].Engine
+		if next[i].Engine != next[j].Engine {
+			return next[i].Engine < next[j].Engine
+		}
+		return next[i].Environment < next[j].Environment
 	})
 	cache.Version = cacheVersion
 	cache.Entries = next
@@ -133,6 +153,9 @@ func readCache(root string) (cacheFile, bool, error) {
 		item := &cache.Entries[i]
 		if clean := cleanProjectPath(item.Entry); clean == "" || clean == "." || clean != item.Entry {
 			return cache, false, fmt.Errorf("dependency cache contains invalid entry path %q", item.Entry)
+		}
+		if item.Environment != "" && !resources.ValidDigest(item.Environment) {
+			return cache, false, errors.New("invalid cached environment digest")
 		}
 		if !validCacheEngine(item.Engine) {
 			return cache, false, errors.New("dependency cache contains an invalid engine")

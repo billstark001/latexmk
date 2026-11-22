@@ -40,11 +40,13 @@ type Stats struct {
 // same selection rules as Create so incremental uploads cannot accidentally
 // include a file that the legacy archive path would exclude.
 type File struct {
-	Path   string `json:"path"`
-	Source string `json:"-"`
-	SHA256 string `json:"sha256"`
-	Size   int64  `json:"size"`
-	Reason string `json:"reason,omitempty"`
+	// External files belong to a separately verified environment and are never uploaded as sources.
+	External bool   `json:"-"`
+	Path     string `json:"path"`
+	Source   string `json:"-"`
+	SHA256   string `json:"sha256"`
+	Size     int64  `json:"size"`
+	Reason   string `json:"reason,omitempty"`
 }
 
 // Create selects, hashes and archives project files under the configured policy.

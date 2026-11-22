@@ -190,6 +190,9 @@ func (c *Client) StreamSessionEvents(
 }
 
 func ValidateRealtimeRequest(request protocol.CompileRequest, meta protocol.Metadata) error {
+	if err := validateResourceCapability(request, meta); err != nil {
+		return err
+	}
 	if err := validateAuxiliaryCapability(request, meta); err != nil {
 		return err
 	}

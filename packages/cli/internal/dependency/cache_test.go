@@ -13,19 +13,19 @@ func TestDependencyCacheRoundTripIsScopedByEntryAndEngine(t *testing.T) {
 	if err := SaveCachedInputs(
 		root,
 		"main.tex",
-		"xelatex",
+		"xelatex", "",
 		[]string{"main.tex", "sections/body.tex", "main.tex"},
 	); err != nil {
 		t.Fatal(err)
 	}
-	inputs, found, err := LoadCachedInputs(root, "main.tex", "xelatex")
+	inputs, found, err := LoadCachedInputs(root, "main.tex", "xelatex", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !found || len(inputs) != 2 || inputs[0] != "main.tex" || inputs[1] != "sections/body.tex" {
 		t.Fatalf("cached inputs = %#v, found=%t", inputs, found)
 	}
-	if _, found, err := LoadCachedInputs(root, "main.tex", "lualatex"); err != nil || found {
+	if _, found, err := LoadCachedInputs(root, "main.tex", "lualatex", ""); err != nil || found {
 		t.Fatalf("unexpected cache for another engine: found=%t err=%v", found, err)
 	}
 	info, err := os.Stat(filepath.Join(root, cacheDirName, cacheFileName))
@@ -46,10 +46,10 @@ func TestDependencyCacheRejectsSymlinkDirectory(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, cacheDirName)); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := LoadCachedInputs(root, "main.tex", "xelatex"); err == nil {
+	if _, _, err := LoadCachedInputs(root, "main.tex", "xelatex", ""); err == nil {
 		t.Fatal("expected symlink cache directory read to be rejected")
 	}
-	if err := SaveCachedInputs(root, "main.tex", "xelatex", []string{"main.tex"}); err == nil {
+	if err := SaveCachedInputs(root, "main.tex", "xelatex", "", []string{"main.tex"}); err == nil {
 		t.Fatal("expected symlink cache directory to be rejected")
 	}
 	if _, err := os.Stat(filepath.Join(outside, cacheFileName)); !os.IsNotExist(err) {
@@ -58,7 +58,7 @@ func TestDependencyCacheRejectsSymlinkDirectory(t *testing.T) {
 }
 
 func TestDependencyCacheRejectsOutsidePaths(t *testing.T) {
-	if err := SaveCachedInputs(t.TempDir(), "main.tex", "xelatex", []string{"../secret.tex"}); err == nil {
+	if err := SaveCachedInputs(t.TempDir(), "main.tex", "xelatex", "", []string{"../secret.tex"}); err == nil {
 		t.Fatal("expected outside cache path to be rejected")
 	}
 }
@@ -66,10 +66,10 @@ func TestDependencyCacheRejectsOutsidePaths(t *testing.T) {
 func TestDependencyCacheAcceptsOpaqueLongEngineNames(t *testing.T) {
 	root := t.TempDir()
 	name := strings.Repeat("custom", 20)
-	if err := SaveCachedInputs(root, "main.tex", name, []string{"main.tex"}); err != nil {
+	if err := SaveCachedInputs(root, "main.tex", name, "", []string{"main.tex"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := LoadCachedInputs(root, "main.tex", name); err != nil || !found {
+	if _, found, err := LoadCachedInputs(root, "main.tex", name, ""); err != nil || !found {
 		t.Fatalf("opaque engine did not round-trip: found=%v error=%v", found, err)
 	}
 }
@@ -79,8 +79,23 @@ func TestDependencyCacheRejectsInvalidIdentitiesBeforeSaving(t *testing.T) {
 		{entry: "main.tex"}, {entry: ".", engine: "xelatex"},
 		{entry: "main.tex", engine: "bad\nengine"},
 	} {
-		if err := SaveCachedInputs(t.TempDir(), test.entry, test.engine, []string{"main.tex"}); err == nil {
+		if err := SaveCachedInputs(t.TempDir(), test.entry, test.engine, "", []string{"main.tex"}); err == nil {
 			t.Fatalf("accepted entry=%q engine=%q", test.entry, test.engine)
 		}
+	}
+}
+
+func TestDependencyCacheIsScopedByEnvironment(t *testing.T) {
+	root := t.TempDir()
+	first := strings.Repeat("a", 64)
+	second := strings.Repeat("b", 64)
+	if err := SaveCachedInputs(root, "main.tex", "xelatex", first, []string{"main.tex", "one.tex"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := LoadCachedInputs(root, "main.tex", "xelatex", second); err != nil || found {
+		t.Fatalf("cross-environment cache: found=%t err=%v", found, err)
+	}
+	if _, found, err := LoadCachedInputs(root, "main.tex", "xelatex", first); err != nil || !found {
+		t.Fatalf("matching environment cache: found=%t err=%v", found, err)
 	}
 }

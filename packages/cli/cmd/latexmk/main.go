@@ -18,7 +18,9 @@ import (
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
 	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
+	cliresources "github.com/billstark001/latexmk/packages/cli/internal/resources"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
+	sharedresources "github.com/billstark001/latexmk/packages/shared/resources"
 )
 
 var (
@@ -28,55 +30,66 @@ var (
 )
 
 type compileOptions struct {
-	explain        string
-	ignoreFiles    []string
-	denyFiles      []string
-	unmatchedGlob  string
-	target         string
-	pdfExport      string
-	pdfTemplate    string
-	pdfKeepLast    *int
-	nameScope      string
-	nameTimeZone   string
-	naming         *pdfNamingPlan
-	invocation     *nameInvocation
-	generated      *generatedPaths
-	exportLease    *nameReservation
-	auxiliary      protocol.AuxiliaryOptions
-	server         string
-	token          string
-	projectRoot    string
-	projectID      string
-	rootMode       string
-	uploadMode     string
-	manifestFile   string
-	includeFiles   []string
-	gitIgnore      bool
-	engine         string
-	engineExplicit bool
-	outDir         string
-	timeout        time.Duration
-	interaction    string
-	synctex        bool
-	haltOnError    bool
-	fileLineError  bool
-	shellEscape    bool
-	jobName        string
-	force          bool
-	quiet          bool
-	jsonOutput     bool
-	dryRun         bool
-	detach         bool
-	watch          bool
-	realtime       bool
-	controlFiles   []string
-	watchInterval  time.Duration
-	watchDebounce  time.Duration
-	watchMaxWait   time.Duration
-	insecure       bool
-	entry          string
-	exclude        []string
-	configPath     string
+	resourceSpecs       map[string]sharedresources.Spec
+	resourceOptions     sharedresources.Options
+	resourceIDs         []string
+	resourceAddIDs      []string
+	resourceRemoveIDs   []string
+	resourceExplicit    bool
+	resourceCapture     *cliresources.Captured
+	requires            sharedresources.Requirements
+	environment         string
+	environmentExplicit bool
+	publications        map[string]sharedresources.Publication
+	explain             string
+	ignoreFiles         []string
+	denyFiles           []string
+	unmatchedGlob       string
+	target              string
+	pdfExport           string
+	pdfTemplate         string
+	pdfKeepLast         *int
+	nameScope           string
+	nameTimeZone        string
+	naming              *pdfNamingPlan
+	invocation          *nameInvocation
+	generated           *generatedPaths
+	exportLease         *nameReservation
+	auxiliary           protocol.AuxiliaryOptions
+	server              string
+	token               string
+	projectRoot         string
+	projectID           string
+	rootMode            string
+	uploadMode          string
+	manifestFile        string
+	includeFiles        []string
+	gitIgnore           bool
+	engine              string
+	engineExplicit      bool
+	outDir              string
+	timeout             time.Duration
+	interaction         string
+	synctex             bool
+	haltOnError         bool
+	fileLineError       bool
+	shellEscape         bool
+	jobName             string
+	force               bool
+	quiet               bool
+	jsonOutput          bool
+	dryRun              bool
+	detach              bool
+	watch               bool
+	realtime            bool
+	controlFiles        []string
+	watchInterval       time.Duration
+	watchDebounce       time.Duration
+	watchMaxWait        time.Duration
+	insecure            bool
+	entry               string
+	exclude             []string
+	configPath          string
 }
 
 func main() {
@@ -124,6 +137,8 @@ func run(args []string) int {
 			return runArtifacts(argv[1:])
 		case "pack":
 			return runPack(argv[1:])
+		case "resources":
+			return runResources(argv[1:])
 		case "name":
 			return runName(argv[1:])
 		case "files":
@@ -223,6 +238,20 @@ func runCompileWithInvocation(args []string, forcedEngine string, listOnly bool,
 		}
 		return fail(err)
 	}
+	capturedResources, captureErr := cliresources.Capture(
+		context.Background(),
+		opts.projectRoot,
+		opts.resourceSpecs,
+		opts.resourceIDs,
+		opts.denyFiles...)
+	if captureErr != nil {
+		return fail(captureErr)
+	}
+	defer func() { _ = capturedResources.Close() }()
+	opts.resourceCapture = capturedResources
+	opts.denyFiles = append(opts.denyFiles, capturedResources.DenyPaths...)
+	lockPath := filepath.Join(opts.projectRoot, cliresources.LockName(opts.resourceOptions.LockFile))
+	opts.denyFiles = append(opts.denyFiles, lockPath, lockPath+".guard")
 	if opts.detach && (opts.pdfTemplate != "" || opts.pdfKeepLast != nil) {
 		return failAgentArguments("compile.start", opts.jsonOutput, errors.New("--detach cannot export a PDF template"))
 	}
@@ -280,7 +309,47 @@ func runCompileWithInvocation(args []string, forcedEngine string, listOnly bool,
 	c.ManifestFile = opts.manifestFile
 	c.IncludeFiles = append([]string(nil), opts.includeFiles...)
 	c.GeneratedFiles = generatedFiles(opts)
+	c.ResourceFiles = capturedResources.MountFiles()
 	request := requestFromOptions(opts)
+	prepCtx, prepCancel := context.WithTimeout(context.Background(), resourcePrepareTimeout(opts))
+	meta, prepErr := c.Metadata(prepCtx)
+	if prepErr == nil {
+		if needsResourceEnvironment(opts) && !meta.Capabilities.ResourceEnvironments {
+			prepErr = &client.CapabilityError{Capability: "resource environments"}
+		}
+		if meta.Capabilities.ResourceEnvironments {
+			var environment sharedresources.Environment
+			if needsResourceEnvironment(opts) {
+				environment, prepErr = prepareResourceEnvironment(prepCtx, c, opts, meta, capturedResources)
+			} else {
+				// Empty default environments bind an exact runtime without creating a lock
+				// in projects that have not opted into managed resources.
+				environment, prepErr = c.ResolveEnvironment(prepCtx, sharedresources.ResolveRequest{})
+				if prepErr == nil && !supportsEnvironmentEngine(environment, opts.engine) {
+					prepErr = fmt.Errorf(
+						"environment %q does not support engine %q",
+						environment.Baseline.ID,
+						opts.engine,
+					)
+				}
+				if prepErr == nil {
+					environment, prepErr = c.PrepareEnvironment(prepCtx, environment, nil)
+				}
+			}
+			if prepErr == nil {
+				request.EnvironmentDigest = environment.Digest
+				c.CacheEnvironment = environment.Digest
+				c.SetBaseline(environment.Baseline)
+				c.ResourceFiles, prepErr = environmentResourceFiles(environment, capturedResources)
+			}
+		}
+	}
+	prepCancel()
+	if prepErr != nil {
+		return fail(prepErr)
+	}
+	opts.controlFiles = append(opts.controlFiles, resourceControlPaths(opts)...)
+
 	if opts.realtime {
 		return runLive(c, request, opts)
 	}
@@ -476,6 +545,11 @@ func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOpt
 			}
 			return fail(waitErr)
 		}
+		for _, name := range changed {
+			if strings.HasPrefix(name, "settings resources: ") {
+				return reloadLiveSettings
+			}
+		}
 		terminalFprintln(os.Stderr, "latexmk: change detected:", strings.Join(changed, ", "))
 	}
 }
@@ -495,6 +569,59 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 			return args[i], nil
 		}
 		switch {
+		case a == "--resource" || strings.HasPrefix(a, "--resource="):
+			v, err := value("--resource")
+			if err != nil {
+				return err
+			}
+			if !sharedresources.ValidID(v) {
+				return errors.New("--resource requires a resource ID")
+			}
+			opts.resourceAddIDs = append(opts.resourceAddIDs, v)
+		case a == "--without-resource" || strings.HasPrefix(a, "--without-resource="):
+			v, err := value("--without-resource")
+			if err != nil {
+				return err
+			}
+			if !sharedresources.ValidID(v) {
+				return errors.New("--without-resource requires a resource ID")
+			}
+			opts.resourceRemoveIDs = append(opts.resourceRemoveIDs, v)
+		case a == "--no-resources":
+			opts.resourceIDs = []string{}
+			opts.resourceAddIDs = nil
+			opts.resourceExplicit = true
+		case a == "--environment" || strings.HasPrefix(a, "--environment="):
+			v, err := value("--environment")
+			if err != nil {
+				return err
+			}
+			if !sharedresources.ValidID(v) {
+				return errors.New("--environment requires a registered baseline ID")
+			}
+			opts.environment = v
+			opts.environmentExplicit = true
+		case a == "--lockfile" || strings.HasPrefix(a, "--lockfile="):
+			v, err := value("--lockfile")
+			if err != nil {
+				return err
+			}
+			if v == "" {
+				return errors.New("--lockfile requires a path")
+			}
+			opts.resourceOptions.LockFile = v
+		case a == "--frozen-lockfile":
+			opts.resourceOptions.LockMode = "frozen"
+		case a == "--prepare-timeout" || strings.HasPrefix(a, "--prepare-timeout="):
+			v, err := value("--prepare-timeout")
+			if err != nil {
+				return err
+			}
+			d, err := time.ParseDuration(v)
+			if err != nil || d <= 0 {
+				return errors.New("--prepare-timeout must be positive")
+			}
+			opts.resourceOptions.PrepareTimeout = v
 		case a == "--pdf-template" || strings.HasPrefix(a, "--pdf-template="):
 			v, err := value("--pdf-template")
 			if err != nil {
@@ -799,6 +926,10 @@ func hasDetachFlag(args []string) bool {
 }
 
 func normalizeCompilePaths(opts *compileOptions, cwd string) error {
+	finalizeResourceOptions(opts)
+	if err := validateResourceCLI(*opts); err != nil {
+		return err
+	}
 	entryAbs := opts.entry
 	if !filepath.IsAbs(entryAbs) {
 		entryAbs = filepath.Join(cwd, entryAbs)
@@ -1396,6 +1527,10 @@ func writeRemoteCleanupReport(report protocol.CleanupReport) {
 }
 
 func usage() {
+	terminalPrintln("Resource commands: latexmk resources lock|fetch|inspect [--target NAME] [--json]")
+	terminalPrintln(
+		"Resource flags: --resource ID, --without-resource ID, --no-resources, --environment ID, --lockfile PATH, --frozen-lockfile, --prepare-timeout DURATION",
+	)
 	terminalPrint(`latexmk - remote, PaaS-hosted LaTeX compiler
 
 Usage:

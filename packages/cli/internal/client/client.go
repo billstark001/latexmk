@@ -22,14 +22,18 @@ import (
 
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
 	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
+	cliresources "github.com/billstark001/latexmk/packages/cli/internal/resources"
 	"github.com/billstark001/latexmk/packages/shared/jsonutil"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 type Client struct {
-	IgnoreFiles []string
-	DenyFiles   []string
+	BaselineFiles    []projectarchive.File
+	CacheEnvironment string
+	ResourceFiles    []projectarchive.File
+	IgnoreFiles      []string
+	DenyFiles        []string
 	// GeneratedFiles returns a concurrency-safe snapshot of adapter-owned
 	// output paths, including publications made while a watcher is running.
 	GeneratedFiles   func() ([]string, error)
@@ -249,6 +253,9 @@ func (c *Client) Compile(
 	request protocol.CompileRequest,
 	outputRoot string,
 ) (CompileOutput, error) {
+	scoped := *c
+	scoped.CacheEnvironment = request.EnvironmentDigest
+	c = &scoped
 	selection, err := c.selectFiles(request.Entry, request.Engine, nil, false)
 	if err != nil {
 		return CompileOutput{}, err
@@ -259,6 +266,9 @@ func (c *Client) Compile(
 	}
 	meta, err := c.Metadata(ctx)
 	if err != nil {
+		return CompileOutput{}, err
+	}
+	if err := validateResourceCapability(request, meta); err != nil {
 		return CompileOutput{}, err
 	}
 	if request.Auxiliary.Server == "reuse" &&
@@ -321,7 +331,7 @@ func (c *Client) Compile(
 		if cacheErr := dependency.SaveCachedInputs(
 			c.ProjectRoot,
 			request.Entry,
-			request.Engine,
+			request.Engine, request.EnvironmentDigest,
 			output.Result.InputFiles,
 		); cacheErr != nil {
 			output.Warnings = append(output.Warnings, "could not update dependency cache: "+cacheErr.Error())
@@ -334,6 +344,9 @@ func (c *Client) Compile(
 // committed it to an immutable queued job. It never polls or downloads a
 // result, so missing-file retries are left to the caller.
 func (c *Client) StartCompile(ctx context.Context, request protocol.CompileRequest) (StartCompileOutput, error) {
+	scoped := *c
+	scoped.CacheEnvironment = request.EnvironmentDigest
+	c = &scoped
 	selection, err := c.selectFiles(request.Entry, request.Engine, nil, false)
 	if err != nil {
 		return StartCompileOutput{}, err
@@ -344,6 +357,9 @@ func (c *Client) StartCompile(ctx context.Context, request protocol.CompileReque
 	}
 	meta, err := c.Metadata(ctx)
 	if err != nil {
+		return StartCompileOutput{}, err
+	}
+	if err := validateResourceCapability(request, meta); err != nil {
 		return StartCompileOutput{}, err
 	}
 	if !meta.Capabilities.IncrementalUpload || !meta.Capabilities.QueuedJobs {
@@ -692,6 +708,43 @@ func (c *Client) selectFiles(entry, engine string, additional []string, hash boo
 	if err != nil {
 		return dependency.Result{}, err
 	}
+	// Resource destinations participate in discovery but never source transport.
+	managed := make(map[string]projectarchive.File, len(c.ResourceFiles))
+	for _, file := range c.ResourceFiles {
+		managed[file.Path] = file
+	}
+	if _, exists := managed[entry]; exists {
+		return dependency.Result{}, errors.New("entry must be a project source, not a managed resource")
+	}
+	for _, file := range candidates {
+		if resource, ok := managed[file.Path]; ok {
+			actual := []projectarchive.File{file}
+			if err := projectarchive.HashSelected(actual, 2<<30); err != nil {
+				return dependency.Result{}, err
+			}
+			if actual[0].SHA256 != resource.SHA256 || actual[0].Size != resource.Size {
+				return dependency.Result{}, fmt.Errorf("source collides with resource destination %q", file.Path)
+			}
+		}
+	}
+	filtered := candidates[:0]
+	for _, file := range candidates {
+		if _, ok := managed[file.Path]; !ok {
+			filtered = append(filtered, file)
+		}
+	}
+	candidates = append(filtered, c.ResourceFiles...)
+	present := make(map[string]bool, len(candidates))
+	for _, file := range candidates {
+		present[file.Path] = true
+	}
+	for _, file := range c.BaselineFiles {
+		if !present[file.Path] {
+			file.External = true
+			candidates = append(candidates, file)
+			present[file.Path] = true
+		}
+	}
 	var cached []string
 	explicit := append([]string(nil), c.IncludeFiles...)
 	// Server-requested additions are exact validated paths, never user patterns.
@@ -706,7 +759,7 @@ func (c *Client) selectFiles(entry, engine string, additional []string, hash boo
 		explicit = append(explicit, manifestFiles...)
 	}
 	if c.UploadMode == "auto" || c.UploadMode == "" {
-		cached, _, err = dependency.LoadCachedInputs(c.ProjectRoot, entry, engine)
+		cached, _, err = dependency.LoadCachedInputs(c.ProjectRoot, entry, engine, c.CacheEnvironment)
 		if err != nil {
 			return dependency.Result{}, fmt.Errorf("load dependency cache: %w", err)
 		}
@@ -725,6 +778,17 @@ func (c *Client) selectFiles(entry, engine string, additional []string, hash boo
 	if err != nil {
 		return dependency.Result{}, fmt.Errorf("select project dependencies: %w", err)
 	}
+	result.Files, err = cliresources.FilterSources(result.Files, c.ResourceFiles)
+	if err != nil {
+		return dependency.Result{}, err
+	}
+	sourceFiles := result.Files[:0]
+	for _, file := range result.Files {
+		if !file.External {
+			sourceFiles = append(sourceFiles, file)
+		}
+	}
+	result.Files = sourceFiles
 	if hash {
 		if err := projectarchive.HashSelected(result.Files, 2<<30); err != nil {
 			return dependency.Result{}, err
@@ -861,6 +925,9 @@ func unpackResponseWithPolicy(
 			}
 			if out.Result.ProtocolVersion != 1 && out.Result.ProtocolVersion != protocol.Version {
 				return fmt.Errorf("unsupported response protocol version %d", out.Result.ProtocolVersion)
+			}
+			if request.EnvironmentDigest != "" && out.Result.EnvironmentDigest != request.EnvironmentDigest {
+				return errors.New("result does not match the requested resource environment")
 			}
 			resultSeen = true
 			for _, artifact := range out.Result.Artifacts {

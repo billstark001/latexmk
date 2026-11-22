@@ -13,6 +13,7 @@ import (
 
 	"github.com/billstark001/latexmk/packages/shared/jsonutil"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
+	"github.com/billstark001/latexmk/packages/shared/resources"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
@@ -25,13 +26,16 @@ const maxTokenFileSize = 64 << 10
 const maxConfigFileSize = 1 << 20
 
 type Target struct {
-	Entry        string        `json:"entry"`
-	Engine       string        `json:"engine,omitempty"`
-	OutDir       string        `json:"outDir,omitempty"`
-	PDF          string        `json:"pdf,omitempty"`
-	PDFTemplate  string        `json:"pdfTemplate,omitempty"`
-	PDFRetention *PDFRetention `json:"pdfRetention,omitempty"`
-	IncludeFiles []string      `json:"includeFiles,omitempty"`
+	Resources    []string               `json:"resources,omitempty"`
+	Requires     resources.Requirements `json:"requires,omitempty"`
+	Environment  string                 `json:"environment,omitempty"`
+	Entry        string                 `json:"entry"`
+	Engine       string                 `json:"engine,omitempty"`
+	OutDir       string                 `json:"outDir,omitempty"`
+	PDF          string                 `json:"pdf,omitempty"`
+	PDFTemplate  string                 `json:"pdfTemplate,omitempty"`
+	PDFRetention *PDFRetention          `json:"pdfRetention,omitempty"`
+	IncludeFiles []string               `json:"includeFiles,omitempty"`
 }
 
 type NamingConfig struct {
@@ -56,19 +60,23 @@ type WatchSettings struct {
 }
 
 type FileConfig struct {
-	Watch         *WatchConfig  `json:"watch,omitempty"`
-	Naming        *NamingConfig `json:"naming,omitempty"`
-	PDFTemplate   string        `json:"pdfTemplate,omitempty"`
-	PDFRetention  *PDFRetention `json:"pdfRetention,omitempty"`
-	tokenSource   *ValueSource
-	TokenMode     string            `json:"tokenMode,omitempty"`
-	TokenFile     string            `json:"tokenFile,omitempty"`
-	EnvFile       *string           `json:"envFile,omitempty"`
-	IgnoreFiles   []string          `json:"ignoreFiles"`
-	UnmatchedGlob string            `json:"unmatchedGlob,omitempty"`
-	OutDir        string            `json:"outDir,omitempty"`
-	Targets       map[string]Target `json:"targets,omitempty"`
-	DefaultTarget string            `json:"defaultTarget,omitempty"`
+	Resources        map[string]resources.Spec        `json:"resources,omitempty"`
+	ResourceOptions  resources.Options                `json:"resourceOptions,omitempty"`
+	DefaultResources []string                         `json:"defaultResources,omitempty"`
+	Publications     map[string]resources.Publication `json:"publications,omitempty"`
+	Watch            *WatchConfig                     `json:"watch,omitempty"`
+	Naming           *NamingConfig                    `json:"naming,omitempty"`
+	PDFTemplate      string                           `json:"pdfTemplate,omitempty"`
+	PDFRetention     *PDFRetention                    `json:"pdfRetention,omitempty"`
+	tokenSource      *ValueSource
+	TokenMode        string            `json:"tokenMode,omitempty"`
+	TokenFile        string            `json:"tokenFile,omitempty"`
+	EnvFile          *string           `json:"envFile,omitempty"`
+	IgnoreFiles      []string          `json:"ignoreFiles"`
+	UnmatchedGlob    string            `json:"unmatchedGlob,omitempty"`
+	OutDir           string            `json:"outDir,omitempty"`
+	Targets          map[string]Target `json:"targets,omitempty"`
+	DefaultTarget    string            `json:"defaultTarget,omitempty"`
 
 	Auxiliary          protocol.AuxiliaryOptions `json:"auxiliary,omitempty"`
 	Server             ServerSources             `json:"server"`
@@ -87,20 +95,24 @@ type FileConfig struct {
 }
 
 type Resolved struct {
-	Watch         WatchSettings
-	Naming        NamingConfig
-	PDFTemplate   string
-	PDFRetention  *PDFRetention
-	TokenMode     string
-	TokenSource   string
-	EnvPath       string
-	IgnoreFiles   []string
-	UnmatchedGlob string
-	OutDir        string
-	Targets       map[string]Target
-	DefaultTarget string
-	DenyFiles     []string
-	auth          credentials
+	Resources        map[string]resources.Spec
+	ResourceOptions  resources.Options
+	DefaultResources []string
+	Publications     map[string]resources.Publication
+	Watch            WatchSettings
+	Naming           NamingConfig
+	PDFTemplate      string
+	PDFRetention     *PDFRetention
+	TokenMode        string
+	TokenSource      string
+	EnvPath          string
+	IgnoreFiles      []string
+	UnmatchedGlob    string
+	OutDir           string
+	Targets          map[string]Target
+	DefaultTarget    string
+	DenyFiles        []string
+	auth             credentials
 
 	Auxiliary          protocol.AuxiliaryOptions
 	Server             string
@@ -141,7 +153,7 @@ func DefaultExcludes() []string {
 // excluded even when a project replaces the ordinary exclude list.
 func DefaultDeny() []string {
 	return []string{
-		FileName,
+		FileName, ".latexmk-resources.lock.json", ".latexmk-resources.lock.json.guard",
 		EnvFileName, TokenFileName, ".latexmk.env", ".latexmk-manifest", ".latexmk-cache/",
 		".latexmkignore",
 		".latexmk-files", ".latexmk-live/",
@@ -339,19 +351,26 @@ func load(start string, envOverride *string) (Resolved, error) {
 	if root != "" {
 		resolvedRoot = filepath.Clean(root)
 	}
+	if err := validateResources(cfg); err != nil {
+		return Resolved{}, err
+	}
 	respectGitIgnore = cfg.RespectGitIgnore == nil || *cfg.RespectGitIgnore
 	return Resolved{
-		Watch:         watch,
-		Naming:        *cfg.Naming,
-		PDFTemplate:   cfg.PDFTemplate,
-		PDFRetention:  cfg.PDFRetention,
-		TokenMode:     cfg.TokenMode,
-		EnvPath:       envPath,
-		IgnoreFiles:   cfg.IgnoreFiles,
-		UnmatchedGlob: cfg.UnmatchedGlob,
-		OutDir:        cfg.OutDir,
-		Targets:       cfg.Targets,
-		DefaultTarget: cfg.DefaultTarget,
+		Resources:        cfg.Resources,
+		ResourceOptions:  cfg.ResourceOptions,
+		DefaultResources: cfg.DefaultResources,
+		Publications:     cfg.Publications,
+		Watch:            watch,
+		Naming:           *cfg.Naming,
+		PDFTemplate:      cfg.PDFTemplate,
+		PDFRetention:     cfg.PDFRetention,
+		TokenMode:        cfg.TokenMode,
+		EnvPath:          envPath,
+		IgnoreFiles:      cfg.IgnoreFiles,
+		UnmatchedGlob:    cfg.UnmatchedGlob,
+		OutDir:           cfg.OutDir,
+		Targets:          cfg.Targets,
+		DefaultTarget:    cfg.DefaultTarget,
 		DenyFiles: []string{
 			userPath,
 			filepath.Join(userDir, "token"),
