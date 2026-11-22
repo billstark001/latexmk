@@ -84,7 +84,7 @@ func TestServerArrayResolution(t *testing.T) {
 			if err := os.Mkdir(filepath.Join(root, "directory"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			cfg, err := Load(root)
+			cfg, err := Load(root, CredentialOptions{})
 			if test.errorText != "" {
 				if err == nil || !strings.Contains(err.Error(), test.errorText) ||
 					strings.Contains(err.Error(), "DO_NOT_EXPOSE") {
@@ -109,7 +109,7 @@ func TestServerRejectsInvalidArrayDeclarationsEvenWhenOverridden(t *testing.T) {
 			t.Setenv("LATEXMK_SERVER", "https://override.test")
 			root := t.TempDir()
 			writeSourceFixture(t, root, FileName, `{"server":`+input+`}`)
-			if _, err := Load(root); err == nil || strings.Contains(err.Error(), "DO_NOT_EXPOSE") {
+			if _, err := Load(root, CredentialOptions{}); err == nil || strings.Contains(err.Error(), "DO_NOT_EXPOSE") {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
@@ -124,28 +124,28 @@ func TestServerArrayLayeringAndEmptyEnvironment(t *testing.T) {
 	writeSourceFixture(t, userDir, "address", "https://user.test")
 	root := t.TempDir()
 	writeSourceFixture(t, root, FileName, `{"engine":"xelatex"}`)
-	cfg, err := Load(root)
+	cfg, err := Load(root, CredentialOptions{})
 	if err != nil || cfg.Server != "https://user.test" {
 		t.Fatalf("inherited file paths: %v", err)
 	}
 	writeSourceFixture(t, root, FileName, `{"server":[{"env":"ARRAY_SERVER"},{"file":"address"}]}`)
 	writeSourceFixture(t, root, EnvFileName, "ARRAY_SERVER=https://dotenv.test\n")
 	writeSourceFixture(t, root, "address", "https://project.test")
-	cfg, err = Load(root)
+	cfg, err = Load(root, CredentialOptions{})
 	if err != nil || cfg.Server != "https://project.test" {
 		t.Fatalf("empty process value must mask dotenv and try next source: %v", err)
 	}
 	t.Setenv("LATEXMK_SERVER", " \t")
-	cfg, err = Load(root)
+	cfg, err = Load(root, CredentialOptions{})
 	if err != nil || cfg.Server != "https://project.test" {
 		t.Fatalf("blank override must use configured sources: %v", err)
 	}
 	writeSourceFixture(t, root, FileName, `{"server":[{"file":"missing"}]}`)
-	if _, err := Load(root); err == nil {
+	if _, err := Load(root, CredentialOptions{}); err == nil {
 		t.Fatal("project sources must replace rather than append user sources/defaults")
 	}
 	t.Setenv("LATEXMK_SERVER", " https://override.test\n")
-	cfg, err = Load(root)
+	cfg, err = Load(root, CredentialOptions{})
 	if err != nil || cfg.Server != "https://override.test" {
 		t.Fatalf("environment override failed: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestServerArrayDoesNotHidePermissionErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(path, 0600) })
-	if _, err := Load(root); err == nil || !strings.Contains(err.Error(), "permission denied") {
+	if _, err := Load(root, CredentialOptions{}); err == nil || !strings.Contains(err.Error(), "permission denied") {
 		t.Fatalf("unreadable file should fail immediately: %v", err)
 	}
 }

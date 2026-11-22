@@ -14,11 +14,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/urfave/cli/v3"
+
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
 	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
 	cliresources "github.com/billstark001/latexmk/packages/cli/internal/resources"
+	"github.com/billstark001/latexmk/packages/shared/argv"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 	sharedresources "github.com/billstark001/latexmk/packages/shared/resources"
 )
@@ -96,12 +99,19 @@ func main() {
 	os.Exit(run(os.Args))
 }
 
+type compileInvocation struct {
+	engine   string
+	listOnly bool
+	watch    bool
+}
+
 func run(args []string) int {
 	if len(args) == 0 {
 		return 2
 	}
 	invokedAs := strings.ToLower(filepath.Base(args[0]))
 	argv := args[1:]
+	defaults := compileInvocation{}
 	if len(argv) > 0 {
 		switch argv[0] {
 		case "version", "--version", "-version":
@@ -142,58 +152,55 @@ func run(args []string) int {
 		case "name":
 			return runName(argv[1:])
 		case "files":
-			return runCompile(argv[1:], "", true)
+			defaults.listOnly = true
+			argv = argv[1:]
 		case "watch":
-			argv = append([]string{"--watch"}, argv[1:]...)
+			defaults.watch = true
+			argv = argv[1:]
 		case "compile":
 			argv = argv[1:]
 		}
 	}
 
-	forcedEngine := ""
 	// These executable aliases are public CLI spellings, not an engine allowlist.
-	switch invokedAs {
-	case "xelatex", "xelatex.exe":
-		forcedEngine = "xelatex"
-	case "lualatex", "lualatex.exe":
-		forcedEngine = "lualatex"
-	case "pdflatex", "pdflatex.exe":
-		forcedEngine = "pdflatex"
+	if !defaults.listOnly {
+		switch invokedAs {
+		case "xelatex", "xelatex.exe":
+			defaults.engine = "xelatex"
+		case "lualatex", "lualatex.exe":
+			defaults.engine = "lualatex"
+		case "pdflatex", "pdflatex.exe":
+			defaults.engine = "pdflatex"
+		}
 	}
 	invocation := newNameInvocation()
 	for {
-		code := runCompileWithInvocation(argv, forcedEngine, false, invocation)
+		code := runCompileWithInvocation(argv, defaults, invocation)
 		if code != reloadLiveSettings {
 			return code
 		}
 	}
 }
 
-func runCompile(args []string, forcedEngine string, listOnly bool) int {
-	return runCompileWithInvocation(args, forcedEngine, listOnly, newNameInvocation())
-}
-
-func runCompileWithInvocation(args []string, forcedEngine string, listOnly bool, invocation *nameInvocation) int {
-	originalArgs := append([]string{}, args...)
-	if listOnly {
-		originalArgs = append(originalArgs, "--dry-run")
-	}
-	detachedJSON := hasJSONFlag(args) && hasDetachFlag(args)
+func runCompileWithInvocation(args []string, defaults compileInvocation, invocation *nameInvocation) int {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return failAgent("compile.start", detachedJSON, err)
+		return fail(err)
 	}
-	cfg, args, err := config.LoadArgs(cwd, args)
+	changes := compileArguments()
+	cfg, parsed, err := loadCommand("compile", cwd, args, changes.Flags()...)
+	detachedJSON := parsed != nil && parsed.Bool("json") && parsed.Bool("detach")
 	if err != nil {
 		return failAgentArguments("compile.start", detachedJSON, err)
 	}
-	opts := optionsFromConfig(cfg, listOnly)
+	opts := optionsFromConfig(cfg, defaults.listOnly)
 	opts.invocation = invocation
-	if forcedEngine != "" {
-		opts.engine = forcedEngine
+	opts.watch = defaults.watch
+	if defaults.engine != "" {
+		opts.engine = defaults.engine
 		opts.engineExplicit = true
 	}
-	if err := parseCompileArgs(args, &opts); err != nil {
+	if err := applyCompileArguments(changes, &opts, parsed); err != nil {
 		if detachedJSON {
 			return failAgentArguments("compile.start", true, err)
 		}
@@ -201,23 +208,28 @@ func runCompileWithInvocation(args []string, forcedEngine string, listOnly bool,
 		terminalFprintln(os.Stderr, "run 'latexmk help' for usage")
 		return 2
 	}
+	if defaults.listOnly {
+		opts.dryRun = true
+	}
 	if opts.target == "" && opts.entry == "" {
 		opts.target, err = implicitTarget(cfg)
 		if err != nil {
-			if opts.detach {
-				return failAgentArguments("compile.start", opts.jsonOutput, err)
-			}
-			return fail(err)
+			return failAgentArguments("compile.start", opts.detach && opts.jsonOutput, err)
 		}
+	}
+	if opts.target == "all" {
+		return runAllTargets(cwd, cfg, opts, parsed)
 	}
 	if opts.target != "" {
-		if opts.target == "all" {
-			return runAllTargets(originalArgs, cfg, invocation)
-		}
-		if err := applyBuildTarget(&opts, cfg, args); err != nil {
+		if err := applyBuildTarget(&opts, cfg, parsed); err != nil {
 			return fail(err)
 		}
 	}
+	return runResolvedCompile(cwd, cfg, opts)
+}
+
+// runResolvedCompile executes one configured target without parsing or replaying argv.
+func runResolvedCompile(cwd string, cfg config.Resolved, opts compileOptions) int {
 	if opts.entry == "" {
 		err := errors.New("no TeX entry file was provided")
 		if opts.detach {
@@ -225,7 +237,7 @@ func runCompileWithInvocation(args []string, forcedEngine string, listOnly bool,
 		}
 		return fail(err)
 	}
-	if opts.detach && (opts.watch || opts.dryRun || listOnly) {
+	if opts.detach && (opts.watch || opts.dryRun) {
 		return failAgentArguments(
 			"compile.start",
 			opts.jsonOutput,
@@ -256,7 +268,7 @@ func runCompileWithInvocation(args []string, forcedEngine string, listOnly bool,
 		return failAgentArguments("compile.start", opts.jsonOutput, errors.New("--detach cannot export a PDF template"))
 	}
 	if err := preparePDFNaming(&opts); err != nil {
-		return failAgentArguments("compile.start", detachedJSON, err)
+		return failAgentArguments("compile.start", opts.detach && opts.jsonOutput, err)
 	}
 	if opts.naming != nil {
 		defer opts.naming.previewLease.Close()
@@ -554,353 +566,250 @@ func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOpt
 	}
 }
 
-func parseCompileArgs(args []string, opts *compileOptions) error {
-	positionals := make([]string, 0, 1)
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		value := func(name string) (string, error) {
-			if strings.Contains(a, "=") {
-				return strings.SplitN(a, "=", 2)[1], nil
-			}
-			if i+1 >= len(args) {
-				return "", fmt.Errorf("%s requires a value", name)
-			}
-			i++
-			return args[i], nil
+func compileArguments() *argv.Options[compileOptions] {
+	options := &argv.Options[compileOptions]{}
+	options.Value("resource", func(o *compileOptions, v string) error {
+		if !sharedresources.ValidID(v) {
+			return errors.New("--resource requires a resource ID")
 		}
-		switch {
-		case a == "--resource" || strings.HasPrefix(a, "--resource="):
-			v, err := value("--resource")
-			if err != nil {
-				return err
-			}
-			if !sharedresources.ValidID(v) {
-				return errors.New("--resource requires a resource ID")
-			}
-			opts.resourceAddIDs = append(opts.resourceAddIDs, v)
-		case a == "--without-resource" || strings.HasPrefix(a, "--without-resource="):
-			v, err := value("--without-resource")
-			if err != nil {
-				return err
-			}
-			if !sharedresources.ValidID(v) {
-				return errors.New("--without-resource requires a resource ID")
-			}
-			opts.resourceRemoveIDs = append(opts.resourceRemoveIDs, v)
-		case a == "--no-resources":
-			opts.resourceIDs = []string{}
-			opts.resourceAddIDs = nil
-			opts.resourceExplicit = true
-		case a == "--environment" || strings.HasPrefix(a, "--environment="):
-			v, err := value("--environment")
-			if err != nil {
-				return err
-			}
-			if !sharedresources.ValidID(v) {
-				return errors.New("--environment requires a registered baseline ID")
-			}
-			opts.environment = v
-			opts.environmentExplicit = true
-		case a == "--lockfile" || strings.HasPrefix(a, "--lockfile="):
-			v, err := value("--lockfile")
-			if err != nil {
-				return err
-			}
-			if v == "" {
-				return errors.New("--lockfile requires a path")
-			}
-			opts.resourceOptions.LockFile = v
-		case a == "--frozen-lockfile":
-			opts.resourceOptions.LockMode = "frozen"
-		case a == "--prepare-timeout" || strings.HasPrefix(a, "--prepare-timeout="):
-			v, err := value("--prepare-timeout")
-			if err != nil {
-				return err
-			}
-			d, err := time.ParseDuration(v)
-			if err != nil || d <= 0 {
-				return errors.New("--prepare-timeout must be positive")
-			}
-			opts.resourceOptions.PrepareTimeout = v
-		case a == "--pdf-template" || strings.HasPrefix(a, "--pdf-template="):
-			v, err := value("--pdf-template")
-			if err != nil {
-				return err
-			}
-			if v == "" {
-				return errors.New("--pdf-template requires a nonempty value")
-			}
-			opts.pdfTemplate, opts.pdfExport = v, ""
-		case a == "--name-scope" || strings.HasPrefix(a, "--name-scope="):
-			v, err := value("--name-scope")
-			if err != nil {
-				return err
-			}
-			if v != "invocation" && v != "build" {
-				return errors.New("--name-scope must be invocation or build")
-			}
-			opts.nameScope = v
-		case a == "--name-timezone" || strings.HasPrefix(a, "--name-timezone="):
-			v, err := value("--name-timezone")
-			if err != nil {
-				return err
-			}
-			if v == "" {
-				return errors.New("--name-timezone requires a nonempty value")
-			}
-			opts.nameTimeZone = v
-		case a == "--pdf-keep-last" || strings.HasPrefix(a, "--pdf-keep-last="):
-			v, err := value("--pdf-keep-last")
-			if err != nil {
-				return err
-			}
-			opts.pdfKeepLast = nil
-			if v != "all" {
-				n, err := strconv.Atoi(v)
-				if err != nil || n < 1 {
-					return errors.New("--pdf-keep-last must be a positive integer or all")
-				}
-				opts.pdfKeepLast = &n
-			}
-		case a == "--":
-			positionals = append(positionals, args[i+1:]...)
-			i = len(args)
-		case a == "--server" || strings.HasPrefix(a, "--server="):
-			v, err := value("--server")
-			if err != nil {
-				return err
-			}
-			opts.server = v
-		case a == "--ignore-file" || strings.HasPrefix(a, "--ignore-file="):
-			v, err := value("--ignore-file")
-			if err != nil {
-				return err
-			}
-			if opts.ignoreFiles == nil {
-				opts.ignoreFiles = []string{}
-			}
-			opts.ignoreFiles = append(opts.ignoreFiles, v)
-		case a == "--no-ignore-files":
-			opts.ignoreFiles = []string{}
-		case a == "--explain" || strings.HasPrefix(a, "--explain="):
-			v, err := value("--explain")
-			if err != nil {
-				return err
-			}
-			opts.explain = v
-			opts.dryRun = true
-		case a == "--unmatched-glob" || strings.HasPrefix(a, "--unmatched-glob="):
-			v, err := value("--unmatched-glob")
-			if err != nil {
-				return err
-			}
-			if v != "error" && v != "warn" && v != "ignore" {
-				return errors.New("--unmatched-glob must be error, warn, or ignore")
-			}
-			opts.unmatchedGlob = v
-		case a == "--local-cache" || strings.HasPrefix(a, "--local-cache="):
-			v, err := value("--local-cache")
-			if err != nil {
-				return err
-			}
-			if v != "none" && v != "cache" && v != "output" {
-				return errors.New("--local-cache must be none, cache, or output")
-			}
-			opts.auxiliary.Local = v
-		case a == "--server-cache-ttl" || strings.HasPrefix(a, "--server-cache-ttl="):
-			v, err := value("--server-cache-ttl")
-			if err != nil {
-				return err
-			}
-			ttl, err := time.ParseDuration(v)
-			if err != nil || ttl <= 0 {
-				return errors.New("--server-cache-ttl must be a positive duration")
-			}
-			opts.auxiliary.ServerTTL = v
-		case a == "--target" || strings.HasPrefix(a, "--target="):
-			v, err := value("--target")
-			if err != nil {
-				return err
-			}
-			if v == "" {
-				return errors.New("--target requires a nonempty name")
-			}
-			opts.target = v
-		case a == "--project-root" || strings.HasPrefix(a, "--project-root="):
-			v, err := value("--project-root")
-			if err != nil {
-				return err
-			}
-			opts.projectRoot = v
-		case a == "--project-id" || strings.HasPrefix(a, "--project-id="):
-			v, err := value("--project-id")
-			if err != nil {
-				return err
-			}
-			opts.projectID = v
-		case a == "--root-mode" || strings.HasPrefix(a, "--root-mode="):
-			v, err := value("--root-mode")
-			if err != nil {
-				return err
-			}
-			if v != "entry" && v != "git" {
-				return fmt.Errorf("--root-mode must be entry or git, got %q", v)
-			}
-			opts.rootMode = v
-		case a == "--upload-mode" || strings.HasPrefix(a, "--upload-mode="):
-			v, err := value("--upload-mode")
-			if err != nil {
-				return err
-			}
-			if v == "ignore" {
-				v = "all"
-			}
-			if v != "auto" && v != "manifest" && v != "all" {
-				return fmt.Errorf("--upload-mode must be auto, manifest, or all, got %q", v)
-			}
-			opts.uploadMode = v
-		case a == "--server-cache" || strings.HasPrefix(a, "--server-cache="):
-			v, err := value("--server-cache")
-			if err != nil {
-				return err
-			}
-			if v != "none" && v != "reuse" && v != "retain" {
-				return errors.New("--server-cache must be none, retain, or reuse")
-			}
-			opts.auxiliary.Server = v
-		case a == "--manifest" || strings.HasPrefix(a, "--manifest="):
-			v, err := value("--manifest")
-			if err != nil {
-				return err
-			}
-			opts.manifestFile = v
-		case a == "--include-file" || strings.HasPrefix(a, "--include-file="):
-			v, err := value("--include-file")
-			if err != nil {
-				return err
-			}
-			opts.includeFiles = append(opts.includeFiles, v)
-		case a == "--gitignore":
-			opts.gitIgnore = true
-		case a == "--no-gitignore":
-			opts.gitIgnore = false
-		case a == "--out-dir" || strings.HasPrefix(a, "--out-dir=") || a == "-output-directory" || strings.HasPrefix(a, "-output-directory="):
-			v, err := value("--out-dir")
-			if err != nil {
-				return err
-			}
-			opts.outDir = v
-		case a == "--engine" || strings.HasPrefix(a, "--engine="):
-			v, err := value("--engine")
-			if err != nil {
-				return err
-			}
-			opts.engine = v
-			opts.engineExplicit = true
-		case a == "--timeout" || strings.HasPrefix(a, "--timeout="):
-			v, err := value("--timeout")
-			if err != nil {
-				return err
-			}
-			d, err := time.ParseDuration(v)
-			if err != nil {
-				return err
-			}
-			opts.timeout = d
-		case a == "--interaction" || strings.HasPrefix(a, "--interaction=") || strings.HasPrefix(a, "-interaction="):
-			v, err := value("interaction")
-			if err != nil {
-				return err
-			}
-			opts.interaction = v
-		case a == "--jobname" || strings.HasPrefix(a, "--jobname=") || strings.HasPrefix(a, "-jobname="):
-			v, err := value("jobname")
-			if err != nil {
-				return err
-			}
-			opts.jobName = v
-		case a == "--synctex" || a == "-synctex=1":
-			opts.synctex = true
-		case a == "--no-synctex" || a == "-synctex=0":
-			opts.synctex = false
-		case a == "--shell-escape" || a == "-shell-escape":
-			opts.shellEscape = true
-		case a == "--no-shell-escape" || a == "-no-shell-escape":
-			opts.shellEscape = false
-		case a == "--halt-on-error" || a == "-halt-on-error":
-			opts.haltOnError = true
-		case a == "--no-halt-on-error":
-			opts.haltOnError = false
-		case a == "--file-line-error" || a == "-file-line-error":
-			opts.fileLineError = true
-		case a == "--no-file-line-error":
-			opts.fileLineError = false
-		case a == "-xelatex" || a == "-pdfxe":
-			opts.engine = "xelatex"
-			opts.engineExplicit = true
-		case a == "-lualatex" || a == "-pdflua":
-			opts.engine = "lualatex"
-			opts.engineExplicit = true
-		case a == "-pdf" || a == "-pdflatex":
-			opts.engine = "pdflatex"
-			opts.engineExplicit = true
-		case a == "-g" || a == "-gg" || a == "--force":
-			opts.force = true
-		case a == "-quiet" || a == "-silent" || a == "--quiet":
-			opts.quiet = true
-		case a == "--json":
-			opts.jsonOutput = true
-		case a == "--dry-run":
-			opts.dryRun = true
-		case a == "--detach":
-			opts.detach = true
-		case a == "--realtime":
-			opts.realtime, opts.watch = true, true
-		case a == "--watch":
-			opts.watch = true
-		case a == "--watch-interval" || strings.HasPrefix(a, "--watch-interval="):
-			v, err := value("--watch-interval")
-			if err != nil {
-				return err
-			}
-			opts.watchInterval, err = time.ParseDuration(v)
-			if err != nil {
-				return err
-			}
-		case a == "--watch-debounce" || strings.HasPrefix(a, "--watch-debounce="):
-			v, err := value("--watch-debounce")
-			if err != nil {
-				return err
-			}
-			opts.watchDebounce, err = time.ParseDuration(v)
-			if err != nil {
-				return err
-			}
-		case a == "--insecure-skip-verify":
-			opts.insecure = true
-		case a == "--watch-max-wait" || strings.HasPrefix(a, "--watch-max-wait="):
-			v, err := value("--watch-max-wait")
-			if err != nil {
-				return err
-			}
-			opts.watchMaxWait, err = time.ParseDuration(v)
-			if err != nil {
-				return err
-			}
-		case a == "--version":
-			return errors.New("--version must be used without a compile target")
-		case strings.HasPrefix(a, "-"):
-			return fmt.Errorf("unsupported option %q; use structured options instead of arbitrary TeX flags", a)
-		default:
-			positionals = append(positionals, a)
+		o.resourceAddIDs = append(o.resourceAddIDs, v)
+		return nil
+	})
+	options.Value("without-resource", func(o *compileOptions, v string) error {
+		if !sharedresources.ValidID(v) {
+			return errors.New("--without-resource requires a resource ID")
 		}
+		o.resourceRemoveIDs = append(o.resourceRemoveIDs, v)
+		return nil
+	})
+	options.Bool("no-resources", func(o *compileOptions, v bool) error {
+		if v {
+			o.resourceIDs = []string{}
+			o.resourceAddIDs = nil
+			o.resourceExplicit = true
+		}
+		return nil
+	})
+	options.Value("environment", func(o *compileOptions, v string) error {
+		if !sharedresources.ValidID(v) {
+			return errors.New("--environment requires a registered baseline ID")
+		}
+		o.environment = v
+		o.environmentExplicit = true
+		return nil
+	})
+	options.Value("lockfile", func(o *compileOptions, v string) error {
+		if v == "" {
+			return errors.New("--lockfile requires a path")
+		}
+		o.resourceOptions.LockFile = v
+		return nil
+	})
+	options.Bool("frozen-lockfile", func(o *compileOptions, v bool) error {
+		o.resourceOptions.LockMode = "auto"
+		if v {
+			o.resourceOptions.LockMode = "frozen"
+		}
+		return nil
+	})
+	options.Value("prepare-timeout", func(o *compileOptions, v string) error {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return errors.New("--prepare-timeout must be positive")
+		}
+		o.resourceOptions.PrepareTimeout = v
+		return nil
+	})
+	options.Value("pdf-template", func(o *compileOptions, v string) error {
+		if v == "" {
+			return errors.New("--pdf-template requires a nonempty value")
+		}
+		o.pdfTemplate, o.pdfExport = v, ""
+		return nil
+	})
+	options.Value("name-scope", func(o *compileOptions, v string) error {
+		if v != "invocation" && v != "build" {
+			return errors.New("--name-scope must be invocation or build")
+		}
+		o.nameScope = v
+		return nil
+	})
+	options.Value("name-timezone", func(o *compileOptions, v string) error {
+		if v == "" {
+			return errors.New("--name-timezone requires a nonempty value")
+		}
+		o.nameTimeZone = v
+		return nil
+	})
+	options.Value("pdf-keep-last", func(o *compileOptions, v string) error {
+		o.pdfKeepLast = nil
+		if v != "all" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 {
+				return errors.New("--pdf-keep-last must be a positive integer or all")
+			}
+			o.pdfKeepLast = &n
+		}
+		return nil
+	})
+	options.Value("server", func(o *compileOptions, v string) error { o.server = v; return nil })
+	options.Value("ignore-file", func(o *compileOptions, v string) error {
+		if o.ignoreFiles == nil {
+			o.ignoreFiles = []string{}
+		}
+		o.ignoreFiles = append(o.ignoreFiles, v)
+		return nil
+	})
+	options.Bool("no-ignore-files", func(o *compileOptions, v bool) error {
+		if v {
+			o.ignoreFiles = []string{}
+		}
+		return nil
+	})
+	options.Value("explain", func(o *compileOptions, v string) error { o.explain = v; o.dryRun = true; return nil })
+	options.Value("unmatched-glob", func(o *compileOptions, v string) error {
+		if v != "error" && v != "warn" && v != "ignore" {
+			return errors.New("--unmatched-glob must be error, warn, or ignore")
+		}
+		o.unmatchedGlob = v
+		return nil
+	})
+	options.Value("local-cache", func(o *compileOptions, v string) error {
+		if v != "none" && v != "cache" && v != "output" {
+			return errors.New("--local-cache must be none, cache, or output")
+		}
+		o.auxiliary.Local = v
+		return nil
+	})
+	options.Value("server-cache-ttl", func(o *compileOptions, v string) error {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return errors.New("--server-cache-ttl must be a positive duration")
+		}
+		o.auxiliary.ServerTTL = v
+		return nil
+	})
+	options.Value("target", func(o *compileOptions, v string) error {
+		if v == "" {
+			return errors.New("--target requires a nonempty name")
+		}
+		o.target = v
+		return nil
+	})
+	options.Value("project-root", func(o *compileOptions, v string) error { o.projectRoot = v; return nil })
+	options.Value("project-id", func(o *compileOptions, v string) error { o.projectID = v; return nil })
+	options.Value("root-mode", func(o *compileOptions, v string) error {
+		if v != "entry" && v != "git" {
+			return fmt.Errorf("--root-mode must be entry or git, got %q", v)
+		}
+		o.rootMode = v
+		return nil
+	})
+	options.Value("upload-mode", func(o *compileOptions, v string) error {
+		if v == "ignore" {
+			v = "all"
+		}
+		if v != "auto" && v != "manifest" && v != "all" {
+			return fmt.Errorf("--upload-mode must be auto, manifest, or all, got %q", v)
+		}
+		o.uploadMode = v
+		return nil
+	})
+	options.Value("server-cache", func(o *compileOptions, v string) error {
+		if v != "none" && v != "reuse" && v != "retain" {
+			return errors.New("--server-cache must be none, retain, or reuse")
+		}
+		o.auxiliary.Server = v
+		return nil
+	})
+	options.Value("manifest", func(o *compileOptions, v string) error { o.manifestFile = v; return nil })
+	options.Value(
+		"include-file",
+		func(o *compileOptions, v string) error { o.includeFiles = append(o.includeFiles, v); return nil },
+	)
+	options.Bool("gitignore", func(o *compileOptions, v bool) error { o.gitIgnore = v; return nil })
+	options.Bool("no-gitignore", func(o *compileOptions, v bool) error { o.gitIgnore = !v; return nil })
+	options.Value("out-dir", func(o *compileOptions, v string) error { o.outDir = v; return nil }, "output-directory")
+	options.Value(
+		"engine",
+		func(o *compileOptions, v string) error { o.engine = v; o.engineExplicit = true; return nil },
+	)
+	options.Value(
+		"timeout",
+		func(o *compileOptions, v string) error { d, err := time.ParseDuration(v); o.timeout = d; return err },
+	)
+	options.Value("interaction", func(o *compileOptions, v string) error { o.interaction = v; return nil })
+	options.Value("jobname", func(o *compileOptions, v string) error { o.jobName = v; return nil })
+	options.Bool("synctex", func(o *compileOptions, v bool) error { o.synctex = v; return nil })
+	options.Bool("no-synctex", func(o *compileOptions, v bool) error { o.synctex = !v; return nil })
+	options.Bool("shell-escape", func(o *compileOptions, v bool) error { o.shellEscape = v; return nil })
+	options.Bool("no-shell-escape", func(o *compileOptions, v bool) error { o.shellEscape = !v; return nil })
+	options.Bool("halt-on-error", func(o *compileOptions, v bool) error { o.haltOnError = v; return nil })
+	options.Bool("no-halt-on-error", func(o *compileOptions, v bool) error { o.haltOnError = !v; return nil })
+	options.Bool("file-line-error", func(o *compileOptions, v bool) error { o.fileLineError = v; return nil })
+	options.Bool("no-file-line-error", func(o *compileOptions, v bool) error { o.fileLineError = !v; return nil })
+	options.Bool("xelatex", func(o *compileOptions, v bool) error {
+		if v {
+			o.engine = "xelatex"
+			o.engineExplicit = true
+		}
+		return nil
+	}, "pdfxe")
+	options.Bool("lualatex", func(o *compileOptions, v bool) error {
+		if v {
+			o.engine = "lualatex"
+			o.engineExplicit = true
+		}
+		return nil
+	}, "pdflua")
+	options.Bool("pdf", func(o *compileOptions, v bool) error {
+		if v {
+			o.engine = "pdflatex"
+			o.engineExplicit = true
+		}
+		return nil
+	}, "pdflatex")
+	options.Bool("force", func(o *compileOptions, v bool) error { o.force = v; return nil }, "g", "gg")
+	options.Bool("quiet", func(o *compileOptions, v bool) error { o.quiet = v; return nil }, "silent")
+	options.Bool("json", func(o *compileOptions, v bool) error { o.jsonOutput = v; return nil })
+	options.Bool("dry-run", func(o *compileOptions, v bool) error { o.dryRun = v; return nil })
+	options.Bool("detach", func(o *compileOptions, v bool) error { o.detach = v; return nil })
+	options.Bool("realtime", func(o *compileOptions, v bool) error { o.realtime = v; return nil })
+	options.Bool("watch", func(o *compileOptions, v bool) error { o.watch = v; return nil })
+	options.Value("watch-interval", func(o *compileOptions, v string) error {
+		d, err := time.ParseDuration(v)
+		o.watchInterval = d
+		return err
+	})
+	options.Value("watch-debounce", func(o *compileOptions, v string) error {
+		d, err := time.ParseDuration(v)
+		o.watchDebounce = d
+		return err
+	})
+	options.Bool("insecure-skip-verify", func(o *compileOptions, v bool) error { o.insecure = v; return nil })
+	options.Value("watch-max-wait", func(o *compileOptions, v string) error {
+		d, err := time.ParseDuration(v)
+		o.watchMaxWait = d
+		return err
+	})
+	options.Bool("version", func(_ *compileOptions, _ bool) error {
+		return errors.New("--version must be used without a compile target")
+	})
+	return options
+}
+
+func applyCompileArguments(changes *argv.Options[compileOptions], opts *compileOptions, parsed *cli.Command) error {
+	if err := changes.Apply(opts); err != nil {
+		return err
 	}
+	positionals := parsed.Args().Slice()
 	if len(positionals) > 1 {
 		return fmt.Errorf("only one entry file is supported, got %d", len(positionals))
 	}
 	if len(positionals) == 1 {
 		opts.entry = positionals[0]
 	}
+	opts.watch = opts.watch || opts.realtime
 	if opts.timeout <= 0 {
 		return errors.New("timeout must be positive")
 	}
@@ -914,15 +823,6 @@ func parseCompileArgs(args []string, opts *compileOptions) error {
 		return errors.New("watch max wait must be positive")
 	}
 	return config.ValidateNaming(config.NamingConfig{Scope: opts.nameScope, TimeZone: opts.nameTimeZone})
-}
-
-func hasDetachFlag(args []string) bool {
-	for _, arg := range args {
-		if arg == "--detach" {
-			return true
-		}
-	}
-	return false
 }
 
 func normalizeCompilePaths(opts *compileOptions, cwd string) error {
@@ -1079,54 +979,44 @@ func printManifest(opts compileOptions) int {
 	return 0
 }
 
+type metadataOptions struct {
+	server               string
+	timeout              time.Duration
+	insecure, jsonOutput bool
+}
+
+func metadataArguments() *argv.Options[metadataOptions] {
+	changes := &argv.Options[metadataOptions]{}
+	changes.Value("server", func(o *metadataOptions, v string) error { o.server = v; return nil })
+	changes.Value(
+		"timeout",
+		func(o *metadataOptions, v string) error { d, err := time.ParseDuration(v); o.timeout = d; return err },
+	)
+	changes.Bool("insecure-skip-verify", func(o *metadataOptions, v bool) error { o.insecure = v; return nil })
+	changes.Bool("json", func(o *metadataOptions, v bool) error { o.jsonOutput = v; return nil })
+	return changes
+}
+
 func runMeta(args []string, doctor bool) int {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fail(err)
 	}
-	cfg, args, err := config.LoadArgs(cwd, args)
+	changes := metadataArguments()
+	cfg, parsed, err := loadCommand("meta", cwd, args, changes.Flags()...)
 	if err != nil {
 		return fail(err)
 	}
-	if doctor {
-		reportDoctorProjectCache(cwd, cfg.ProjectRoot, hasJSONFlag(args))
+	opts := metadataOptions{server: cfg.Server, timeout: cfg.Timeout, insecure: cfg.InsecureSkipVerify}
+	if err := changes.Apply(&opts); err != nil {
+		return fail(err)
 	}
-	server, timeout, insecure, jsonOutput := cfg.Server, cfg.Timeout, cfg.InsecureSkipVerify, false
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		next := func() (string, error) {
-			if strings.Contains(a, "=") {
-				return strings.SplitN(a, "=", 2)[1], nil
-			}
-			if i+1 >= len(args) {
-				return "", errors.New("missing option value")
-			}
-			i++
-			return args[i], nil
-		}
-		switch {
-		case a == "--server" || strings.HasPrefix(a, "--server="):
-			v, e := next()
-			if e != nil {
-				return fail(e)
-			}
-			server = v
-		case a == "--timeout" || strings.HasPrefix(a, "--timeout="):
-			v, e := next()
-			if e != nil {
-				return fail(e)
-			}
-			timeout, e = time.ParseDuration(v)
-			if e != nil {
-				return fail(e)
-			}
-		case a == "--insecure-skip-verify":
-			insecure = true
-		case a == "--json":
-			jsonOutput = true
-		default:
-			return fail(fmt.Errorf("unknown option %q", a))
-		}
+	if parsed.Args().Len() != 0 {
+		return fail(errors.New("metadata commands do not accept positional arguments"))
+	}
+	server, timeout, insecure, jsonOutput := opts.server, opts.timeout, opts.insecure, opts.jsonOutput
+	if doctor {
+		reportDoctorProjectCache(cwd, cfg.ProjectRoot, jsonOutput)
 	}
 	if err := cfg.Authenticate(cfg.ProjectRoot); err != nil {
 		return fail(err)
@@ -1184,18 +1074,20 @@ func runInit(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	path := filepath.Join(cwd, config.FileName)
-	server := "http://127.0.0.1:8080"
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--server" && i+1 < len(args) {
-			i++
-			server = args[i]
-		} else if strings.HasPrefix(args[i], "--server=") {
-			server = strings.SplitN(args[i], "=", 2)[1]
-		} else {
-			return fail(fmt.Errorf("unknown option %q", args[i]))
-		}
+	changes := &argv.Options[string]{}
+	changes.Value("server", func(server *string, value string) error { *server = value; return nil })
+	parsed, err := argv.Parse("init", args, changes.Flags()...)
+	if err != nil {
+		return fail(err)
 	}
+	if parsed.Args().Len() != 0 {
+		return fail(errors.New("init does not accept positional arguments"))
+	}
+	server := "http://127.0.0.1:8080"
+	if err := changes.Apply(&server); err != nil {
+		return fail(err)
+	}
+	path := filepath.Join(cwd, config.FileName)
 	if _, err := os.Stat(path); err == nil {
 		return fail(fmt.Errorf("%s already exists", path))
 	}
@@ -1253,12 +1145,17 @@ func reportDoctorProjectCache(cwd, configuredRoot string, jsonOutput bool) {
 }
 
 func runClean(args []string) int {
-	entry := "main.tex"
-	if len(args) > 1 {
+	parsed, err := argv.Parse("clean", args)
+	if err != nil {
+		return fail(err)
+	}
+	entries := parsed.Args().Slice()
+	if len(entries) > 1 {
 		return fail(errors.New("clean accepts at most one entry file"))
 	}
-	if len(args) == 1 {
-		entry = args[0]
+	entry := "main.tex"
+	if len(entries) == 1 {
+		entry = entries[0]
 	}
 	stem := strings.TrimSuffix(filepath.Base(entry), filepath.Ext(entry))
 	dir := filepath.Dir(entry)
@@ -1307,54 +1204,27 @@ type remoteCleanOptions struct {
 	legacyProjectID bool
 }
 
-func parseRemoteCleanArgs(args []string, opts *remoteCleanOptions) error {
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		value := func(name string) (string, error) {
-			if strings.Contains(a, "=") {
-				return strings.SplitN(a, "=", 2)[1], nil
-			}
-			if i+1 >= len(args) {
-				return "", fmt.Errorf("%s requires a value", name)
-			}
-			i++
-			return args[i], nil
-		}
-		var err error
-		switch {
-		case a == "--server" || strings.HasPrefix(a, "--server="):
-			opts.server, err = value("--server")
-		case a == "--insecure-skip-verify":
-			opts.insecure = true
-		case a == "--timeout" || strings.HasPrefix(a, "--timeout="):
-			var raw string
-			raw, err = value("--timeout")
-			if err == nil {
-				opts.timeout, err = time.ParseDuration(raw)
-			}
-		case a == "--project-root" || strings.HasPrefix(a, "--project-root="):
-			opts.projectRoot, err = value("--project-root")
-		case a == "--project-id" || strings.HasPrefix(a, "--project-id="):
-			opts.projectID, err = value("--project-id")
-		case a == "--legacy-project-id":
-			opts.legacyProjectID = true
-		case a == "--scope" || strings.HasPrefix(a, "--scope="):
-			opts.scope, err = value("--scope")
-		case a == "--plan-id" || strings.HasPrefix(a, "--plan-id="):
-			opts.planID, err = value("--plan-id")
-		case a == "--yes":
-			opts.yes = true
-		case a == "--dry-run":
-			opts.dryRun = true
-		case a == "--json":
-			opts.jsonOutput = true
-		default:
-			return fmt.Errorf("unknown option %q", a)
-		}
-		if err != nil {
-			return err
-		}
-	}
+func remoteCleanArguments() *argv.Options[remoteCleanOptions] {
+	changes := &argv.Options[remoteCleanOptions]{}
+	changes.Value("server", func(o *remoteCleanOptions, v string) error { o.server = v; return nil })
+	changes.Bool("insecure-skip-verify", func(o *remoteCleanOptions, v bool) error { o.insecure = v; return nil })
+	changes.Value("timeout", func(o *remoteCleanOptions, v string) error {
+		d, err := time.ParseDuration(v)
+		o.timeout = d
+		return err
+	})
+	changes.Value("project-root", func(o *remoteCleanOptions, v string) error { o.projectRoot = v; return nil })
+	changes.Value("project-id", func(o *remoteCleanOptions, v string) error { o.projectID = v; return nil })
+	changes.Bool("legacy-project-id", func(o *remoteCleanOptions, v bool) error { o.legacyProjectID = v; return nil })
+	changes.Value("scope", func(o *remoteCleanOptions, v string) error { o.scope = v; return nil })
+	changes.Value("plan-id", func(o *remoteCleanOptions, v string) error { o.planID = v; return nil })
+	changes.Bool("yes", func(o *remoteCleanOptions, v bool) error { o.yes = v; return nil })
+	changes.Bool("dry-run", func(o *remoteCleanOptions, v bool) error { o.dryRun = v; return nil })
+	changes.Bool("json", func(o *remoteCleanOptions, v bool) error { o.jsonOutput = v; return nil })
+	return changes
+}
+
+func validateRemoteCleanOptions(opts remoteCleanOptions) error {
 	if opts.yes {
 		if opts.dryRun {
 			return errors.New("--yes and --dry-run cannot be used together")
@@ -1381,7 +1251,8 @@ func runRemoteClean(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	cfg, args, err := config.LoadArgs(cwd, args)
+	changes := remoteCleanArguments()
+	cfg, parsed, err := loadCommand("remote-clean", cwd, args, changes.Flags()...)
 	if err != nil {
 		return fail(err)
 	}
@@ -1393,9 +1264,16 @@ func runRemoteClean(args []string) int {
 		projectRoot: cfg.ProjectRoot,
 		projectID:   cfg.ProjectID,
 	}
-	if err := parseRemoteCleanArgs(args, &opts); err != nil {
+	if err := changes.Apply(&opts); err != nil {
 		return fail(err)
 	}
+	if parsed.Args().Len() != 0 {
+		return fail(errors.New("remote clean does not accept positional arguments"))
+	}
+	if err := validateRemoteCleanOptions(opts); err != nil {
+		return fail(err)
+	}
+
 	if opts.projectRoot == "" {
 		opts.projectRoot = cwd
 	}

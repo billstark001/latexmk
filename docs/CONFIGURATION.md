@@ -2,6 +2,16 @@
 
 No project-specific file is required. The defaults use the entry's directory as the project root, respect Git ignore rules, discover dependencies automatically, and run XeLaTeX. `engine` is a string key for a registered driver; see [engine behavior](ENGINES.md). A shared user configuration can provide the server and credentials.
 
+## Command-line syntax
+
+Go commands use [urfave/cli](https://github.com/urfave/cli) to parse the command's complete option set, including credential options, once. Value options accept `--option value` and `--option=value`. Options may appear before or after positional arguments; `--` ends option parsing. Values remain literal, including whitespace, commas, glob braces, and text that resembles another option. The existing TeX spellings such as `-pdf`, `-output-directory`, `-interaction=nonstopmode`, and `-synctex=0` are declared through the library.
+
+Repeated scalar options keep the last value. Repeated include/ignore options append to inherited lists; clear options such as `--no-ignore-files` take effect at their position in the argument sequence. Explicit command-line settings override target defaults even when their value equals a default. Configuration loading and credential reads remain separate: local previews and cleanup do not open credential files.
+
+Boolean options now also accept explicit values, such as `--json=false` and `--synctex=0`. This is a deliberate extension of the former bare-flag-only grammar. Syntax errors use the library's messages and stop parsing at the first error. For JSON diagnostics of malformed syntax, place `--json` before the invalid token; a later token cannot change the format of an earlier parse error. Semantic argument errors are checked after parsing and retain the documented exit status and JSON envelope. Tokens after `--`, and tokens consumed as another option's value, are never scanned again for credentials, target overrides, or output-format switches.
+
+Compilation and cache commands classify configuration-loading failures as invalid arguments (exit `2`), consistent with the agent CLI contract; the former unversioned paths could return `1` for these failures.
+
 ## Sources and paths
 
 The CLI merges `$XDG_CONFIG_HOME/latexmk/config.json` (otherwise the platform user configuration directory), then the nearest `.latexmk.json` above the working directory. Process environment variables override dotenv values, which override JSON; command-line flags override those settings. Configuration files must be non-null JSON objects of at most 1 MiB. Top-level field names are matched without regard to case, including credential validation; conflicting case variants of the same key are rejected.

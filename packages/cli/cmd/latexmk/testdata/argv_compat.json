@@ -1,0 +1,1880 @@
+[
+  {
+    "name": "compile-default-1",
+    "kind": "compile",
+    "args": []
+  },
+  {
+    "name": "compile-default-2",
+    "kind": "compile",
+    "args": ["main.tex"],
+    "want": {
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-3",
+    "kind": "compile",
+    "args": ["--", "-entry.tex"],
+    "want": {
+      "entry": "-entry.tex"
+    }
+  },
+  {
+    "name": "compile-default-4",
+    "kind": "compile",
+    "args": ["--server", "https://example.test/path=a", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "server": "https://example.test/path=a"
+    }
+  },
+  {
+    "name": "compile-default-5",
+    "kind": "compile",
+    "args": ["main.tex", "--server=https://example.test/path=a"],
+    "want": {
+      "entry": "main.tex",
+      "server": "https://example.test/path=a"
+    }
+  },
+  {
+    "name": "compile-default-6",
+    "kind": "compile",
+    "args": ["--project-root", "path with spaces", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "projectRoot": "path with spaces"
+    }
+  },
+  {
+    "name": "compile-default-7",
+    "kind": "compile",
+    "args": ["main.tex", "--project-root=path with spaces"],
+    "want": {
+      "entry": "main.tex",
+      "projectRoot": "path with spaces"
+    }
+  },
+  {
+    "name": "compile-default-8",
+    "kind": "compile",
+    "args": ["--project-id", "paper-id", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "projectID": "paper-id"
+    }
+  },
+  {
+    "name": "compile-default-9",
+    "kind": "compile",
+    "args": ["main.tex", "--project-id=paper-id"],
+    "want": {
+      "entry": "main.tex",
+      "projectID": "paper-id"
+    }
+  },
+  {
+    "name": "compile-default-10",
+    "kind": "compile",
+    "args": ["--root-mode", "git", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "rootMode": "git"
+    }
+  },
+  {
+    "name": "compile-default-11",
+    "kind": "compile",
+    "args": ["main.tex", "--root-mode=git"],
+    "want": {
+      "entry": "main.tex",
+      "rootMode": "git"
+    }
+  },
+  {
+    "name": "compile-default-12",
+    "kind": "compile",
+    "args": ["--upload-mode", "all", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "uploadMode": "all"
+    }
+  },
+  {
+    "name": "compile-default-13",
+    "kind": "compile",
+    "args": ["main.tex", "--upload-mode=all"],
+    "want": {
+      "entry": "main.tex",
+      "uploadMode": "all"
+    }
+  },
+  {
+    "name": "compile-default-14",
+    "kind": "compile",
+    "args": ["--manifest", "{a,b}.json", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "manifestFile": "{a,b}.json"
+    }
+  },
+  {
+    "name": "compile-default-15",
+    "kind": "compile",
+    "args": ["main.tex", "--manifest={a,b}.json"],
+    "want": {
+      "entry": "main.tex",
+      "manifestFile": "{a,b}.json"
+    }
+  },
+  {
+    "name": "compile-default-16",
+    "kind": "compile",
+    "args": ["--include-file", "fig/{a,b}.pdf", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "includeFiles": ["inherited.dat", "fig/{a,b}.pdf"]
+    }
+  },
+  {
+    "name": "compile-default-17",
+    "kind": "compile",
+    "args": ["main.tex", "--include-file=fig/{a,b}.pdf"],
+    "want": {
+      "entry": "main.tex",
+      "includeFiles": ["inherited.dat", "fig/{a,b}.pdf"]
+    }
+  },
+  {
+    "name": "compile-default-18",
+    "kind": "compile",
+    "args": ["--ignore-file", "ignore with spaces", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "ignoreFiles": ["inherited.ignore", "ignore with spaces"]
+    }
+  },
+  {
+    "name": "compile-default-19",
+    "kind": "compile",
+    "args": ["main.tex", "--ignore-file=ignore with spaces"],
+    "want": {
+      "entry": "main.tex",
+      "ignoreFiles": ["inherited.ignore", "ignore with spaces"]
+    }
+  },
+  {
+    "name": "compile-default-20",
+    "kind": "compile",
+    "args": ["--unmatched-glob", "warn", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "unmatchedGlob": "warn"
+    }
+  },
+  {
+    "name": "compile-default-21",
+    "kind": "compile",
+    "args": ["main.tex", "--unmatched-glob=warn"],
+    "want": {
+      "entry": "main.tex",
+      "unmatchedGlob": "warn"
+    }
+  },
+  {
+    "name": "compile-default-22",
+    "kind": "compile",
+    "args": ["--engine", "lualatex", "main.tex"],
+    "want": {
+      "engine": "lualatex",
+      "engineExplicit": true,
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-23",
+    "kind": "compile",
+    "args": ["main.tex", "--engine=lualatex"],
+    "want": {
+      "engine": "lualatex",
+      "engineExplicit": true,
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-24",
+    "kind": "compile",
+    "args": ["--out-dir", "build with spaces", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "outDir": "build with spaces"
+    }
+  },
+  {
+    "name": "compile-default-25",
+    "kind": "compile",
+    "args": ["main.tex", "--out-dir=build with spaces"],
+    "want": {
+      "entry": "main.tex",
+      "outDir": "build with spaces"
+    }
+  },
+  {
+    "name": "compile-default-26",
+    "kind": "compile",
+    "args": ["--timeout", "45s", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "timeout": 45000000000
+    }
+  },
+  {
+    "name": "compile-default-27",
+    "kind": "compile",
+    "args": ["main.tex", "--timeout=45s"],
+    "want": {
+      "entry": "main.tex",
+      "timeout": 45000000000
+    }
+  },
+  {
+    "name": "compile-default-28",
+    "kind": "compile",
+    "args": ["--interaction", "batchmode", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "interaction": "batchmode"
+    }
+  },
+  {
+    "name": "compile-default-29",
+    "kind": "compile",
+    "args": ["main.tex", "--interaction=batchmode"],
+    "want": {
+      "entry": "main.tex",
+      "interaction": "batchmode"
+    }
+  },
+  {
+    "name": "compile-default-30",
+    "kind": "compile",
+    "args": ["--jobname", "draft", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "jobName": "draft"
+    }
+  },
+  {
+    "name": "compile-default-31",
+    "kind": "compile",
+    "args": ["main.tex", "--jobname=draft"],
+    "want": {
+      "entry": "main.tex",
+      "jobName": "draft"
+    }
+  },
+  {
+    "name": "compile-default-32",
+    "kind": "compile",
+    "args": ["--watch-interval", "250ms", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "watchInterval": 250000000
+    }
+  },
+  {
+    "name": "compile-default-33",
+    "kind": "compile",
+    "args": ["main.tex", "--watch-interval=250ms"],
+    "want": {
+      "entry": "main.tex",
+      "watchInterval": 250000000
+    }
+  },
+  {
+    "name": "compile-default-34",
+    "kind": "compile",
+    "args": ["--watch-debounce", "0s", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "watchDebounce": 0
+    }
+  },
+  {
+    "name": "compile-default-35",
+    "kind": "compile",
+    "args": ["main.tex", "--watch-debounce=0s"],
+    "want": {
+      "entry": "main.tex",
+      "watchDebounce": 0
+    }
+  },
+  {
+    "name": "compile-default-36",
+    "kind": "compile",
+    "args": ["--watch-max-wait", "1s", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "watchMaxWait": 1000000000
+    }
+  },
+  {
+    "name": "compile-default-37",
+    "kind": "compile",
+    "args": ["main.tex", "--watch-max-wait=1s"],
+    "want": {
+      "entry": "main.tex",
+      "watchMaxWait": 1000000000
+    }
+  },
+  {
+    "name": "compile-default-38",
+    "kind": "compile",
+    "args": ["--pdf-template", "out/{date}.pdf", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "pdfTemplate": "out/{date}.pdf"
+    }
+  },
+  {
+    "name": "compile-default-39",
+    "kind": "compile",
+    "args": ["main.tex", "--pdf-template=out/{date}.pdf"],
+    "want": {
+      "entry": "main.tex",
+      "pdfTemplate": "out/{date}.pdf"
+    }
+  },
+  {
+    "name": "compile-default-40",
+    "kind": "compile",
+    "args": ["--name-scope", "build", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "nameScope": "build"
+    }
+  },
+  {
+    "name": "compile-default-41",
+    "kind": "compile",
+    "args": ["main.tex", "--name-scope=build"],
+    "want": {
+      "entry": "main.tex",
+      "nameScope": "build"
+    }
+  },
+  {
+    "name": "compile-default-42",
+    "kind": "compile",
+    "args": ["--name-timezone", "Asia/Tokyo", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "nameTimeZone": "Asia/Tokyo"
+    }
+  },
+  {
+    "name": "compile-default-43",
+    "kind": "compile",
+    "args": ["main.tex", "--name-timezone=Asia/Tokyo"],
+    "want": {
+      "entry": "main.tex",
+      "nameTimeZone": "Asia/Tokyo"
+    }
+  },
+  {
+    "name": "compile-default-44",
+    "kind": "compile",
+    "args": ["--pdf-keep-last", "all", "main.tex"],
+    "want": {
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-45",
+    "kind": "compile",
+    "args": ["main.tex", "--pdf-keep-last=all"],
+    "want": {
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-46",
+    "kind": "compile",
+    "args": ["--local-cache", "output", "main.tex"],
+    "want": {
+      "auxiliary": {
+        "Local": "output",
+        "Server": "none",
+        "ServerTTL": ""
+      },
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-47",
+    "kind": "compile",
+    "args": ["main.tex", "--local-cache=output"],
+    "want": {
+      "auxiliary": {
+        "Local": "output",
+        "Server": "none",
+        "ServerTTL": ""
+      },
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-48",
+    "kind": "compile",
+    "args": ["--server-cache", "retain", "main.tex"],
+    "want": {
+      "auxiliary": {
+        "Local": "none",
+        "Server": "retain",
+        "ServerTTL": ""
+      },
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-49",
+    "kind": "compile",
+    "args": ["main.tex", "--server-cache=retain"],
+    "want": {
+      "auxiliary": {
+        "Local": "none",
+        "Server": "retain",
+        "ServerTTL": ""
+      },
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-50",
+    "kind": "compile",
+    "args": ["--server-cache-ttl", "30m", "main.tex"],
+    "want": {
+      "auxiliary": {
+        "Local": "none",
+        "Server": "none",
+        "ServerTTL": "30m"
+      },
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-51",
+    "kind": "compile",
+    "args": ["main.tex", "--server-cache-ttl=30m"],
+    "want": {
+      "auxiliary": {
+        "Local": "none",
+        "Server": "none",
+        "ServerTTL": "30m"
+      },
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-52",
+    "kind": "compile",
+    "args": ["--target", "paper", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "target": "paper"
+    }
+  },
+  {
+    "name": "compile-default-53",
+    "kind": "compile",
+    "args": ["main.tex", "--target=paper"],
+    "want": {
+      "entry": "main.tex",
+      "target": "paper"
+    }
+  },
+  {
+    "name": "compile-default-54",
+    "kind": "compile",
+    "args": ["--explain", "main.tex", "main.tex"],
+    "want": {
+      "dryRun": true,
+      "entry": "main.tex",
+      "explain": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-55",
+    "kind": "compile",
+    "args": ["main.tex", "--explain=main.tex"],
+    "want": {
+      "dryRun": true,
+      "entry": "main.tex",
+      "explain": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-56",
+    "kind": "compile",
+    "args": ["--resource", "fonts", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "resourceAddIDs": ["fonts"]
+    }
+  },
+  {
+    "name": "compile-default-57",
+    "kind": "compile",
+    "args": ["main.tex", "--resource=fonts"],
+    "want": {
+      "entry": "main.tex",
+      "resourceAddIDs": ["fonts"]
+    }
+  },
+  {
+    "name": "compile-default-58",
+    "kind": "compile",
+    "args": ["--without-resource", "fonts", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "resourceRemoveIDs": ["fonts"]
+    }
+  },
+  {
+    "name": "compile-default-59",
+    "kind": "compile",
+    "args": ["main.tex", "--without-resource=fonts"],
+    "want": {
+      "entry": "main.tex",
+      "resourceRemoveIDs": ["fonts"]
+    }
+  },
+  {
+    "name": "compile-default-60",
+    "kind": "compile",
+    "args": ["--environment", "arxiv-2026", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "environment": "arxiv-2026",
+      "environmentExplicit": true
+    }
+  },
+  {
+    "name": "compile-default-61",
+    "kind": "compile",
+    "args": ["main.tex", "--environment=arxiv-2026"],
+    "want": {
+      "entry": "main.tex",
+      "environment": "arxiv-2026",
+      "environmentExplicit": true
+    }
+  },
+  {
+    "name": "compile-default-62",
+    "kind": "compile",
+    "args": ["--lockfile", "locks/resources.json", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "resourceOptions": {
+        "LockFile": "locks/resources.json",
+        "LockMode": "update",
+        "PrepareTimeout": "5m"
+      }
+    }
+  },
+  {
+    "name": "compile-default-63",
+    "kind": "compile",
+    "args": ["main.tex", "--lockfile=locks/resources.json"],
+    "want": {
+      "entry": "main.tex",
+      "resourceOptions": {
+        "LockFile": "locks/resources.json",
+        "LockMode": "update",
+        "PrepareTimeout": "5m"
+      }
+    }
+  },
+  {
+    "name": "compile-default-64",
+    "kind": "compile",
+    "args": ["--prepare-timeout", "20s", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "resourceOptions": {
+        "LockFile": "",
+        "LockMode": "update",
+        "PrepareTimeout": "20s"
+      }
+    }
+  },
+  {
+    "name": "compile-default-65",
+    "kind": "compile",
+    "args": ["main.tex", "--prepare-timeout=20s"],
+    "want": {
+      "entry": "main.tex",
+      "resourceOptions": {
+        "LockFile": "",
+        "LockMode": "update",
+        "PrepareTimeout": "20s"
+      }
+    }
+  },
+  {
+    "name": "compile-default-66",
+    "kind": "compile",
+    "args": ["--gitignore", "main.tex"],
+    "want": {
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-67",
+    "kind": "compile",
+    "args": ["--no-gitignore", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "gitIgnore": false
+    }
+  },
+  {
+    "name": "compile-default-68",
+    "kind": "compile",
+    "args": ["--no-ignore-files", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "ignoreFiles": []
+    }
+  },
+  {
+    "name": "compile-default-69",
+    "kind": "compile",
+    "args": ["--synctex", "main.tex"],
+    "want": {
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-70",
+    "kind": "compile",
+    "args": ["--no-synctex", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "synctex": false
+    }
+  },
+  {
+    "name": "compile-default-71",
+    "kind": "compile",
+    "args": ["--shell-escape", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "shellEscape": true
+    }
+  },
+  {
+    "name": "compile-default-72",
+    "kind": "compile",
+    "args": ["--no-shell-escape", "main.tex"],
+    "want": {
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-73",
+    "kind": "compile",
+    "args": ["--halt-on-error", "main.tex"],
+    "want": {
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-74",
+    "kind": "compile",
+    "args": ["--no-halt-on-error", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "haltOnError": false
+    }
+  },
+  {
+    "name": "compile-default-75",
+    "kind": "compile",
+    "args": ["--file-line-error", "main.tex"],
+    "want": {
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-76",
+    "kind": "compile",
+    "args": ["--no-file-line-error", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "fileLineError": false
+    }
+  },
+  {
+    "name": "compile-default-77",
+    "kind": "compile",
+    "args": ["--force", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "force": true
+    }
+  },
+  {
+    "name": "compile-default-78",
+    "kind": "compile",
+    "args": ["--quiet", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "quiet": true
+    }
+  },
+  {
+    "name": "compile-default-79",
+    "kind": "compile",
+    "args": ["--json", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "jsonOutput": true
+    }
+  },
+  {
+    "name": "compile-default-80",
+    "kind": "compile",
+    "args": ["--dry-run", "main.tex"],
+    "want": {
+      "dryRun": true,
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-81",
+    "kind": "compile",
+    "args": ["--detach", "main.tex"],
+    "want": {
+      "detach": true,
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-82",
+    "kind": "compile",
+    "args": ["--realtime", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "realtime": true,
+      "watch": true
+    }
+  },
+  {
+    "name": "compile-default-83",
+    "kind": "compile",
+    "args": ["--watch", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "watch": true
+    }
+  },
+  {
+    "name": "compile-default-84",
+    "kind": "compile",
+    "args": ["--insecure-skip-verify", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "insecure": true
+    }
+  },
+  {
+    "name": "compile-default-85",
+    "kind": "compile",
+    "args": ["--no-resources", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "resourceExplicit": true,
+      "resourceIDs": []
+    }
+  },
+  {
+    "name": "compile-default-86",
+    "kind": "compile",
+    "args": ["--frozen-lockfile", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "resourceOptions": {
+        "LockFile": "",
+        "LockMode": "frozen",
+        "PrepareTimeout": "5m"
+      }
+    }
+  },
+  {
+    "name": "compile-default-87",
+    "kind": "compile",
+    "args": ["-xelatex", "main.tex"],
+    "want": {
+      "engineExplicit": true,
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-88",
+    "kind": "compile",
+    "args": ["-pdfxe", "main.tex"],
+    "want": {
+      "engineExplicit": true,
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-89",
+    "kind": "compile",
+    "args": ["-lualatex", "main.tex"],
+    "want": {
+      "engine": "lualatex",
+      "engineExplicit": true,
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-90",
+    "kind": "compile",
+    "args": ["-pdflua", "main.tex"],
+    "want": {
+      "engine": "lualatex",
+      "engineExplicit": true,
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-91",
+    "kind": "compile",
+    "args": ["-pdf", "main.tex"],
+    "want": {
+      "engine": "pdflatex",
+      "engineExplicit": true,
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-92",
+    "kind": "compile",
+    "args": ["-pdflatex", "main.tex"],
+    "want": {
+      "engine": "pdflatex",
+      "engineExplicit": true,
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-93",
+    "kind": "compile",
+    "args": ["-g", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "force": true
+    }
+  },
+  {
+    "name": "compile-default-94",
+    "kind": "compile",
+    "args": ["-gg", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "force": true
+    }
+  },
+  {
+    "name": "compile-default-95",
+    "kind": "compile",
+    "args": ["-quiet", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "quiet": true
+    }
+  },
+  {
+    "name": "compile-default-96",
+    "kind": "compile",
+    "args": ["-silent", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "quiet": true
+    }
+  },
+  {
+    "name": "compile-default-97",
+    "kind": "compile",
+    "args": ["-shell-escape", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "shellEscape": true
+    }
+  },
+  {
+    "name": "compile-default-98",
+    "kind": "compile",
+    "args": ["-no-shell-escape", "main.tex"],
+    "want": {
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-99",
+    "kind": "compile",
+    "args": ["-halt-on-error", "main.tex"],
+    "want": {
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-100",
+    "kind": "compile",
+    "args": ["-file-line-error", "main.tex"],
+    "want": {
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-101",
+    "kind": "compile",
+    "args": ["-synctex=1", "main.tex"],
+    "want": {
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-102",
+    "kind": "compile",
+    "args": ["-synctex=0", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "synctex": false
+    }
+  },
+  {
+    "name": "compile-default-103",
+    "kind": "compile",
+    "args": ["-interaction=batchmode", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "interaction": "batchmode"
+    }
+  },
+  {
+    "name": "compile-default-104",
+    "kind": "compile",
+    "args": ["-jobname=draft", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "jobName": "draft"
+    }
+  },
+  {
+    "name": "compile-default-105",
+    "kind": "compile",
+    "args": ["-output-directory", "alias out", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "outDir": "alias out"
+    }
+  },
+  {
+    "name": "compile-default-106",
+    "kind": "compile",
+    "args": ["-output-directory=alias out", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "outDir": "alias out"
+    }
+  },
+  {
+    "name": "compile-default-107",
+    "kind": "compile",
+    "args": ["--engine=lualatex", "-pdf", "--engine=xelatex", "main.tex"],
+    "want": {
+      "engineExplicit": true,
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-108",
+    "kind": "compile",
+    "args": ["--ignore-file=a", "--no-ignore-files", "--ignore-file=b", "--ignore-file=c", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "ignoreFiles": ["b", "c"]
+    }
+  },
+  {
+    "name": "compile-default-109",
+    "kind": "compile",
+    "args": ["--resource=before", "--no-resources", "--resource=after", "--without-resource=after", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "resourceAddIDs": ["after"],
+      "resourceExplicit": true,
+      "resourceIDs": [],
+      "resourceRemoveIDs": ["after"]
+    }
+  },
+  {
+    "name": "compile-default-110",
+    "kind": "compile",
+    "args": ["--no-gitignore", "--gitignore", "--no-synctex", "--synctex", "main.tex"],
+    "want": {
+      "entry": "main.tex"
+    }
+  },
+  {
+    "name": "compile-default-111",
+    "kind": "compile",
+    "args": ["main.tex", "--timeout=1s", "--timeout", "2s"],
+    "want": {
+      "entry": "main.tex",
+      "timeout": 2000000000
+    }
+  },
+  {
+    "name": "compile-default-112",
+    "kind": "compile",
+    "args": ["--server", "--json", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "server": "--json"
+    }
+  },
+  {
+    "name": "compile-default-113",
+    "kind": "compile",
+    "args": ["--", "main.tex", "extra.tex"],
+    "wantError": true
+  },
+  {
+    "name": "compile-default-114",
+    "kind": "compile",
+    "args": ["main.tex", "extra.tex"],
+    "wantError": true
+  },
+  {
+    "name": "compile-default-115",
+    "kind": "compile",
+    "args": ["--timeout=0s", "main.tex"],
+    "wantError": true
+  },
+  {
+    "name": "compile-default-116",
+    "kind": "compile",
+    "args": ["--engine"],
+    "wantError": true
+  },
+  {
+    "name": "compile-default-117",
+    "kind": "compile",
+    "args": ["--unknown", "main.tex"],
+    "wantError": true
+  },
+  {
+    "name": "compile-default-118",
+    "kind": "compile",
+    "args": ["--resource=bad/id", "main.tex"],
+    "wantError": true
+  },
+  {
+    "name": "compile-default-119",
+    "kind": "compile",
+    "args": ["--root-mode=parent", "main.tex"],
+    "wantError": true
+  },
+  {
+    "name": "compile-default-120",
+    "kind": "compile",
+    "args": ["--pdf-keep-last=0", "main.tex"],
+    "wantError": true
+  },
+  {
+    "name": "compile-default-121",
+    "kind": "compile",
+    "args": ["--prepare-timeout=0s", "main.tex"],
+    "wantError": true
+  },
+  {
+    "name": "compile-default-122",
+    "kind": "compile",
+    "args": ["--watch", "--watch-interval=0s", "main.tex"],
+    "wantError": true
+  },
+  {
+    "name": "compile-default-123",
+    "kind": "compile",
+    "args": ["--watch", "--watch-debounce=-1s", "main.tex"],
+    "wantError": true
+  },
+  {
+    "name": "compile-default-124",
+    "kind": "compile",
+    "args": ["--watch", "--watch-max-wait=0s", "main.tex"],
+    "wantError": true
+  },
+  {
+    "name": "pack-default-125",
+    "kind": "pack",
+    "args": ["main.tex"],
+    "want": {
+      "compile.entry": "main.tex"
+    }
+  },
+  {
+    "name": "pack-default-126",
+    "kind": "pack",
+    "args": ["main.tex", "--mode=arxiv"],
+    "want": {
+      "compile.entry": "main.tex",
+      "pack.mode": "arxiv",
+      "pack.modeExplicit": true
+    }
+  },
+  {
+    "name": "pack-default-127",
+    "kind": "pack",
+    "args": ["--output", "paper.zip", "main.tex"],
+    "want": {
+      "compile.entry": "main.tex",
+      "pack.output": "paper.zip"
+    }
+  },
+  {
+    "name": "pack-default-128",
+    "kind": "pack",
+    "args": ["--output-template=paper-{date}.zip", "main.tex"],
+    "want": {
+      "compile.entry": "main.tex",
+      "pack.outputTemplate": "paper-{date}.zip"
+    }
+  },
+  {
+    "name": "pack-default-129",
+    "kind": "pack",
+    "args": ["--verify", "main.tex"],
+    "want": {
+      "compile.entry": "main.tex",
+      "pack.verifyMode": "build"
+    }
+  },
+  {
+    "name": "pack-default-130",
+    "kind": "pack",
+    "args": ["--verify-in=arxiv-2026", "--verify", "main.tex"],
+    "want": {
+      "compile.entry": "main.tex",
+      "pack.verifyIn": "arxiv-2026",
+      "pack.verifyMode": "target"
+    }
+  },
+  {
+    "name": "pack-default-131",
+    "kind": "pack",
+    "args": ["--verify", "--verify-in=arxiv-2026", "main.tex"],
+    "want": {
+      "compile.entry": "main.tex",
+      "pack.verifyIn": "arxiv-2026",
+      "pack.verifyMode": "target"
+    }
+  },
+  {
+    "name": "pack-default-132",
+    "kind": "pack",
+    "args": ["--publication=journal"],
+    "want": {
+      "pack.publication": "journal"
+    }
+  },
+  {
+    "name": "pack-default-133",
+    "kind": "pack",
+    "args": ["--publish-resource=fonts=bundle", "--publish-resource=fonts=omit", "main.tex"],
+    "want": {
+      "compile.entry": "main.tex",
+      "pack.resourceActions": {
+        "fonts": "omit"
+      }
+    }
+  },
+  {
+    "name": "pack-default-134",
+    "kind": "pack",
+    "args": ["--pack-include", "fig/{a,b}.pdf", "--pack-exclude", "unused/**", "main.tex"],
+    "want": {
+      "compile.entry": "main.tex",
+      "pack.exclude": ["unused/**"],
+      "pack.includeFiles": ["fig/{a,b}.pdf"]
+    }
+  },
+  {
+    "name": "pack-default-135",
+    "kind": "pack",
+    "args": ["--explain", "main.tex"],
+    "want": {
+      "compile.entry": "main.tex",
+      "pack.explain": true
+    }
+  },
+  {
+    "name": "pack-default-136",
+    "kind": "pack",
+    "args": ["--", "--entry.tex"],
+    "want": {
+      "compile.entry": "--entry.tex"
+    }
+  },
+  {
+    "name": "pack-default-137",
+    "kind": "pack",
+    "args": ["--output=a.zip", "--output-template=b.zip"],
+    "wantError": true
+  },
+  {
+    "name": "pack-default-138",
+    "kind": "pack",
+    "args": ["--mode=invalid", "main.tex"],
+    "wantError": true
+  },
+  {
+    "name": "pack-default-139",
+    "kind": "pack",
+    "args": ["--publish-resource=fonts=invalid"],
+    "wantError": true
+  },
+  {
+    "name": "pack-default-140",
+    "kind": "pack",
+    "args": ["--verify=unexpected"],
+    "wantError": true
+  },
+  {
+    "name": "pack-default-141",
+    "kind": "pack",
+    "args": ["--output="],
+    "wantError": true
+  },
+  {
+    "name": "pack-default-142",
+    "kind": "pack",
+    "args": ["--force", "main.tex"],
+    "wantError": true
+  },
+  {
+    "name": "pack-default-143",
+    "kind": "pack",
+    "args": ["--server-cache=none", "main.tex"],
+    "wantError": true
+  },
+  {
+    "name": "name-default-144",
+    "kind": "name",
+    "args": ["--template", "paper-{date}.pdf", "main.tex"],
+    "want": {
+      "entry": "main.tex",
+      "template": "paper-{date}.pdf"
+    }
+  },
+  {
+    "name": "name-default-145",
+    "kind": "name",
+    "args": ["main.tex", "--template=paper-{git}.pdf"],
+    "want": {
+      "entry": "main.tex",
+      "template": "paper-{git}.pdf"
+    }
+  },
+  {
+    "name": "name-default-146",
+    "kind": "name",
+    "args": ["--template=path with spaces/{entry}.pdf", "--engine=lualatex", "main.tex"],
+    "want": {
+      "engine": "lualatex",
+      "engineExplicit": true,
+      "entry": "main.tex",
+      "template": "path with spaces/{entry}.pdf"
+    }
+  },
+  {
+    "name": "name-default-147",
+    "kind": "name",
+    "args": ["--template=first", "--template=second"],
+    "wantError": true
+  },
+  {
+    "name": "name-default-148",
+    "kind": "name",
+    "args": ["--template="],
+    "wantError": true
+  },
+  {
+    "name": "name-default-149",
+    "kind": "name",
+    "args": ["main.tex"],
+    "wantError": true
+  },
+  {
+    "name": "name-default-150",
+    "kind": "name",
+    "args": ["--template", "literal", "--", "--entry.tex"],
+    "want": {
+      "entry": "--entry.tex",
+      "template": "literal"
+    }
+  },
+  {
+    "name": "jobs-list-151",
+    "kind": "jobs",
+    "action": "list",
+    "args": []
+  },
+  {
+    "name": "jobs-list-152",
+    "kind": "jobs",
+    "action": "list",
+    "args": ["--json"],
+    "want": {
+      "jsonOutput": true
+    }
+  },
+  {
+    "name": "jobs-list-153",
+    "kind": "jobs",
+    "action": "list",
+    "args": ["--server=https://example.test", "--timeout=2s"],
+    "want": {
+      "server": "https://example.test",
+      "timeout": 2000000000
+    }
+  },
+  {
+    "name": "jobs-list-154",
+    "kind": "jobs",
+    "action": "list",
+    "args": ["--insecure-skip-verify"],
+    "want": {
+      "insecure": true
+    }
+  },
+  {
+    "name": "jobs-list-155",
+    "kind": "jobs",
+    "action": "list",
+    "args": ["--limit=3"],
+    "want": {
+      "limit": 3
+    }
+  },
+  {
+    "name": "jobs-list-156",
+    "kind": "jobs",
+    "action": "list",
+    "args": ["--timeout=0s"],
+    "wantError": true
+  },
+  {
+    "name": "jobs-list-157",
+    "kind": "jobs",
+    "action": "list",
+    "args": ["--unknown"],
+    "wantError": true
+  },
+  {
+    "name": "jobs-show-158",
+    "kind": "jobs",
+    "action": "show",
+    "args": ["job_test"],
+    "want": {
+      "jobID": "job_test"
+    }
+  },
+  {
+    "name": "jobs-show-159",
+    "kind": "jobs",
+    "action": "show",
+    "args": ["job_test", "--json"],
+    "want": {
+      "jobID": "job_test",
+      "jsonOutput": true
+    }
+  },
+  {
+    "name": "jobs-show-160",
+    "kind": "jobs",
+    "action": "show",
+    "args": ["job_test", "--server=https://example.test", "--timeout=2s"],
+    "want": {
+      "jobID": "job_test",
+      "server": "https://example.test",
+      "timeout": 2000000000
+    }
+  },
+  {
+    "name": "jobs-show-161",
+    "kind": "jobs",
+    "action": "show",
+    "args": ["job_test", "--insecure-skip-verify"],
+    "want": {
+      "insecure": true,
+      "jobID": "job_test"
+    }
+  },
+  {
+    "name": "jobs-show-162",
+    "kind": "jobs",
+    "action": "show",
+    "args": ["job_test", "--limit=3"],
+    "wantError": true
+  },
+  {
+    "name": "jobs-show-163",
+    "kind": "jobs",
+    "action": "show",
+    "args": ["job_test", "--timeout=0s"],
+    "wantError": true
+  },
+  {
+    "name": "jobs-show-164",
+    "kind": "jobs",
+    "action": "show",
+    "args": ["job_test", "--unknown"],
+    "wantError": true
+  },
+  {
+    "name": "jobs-cancel-165",
+    "kind": "jobs",
+    "action": "cancel",
+    "args": ["job_test"],
+    "want": {
+      "jobID": "job_test"
+    }
+  },
+  {
+    "name": "jobs-cancel-166",
+    "kind": "jobs",
+    "action": "cancel",
+    "args": ["job_test", "--json"],
+    "want": {
+      "jobID": "job_test",
+      "jsonOutput": true
+    }
+  },
+  {
+    "name": "jobs-cancel-167",
+    "kind": "jobs",
+    "action": "cancel",
+    "args": ["job_test", "--server=https://example.test", "--timeout=2s"],
+    "want": {
+      "jobID": "job_test",
+      "server": "https://example.test",
+      "timeout": 2000000000
+    }
+  },
+  {
+    "name": "jobs-cancel-168",
+    "kind": "jobs",
+    "action": "cancel",
+    "args": ["job_test", "--insecure-skip-verify"],
+    "want": {
+      "insecure": true,
+      "jobID": "job_test"
+    }
+  },
+  {
+    "name": "jobs-cancel-169",
+    "kind": "jobs",
+    "action": "cancel",
+    "args": ["job_test", "--limit=3"],
+    "wantError": true
+  },
+  {
+    "name": "jobs-cancel-170",
+    "kind": "jobs",
+    "action": "cancel",
+    "args": ["job_test", "--timeout=0s"],
+    "wantError": true
+  },
+  {
+    "name": "jobs-cancel-171",
+    "kind": "jobs",
+    "action": "cancel",
+    "args": ["job_test", "--unknown"],
+    "wantError": true
+  },
+  {
+    "name": "jobs-list-172",
+    "kind": "jobs",
+    "action": "list",
+    "args": ["extra"],
+    "wantError": true
+  },
+  {
+    "name": "jobs-show-173",
+    "kind": "jobs",
+    "action": "show",
+    "args": [],
+    "wantError": true
+  },
+  {
+    "name": "jobs-cancel-174",
+    "kind": "jobs",
+    "action": "cancel",
+    "args": ["bad/id"],
+    "wantError": true
+  },
+  {
+    "name": "result-logs-175",
+    "kind": "result",
+    "action": "logs",
+    "args": ["job_test"],
+    "want": {
+      "jobID": "job_test"
+    }
+  },
+  {
+    "name": "result-logs-176",
+    "kind": "result",
+    "action": "logs",
+    "args": ["job_test", "--json"],
+    "want": {
+      "jobID": "job_test",
+      "jsonOutput": true
+    }
+  },
+  {
+    "name": "result-logs-177",
+    "kind": "result",
+    "action": "logs",
+    "args": ["job_test", "--timeout=5s", "--server=https://example.test"],
+    "want": {
+      "jobID": "job_test",
+      "server": "https://example.test",
+      "timeout": 5000000000
+    }
+  },
+  {
+    "name": "result-logs-178",
+    "kind": "result",
+    "action": "logs",
+    "args": ["job_test", "--source=stdout", "--tail=3", "--max-bytes=1024"],
+    "want": {
+      "jobID": "job_test",
+      "maxBytes": 1024,
+      "source": "stdout",
+      "tailLines": 3
+    }
+  },
+  {
+    "name": "result-logs-179",
+    "kind": "result",
+    "action": "logs",
+    "args": ["job_test", "--out-dir=out dir"],
+    "wantError": true
+  },
+  {
+    "name": "result-logs-180",
+    "kind": "result",
+    "action": "logs",
+    "args": ["job_test", "--timeout=0s"],
+    "wantError": true
+  },
+  {
+    "name": "result-logs-181",
+    "kind": "result",
+    "action": "logs",
+    "args": ["job_test", "--unknown"],
+    "wantError": true
+  },
+  {
+    "name": "result-diagnostics-182",
+    "kind": "result",
+    "action": "diagnostics",
+    "args": ["job_test"],
+    "want": {
+      "jobID": "job_test"
+    }
+  },
+  {
+    "name": "result-diagnostics-183",
+    "kind": "result",
+    "action": "diagnostics",
+    "args": ["job_test", "--json"],
+    "want": {
+      "jobID": "job_test",
+      "jsonOutput": true
+    }
+  },
+  {
+    "name": "result-diagnostics-184",
+    "kind": "result",
+    "action": "diagnostics",
+    "args": ["job_test", "--timeout=5s", "--server=https://example.test"],
+    "want": {
+      "jobID": "job_test",
+      "server": "https://example.test",
+      "timeout": 5000000000
+    }
+  },
+  {
+    "name": "result-diagnostics-185",
+    "kind": "result",
+    "action": "diagnostics",
+    "args": ["job_test", "--source=stdout", "--tail=3", "--max-bytes=1024"],
+    "wantError": true
+  },
+  {
+    "name": "result-diagnostics-186",
+    "kind": "result",
+    "action": "diagnostics",
+    "args": ["job_test", "--out-dir=out dir"],
+    "wantError": true
+  },
+  {
+    "name": "result-diagnostics-187",
+    "kind": "result",
+    "action": "diagnostics",
+    "args": ["job_test", "--timeout=0s"],
+    "wantError": true
+  },
+  {
+    "name": "result-diagnostics-188",
+    "kind": "result",
+    "action": "diagnostics",
+    "args": ["job_test", "--unknown"],
+    "wantError": true
+  },
+  {
+    "name": "result-artifacts.list-189",
+    "kind": "result",
+    "action": "artifacts.list",
+    "args": ["job_test"],
+    "want": {
+      "jobID": "job_test"
+    }
+  },
+  {
+    "name": "result-artifacts.list-190",
+    "kind": "result",
+    "action": "artifacts.list",
+    "args": ["job_test", "--json"],
+    "want": {
+      "jobID": "job_test",
+      "jsonOutput": true
+    }
+  },
+  {
+    "name": "result-artifacts.list-191",
+    "kind": "result",
+    "action": "artifacts.list",
+    "args": ["job_test", "--timeout=5s", "--server=https://example.test"],
+    "want": {
+      "jobID": "job_test",
+      "server": "https://example.test",
+      "timeout": 5000000000
+    }
+  },
+  {
+    "name": "result-artifacts.list-192",
+    "kind": "result",
+    "action": "artifacts.list",
+    "args": ["job_test", "--source=stdout", "--tail=3", "--max-bytes=1024"],
+    "wantError": true
+  },
+  {
+    "name": "result-artifacts.list-193",
+    "kind": "result",
+    "action": "artifacts.list",
+    "args": ["job_test", "--out-dir=out dir"],
+    "wantError": true
+  },
+  {
+    "name": "result-artifacts.list-194",
+    "kind": "result",
+    "action": "artifacts.list",
+    "args": ["job_test", "--timeout=0s"],
+    "wantError": true
+  },
+  {
+    "name": "result-artifacts.list-195",
+    "kind": "result",
+    "action": "artifacts.list",
+    "args": ["job_test", "--unknown"],
+    "wantError": true
+  },
+  {
+    "name": "result-artifacts.get-196",
+    "kind": "result",
+    "action": "artifacts.get",
+    "args": ["job_test", "0123456789abcdef0123456789abcdef"],
+    "want": {
+      "artifactID": "0123456789abcdef0123456789abcdef",
+      "jobID": "job_test"
+    }
+  },
+  {
+    "name": "result-artifacts.get-197",
+    "kind": "result",
+    "action": "artifacts.get",
+    "args": ["job_test", "0123456789abcdef0123456789abcdef", "--json"],
+    "want": {
+      "artifactID": "0123456789abcdef0123456789abcdef",
+      "jobID": "job_test",
+      "jsonOutput": true
+    }
+  },
+  {
+    "name": "result-artifacts.get-198",
+    "kind": "result",
+    "action": "artifacts.get",
+    "args": ["job_test", "0123456789abcdef0123456789abcdef", "--timeout=5s", "--server=https://example.test"],
+    "want": {
+      "artifactID": "0123456789abcdef0123456789abcdef",
+      "jobID": "job_test",
+      "server": "https://example.test",
+      "timeout": 5000000000
+    }
+  },
+  {
+    "name": "result-artifacts.get-199",
+    "kind": "result",
+    "action": "artifacts.get",
+    "args": ["job_test", "0123456789abcdef0123456789abcdef", "--source=stdout", "--tail=3", "--max-bytes=1024"],
+    "wantError": true
+  },
+  {
+    "name": "result-artifacts.get-200",
+    "kind": "result",
+    "action": "artifacts.get",
+    "args": ["job_test", "0123456789abcdef0123456789abcdef", "--out-dir=out dir"],
+    "want": {
+      "artifactID": "0123456789abcdef0123456789abcdef",
+      "jobID": "job_test",
+      "outDir": "out dir"
+    }
+  },
+  {
+    "name": "result-artifacts.get-201",
+    "kind": "result",
+    "action": "artifacts.get",
+    "args": ["job_test", "0123456789abcdef0123456789abcdef", "--timeout=0s"],
+    "wantError": true
+  },
+  {
+    "name": "result-artifacts.get-202",
+    "kind": "result",
+    "action": "artifacts.get",
+    "args": ["job_test", "0123456789abcdef0123456789abcdef", "--unknown"],
+    "wantError": true
+  },
+  {
+    "name": "result-artifacts.get-203",
+    "kind": "result",
+    "action": "artifacts.get",
+    "args": ["job_test", "bad"],
+    "wantError": true
+  },
+  {
+    "name": "result-logs-204",
+    "kind": "result",
+    "action": "logs",
+    "args": [],
+    "wantError": true
+  },
+  {
+    "name": "result-logs-205",
+    "kind": "result",
+    "action": "logs",
+    "args": ["job_test", "--tail=10001"],
+    "wantError": true
+  },
+  {
+    "name": "remote-default-206",
+    "kind": "remote",
+    "args": []
+  },
+  {
+    "name": "remote-default-207",
+    "kind": "remote",
+    "args": ["--scope=cache"],
+    "want": {
+      "scope": "cache"
+    }
+  },
+  {
+    "name": "remote-default-208",
+    "kind": "remote",
+    "args": ["--json", "--scope=snapshot"],
+    "want": {
+      "jsonOutput": true,
+      "scope": "snapshot"
+    }
+  },
+  {
+    "name": "remote-default-209",
+    "kind": "remote",
+    "args": ["--project-root=/paper", "--project-id=paper"],
+    "want": {
+      "projectID": "paper",
+      "projectRoot": "/paper"
+    }
+  },
+  {
+    "name": "remote-default-210",
+    "kind": "remote",
+    "args": ["--yes", "--plan-id=0123456789abcdef0123456789abcdef"],
+    "wantError": true
+  },
+  {
+    "name": "remote-default-211",
+    "kind": "remote",
+    "args": ["--scope=project", "--yes", "--plan-id=0123456789abcdef0123456789abcdef"],
+    "wantError": true
+  },
+  {
+    "name": "remote-default-212",
+    "kind": "remote",
+    "args": ["--yes", "--dry-run", "--plan-id=0123456789abcdef0123456789abcdef"],
+    "wantError": true
+  },
+  {
+    "name": "remote-default-213",
+    "kind": "remote",
+    "args": ["--plan-id=0123456789abcdef0123456789abcdef"],
+    "wantError": true
+  },
+  {
+    "name": "remote-default-214",
+    "kind": "remote",
+    "args": ["--scope=bad"],
+    "wantError": true
+  },
+  {
+    "name": "remote-default-215",
+    "kind": "remote",
+    "args": ["--timeout=2s"],
+    "want": {
+      "timeout": 2000000000
+    }
+  },
+  {
+    "name": "remote-default-216",
+    "kind": "remote",
+    "args": ["--timeout=0s"],
+    "want": {
+      "timeout": 0
+    }
+  },
+  {
+    "name": "remote-default-217",
+    "kind": "remote",
+    "args": ["unexpected"],
+    "wantError": true
+  }
+]

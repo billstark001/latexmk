@@ -20,7 +20,7 @@ func isolateUserConfig(t *testing.T) string {
 
 func TestLoadDefaultsToAutomaticDependencySelection(t *testing.T) {
 	isolateUserConfig(t)
-	cfg, err := Load(t.TempDir())
+	cfg, err := Load(t.TempDir(), CredentialOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestWatchSettingsMergePerFieldAndEnvironment(t *testing.T) {
 	}
 	t.Setenv("LATEXMK_WATCH_INTERVAL", "50ms")
 	t.Setenv("LATEXMK_WATCH_MAX_WAIT", "5s")
-	cfg, err := Load(root)
+	cfg, err := Load(root, CredentialOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestWatchSettingsRejectInvalidDurations(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(root, FileName), []byte(`{"watch":`+setting+`}`), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Load(root); err == nil {
+			if _, err := Load(root, CredentialOptions{}); err == nil {
 				t.Fatal("accepted invalid watch settings")
 			}
 		})
@@ -79,7 +79,7 @@ func TestLoadRejectsUnknownUploadMode(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, FileName), []byte(`{"uploadMode":"legacy"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(root); err == nil {
+	if _, err := Load(root, CredentialOptions{}); err == nil {
 		t.Fatal("expected invalid uploadMode to fail")
 	}
 }
@@ -91,7 +91,7 @@ func TestLoadManifestConfiguration(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, FileName), []byte(configJSON), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := Load(root)
+	cfg, err := Load(root, CredentialOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestLoadDefaultsToEntryRootModeWithoutExpandingToGitRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("LATEXMK_ROOT_MODE", "")
-	cfg, err := Load(nested)
+	cfg, err := Load(nested, CredentialOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestLoadKeepsDefaultDenyWhenProjectReplacesExcludes(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, FileName), []byte(configJSON), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := Load(root)
+	cfg, err := Load(root, CredentialOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestLoadRespectsExplicitGitIgnoreSetting(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, FileName), []byte(configJSON), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := Load(root)
+	cfg, err := Load(root, CredentialOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,8 +226,11 @@ func TestLoadTokenPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, err := Load(root)
+	cfg, err := Load(root, CredentialOptions{})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Authenticate(root); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Token != "user-token" {
@@ -242,8 +245,11 @@ func TestLoadTokenPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("LATEXMK_TOKEN_FILE", tokenFile)
-	cfg, err = Load(root)
+	cfg, err = Load(root, CredentialOptions{})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Authenticate(root); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Token != "file-token" {
@@ -251,8 +257,11 @@ func TestLoadTokenPrecedence(t *testing.T) {
 	}
 
 	t.Setenv("LATEXMK_TOKEN", "environment-token")
-	cfg, err = Load(root)
+	cfg, err = Load(root, CredentialOptions{})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Authenticate(root); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Token != "environment-token" {
@@ -280,17 +289,17 @@ func TestAuxiliaryCacheConfigAndEnvironment(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := Load(root)
+	cfg, err := Load(root, CredentialOptions{})
 	if err != nil || cfg.Auxiliary.Server != "reuse" {
 		t.Fatalf("config %+v %v", cfg, err)
 	}
 	t.Setenv("LATEXMK_SERVER_CACHE", "none")
-	cfg, err = Load(root)
+	cfg, err = Load(root, CredentialOptions{})
 	if err != nil || cfg.Auxiliary.Server != "none" {
 		t.Fatalf("env %+v %v", cfg, err)
 	}
 	t.Setenv("LATEXMK_SERVER_CACHE", "invalid")
-	if _, err := Load(root); err == nil {
+	if _, err := Load(root, CredentialOptions{}); err == nil {
 		t.Fatal("accepted invalid cache mode")
 	}
 }

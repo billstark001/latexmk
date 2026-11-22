@@ -17,6 +17,7 @@ import (
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
 	"github.com/billstark001/latexmk/packages/cli/internal/exporthistory"
 	"github.com/billstark001/latexmk/packages/cli/internal/naming"
+	"github.com/billstark001/latexmk/packages/shared/argv"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
@@ -362,27 +363,62 @@ func publishPDF(opts compileOptions, artifact protocol.Artifact) error {
 	return nil
 }
 
+type nameRenderOptions struct {
+	template string
+	count    int
+}
+
+func nameArguments() *argv.Options[nameRenderOptions] {
+	changes := new(argv.Options[nameRenderOptions])
+	changes.Value("template", func(options *nameRenderOptions, value string) error {
+		options.count++
+		if options.count > 1 {
+			return errors.New("--template can only be supplied once")
+		}
+		if value == "" {
+			return errors.New("--template requires a nonempty value")
+		}
+		options.template = value
+		return nil
+	})
+	return changes
+}
+
 func runName(args []string) int {
-	jsonOutput := hasJSONFlag(args)
-	fail := func(err error) int { return failAgentArguments("name.render", jsonOutput, err) }
-	if len(args) == 0 || args[0] != "render" {
-		return fail(errors.New("name supports 'render --template TEMPLATE [entry|--target NAME]'"))
-	}
-	source, common, err := extractTemplateArg(args[1:])
-	if err != nil {
-		return fail(err)
-	}
 	cwd, err := os.Getwd()
 	if err != nil {
-		return fail(err)
+		return failAgentArguments("name.render", false, err)
 	}
-	cfg, common, err := config.LoadArgs(cwd, common)
+	compileChanges := compileArguments()
+	nameChanges := nameArguments()
+	flags := append(compileChanges.Flags(), nameChanges.Flags()...)
+	action := ""
+	if len(args) > 0 {
+		action = args[0]
+		if action == "render" {
+			args = args[1:]
+		}
+	}
+	cfg, parsed, err := loadCommand("name.render", cwd, args, flags...)
+	jsonOutput := parsed != nil && parsed.Bool("json")
+	fail := func(err error) int { return failAgentArguments("name.render", jsonOutput, err) }
 	if err != nil {
 		return fail(err)
 	}
+	if action != "render" {
+		return fail(errors.New("name supports 'render --template TEMPLATE [entry|--target NAME]'"))
+	}
+	var nameOptions nameRenderOptions
+	if err := nameChanges.Apply(&nameOptions); err != nil {
+		return fail(err)
+	}
+	if nameOptions.count == 0 {
+		return fail(errors.New("--template requires a nonempty value"))
+	}
+	source := nameOptions.template
 	opts := optionsFromConfig(cfg, false)
 	opts.invocation = newNameInvocation()
-	if err := parseCompileArgs(common, &opts); err != nil {
+	if err := applyCompileArguments(compileChanges, &opts, parsed); err != nil {
 		return fail(err)
 	}
 	if opts.watch || opts.detach || opts.target == "all" || opts.explain != "" {
@@ -395,7 +431,7 @@ func runName(args []string) int {
 		}
 	}
 	if opts.target != "" {
-		if err := applyBuildTarget(&opts, cfg, common); err != nil {
+		if err := applyBuildTarget(&opts, cfg, parsed); err != nil {
 			return fail(err)
 		}
 	}
@@ -418,39 +454,6 @@ func runName(args []string) int {
 	}
 	terminalPrintln(resolved)
 	return 0
-}
-
-func extractTemplateArg(args []string) (string, []string, error) {
-	var source string
-	var common []string
-	found := false
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--" {
-			common = append(common, args[i:]...)
-			break
-		}
-		if args[i] != "--template" && !strings.HasPrefix(args[i], "--template=") {
-			common = append(common, args[i])
-			continue
-		}
-		if found {
-			return "", nil, errors.New("--template can only be supplied once")
-		}
-		found = true
-		_, value, supplied := strings.Cut(args[i], "=")
-		if !supplied {
-			i++
-			if i >= len(args) {
-				return "", nil, errors.New("--template requires a value")
-			}
-			value = args[i]
-		}
-		source = value
-	}
-	if !found || source == "" {
-		return "", nil, errors.New("--template requires a nonempty value")
-	}
-	return source, common, nil
 }
 
 func writeNameJSON(source, resolved string) int {

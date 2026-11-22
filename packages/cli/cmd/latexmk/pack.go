@@ -7,8 +7,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
+
+	"github.com/urfave/cli/v3"
 
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
@@ -17,6 +20,7 @@ import (
 	"github.com/billstark001/latexmk/packages/cli/internal/naming"
 	projectpack "github.com/billstark001/latexmk/packages/cli/internal/pack"
 	cliresources "github.com/billstark001/latexmk/packages/cli/internal/resources"
+	"github.com/billstark001/latexmk/packages/shared/argv"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 	"github.com/billstark001/latexmk/packages/shared/resources"
 )
@@ -50,108 +54,103 @@ type packView struct {
 	Verification  resources.Verification `json:"verification"`
 }
 
-func parsePackArgs(args []string) (packOptions, []string, error) {
-	options := packOptions{mode: "default", resourceActions: make(map[string]string)}
-	var common []string
-	for i := 0; i < len(args); i++ {
-		name, value, supplied := strings.Cut(args[i], "=")
-		switch name {
-		case "--":
-			common = append(common, args[i:]...)
-			i = len(args)
-		case "--mode",
-			"--output",
-			"--output-template",
-			"--publication",
-			"--verify-in",
-			"--publish-resource",
-			"--pack-include",
-			"--pack-exclude":
-			if !supplied {
-				i++
-				if i >= len(args) {
-					return options, nil, fmt.Errorf("%s requires a value", name)
-				}
-				value = args[i]
-			}
+func packArguments() *argv.Options[packOptions] {
+	changes := new(argv.Options[packOptions])
+	value := func(name string, apply func(*packOptions, string)) {
+		changes.Value(name, func(options *packOptions, value string) error {
 			if value == "" {
-				return options, nil, fmt.Errorf("%s requires a nonempty value", name)
+				return fmt.Errorf("--%s requires a nonempty value", name)
 			}
-			switch name {
-			case "--mode":
-				options.mode = value
-				options.modeExplicit = true
-			case "--output":
-				options.output = value
-			case "--output-template":
-				options.outputTemplate = value
-			case "--publication":
-				options.publication = value
-			case "--verify-in":
-				options.verifyIn = value
-				options.verifyMode = "target"
-			case "--pack-include":
-				options.includeFiles = append(options.includeFiles, value)
-			case "--pack-exclude":
-				options.exclude = append(options.exclude, value)
-			case "--publish-resource":
-				id, action, ok := strings.Cut(value, "=")
-				if !ok || !resources.ValidID(id) || (action != "bundle" && action != "provided" && action != "omit") {
-					return options, nil, errors.New("--publish-resource requires ID=bundle|provided|omit")
-				}
-				options.resourceActions[id] = action
-			}
-		case "--explain":
-			if supplied {
-				return options, nil, errors.New("pack --explain does not accept a value")
-			}
-			options.explain = true
-		case "--verify":
-			if supplied {
-				return options, nil, errors.New("--verify does not accept a value")
-			}
-			if options.verifyIn == "" {
+			apply(options, value)
+			return nil
+		})
+	}
+	value("mode", func(options *packOptions, value string) { options.mode, options.modeExplicit = value, true })
+	value("output", func(options *packOptions, value string) { options.output = value })
+	value("output-template", func(options *packOptions, value string) { options.outputTemplate = value })
+	value("publication", func(options *packOptions, value string) { options.publication = value })
+	value(
+		"verify-in",
+		func(options *packOptions, value string) { options.verifyIn, options.verifyMode = value, "target" },
+	)
+	value(
+		"pack-include",
+		func(options *packOptions, value string) { options.includeFiles = append(options.includeFiles, value) },
+	)
+	value("pack-exclude", func(options *packOptions, value string) { options.exclude = append(options.exclude, value) })
+	changes.Value("publish-resource", func(options *packOptions, value string) error {
+		id, action, ok := strings.Cut(value, "=")
+		if !ok || !resources.ValidID(id) || (action != "bundle" && action != "provided" && action != "omit") {
+			return errors.New("--publish-resource requires ID=bundle|provided|omit")
+		}
+		if options.resourceActions == nil {
+			options.resourceActions = make(map[string]string)
+		}
+		options.resourceActions[id] = action
+		return nil
+	})
+	changes.Bool("explain", func(options *packOptions, value bool) error { options.explain = value; return nil })
+	changes.Bool("verify", func(options *packOptions, value bool) error {
+		if options.verifyIn == "" {
+			options.verifyMode = ""
+			if value {
 				options.verifyMode = "build"
 			}
-		case "--local-cache",
-			"--server-cache",
-			"--server-cache-ttl",
-			"--force",
-			"-g",
-			"-gg",
-			"--synctex",
-			"-synctex",
-			"--no-synctex":
-			return options, nil, fmt.Errorf("%s is not a pack option; pack verification uses a cold build", name)
-		default:
-			common = append(common, args[i])
+		}
+		return nil
+	})
+	return changes
+}
+
+func packCompileFlags(changes *argv.Options[compileOptions]) []cli.Flag {
+	var flags []cli.Flag
+	for _, flag := range changes.Flags() {
+		if !slices.Contains(flag.Names(), "explain") {
+			flags = append(flags, flag)
+		}
+	}
+	return flags
+}
+
+func validatePackArguments(options packOptions, parsed *cli.Command) error {
+	for _, name := range []string{
+		"local-cache", "server-cache", "server-cache-ttl", "force", "synctex", "no-synctex",
+	} {
+		if parsed.IsSet(name) {
+			return fmt.Errorf("--%s is not a pack option; pack verification uses a cold build", name)
 		}
 	}
 	if options.output != "" && options.outputTemplate != "" {
-		return options, nil, errors.New("--output and --output-template are mutually exclusive")
+		return errors.New("--output and --output-template are mutually exclusive")
 	}
-	return options, common, projectpack.ValidateMode(options.mode)
+	return projectpack.ValidateMode(options.mode)
 }
 
 func runPack(args []string) int {
-	jsonOutput := hasJSONFlag(args)
+	cwd, err := os.Getwd()
+	if err != nil {
+		return failAgent("pack", false, err)
+	}
+	compileChanges := compileArguments()
+	packChanges := packArguments()
+	flags := append(packCompileFlags(compileChanges), packChanges.Flags()...)
+	cfg, parsed, err := loadCommand("pack", cwd, args, flags...)
+	jsonOutput := parsed != nil && parsed.Bool("json")
 	fail := func(err error) int { return failAgent("pack", jsonOutput, err) }
 	failArgs := func(err error) int { return failAgentArguments("pack", jsonOutput, err) }
-	packing, common, err := parsePackArgs(args)
 	if err != nil {
 		return failArgs(err)
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fail(err)
+	packing := packOptions{mode: "default"}
+	if err := packChanges.Apply(&packing); err != nil {
+		return failArgs(err)
 	}
-	cfg, common, err := config.LoadArgs(cwd, common)
-	if err != nil {
+	if err := validatePackArguments(packing, parsed); err != nil {
 		return failArgs(err)
 	}
 	opts := optionsFromConfig(cfg, false)
 	opts.invocation = newNameInvocation()
-	if err := parseCompileArgs(common, &opts); err != nil {
+	if err := applyCompileArguments(compileChanges, &opts, parsed); err != nil {
 		return failArgs(err)
 	}
 	if err := applyPublication(&packing, &opts, cfg); err != nil {
@@ -166,7 +165,7 @@ func runPack(args []string) int {
 	if opts.watch || opts.detach || opts.target == "all" || opts.explain != "" {
 		return failArgs(errors.New("pack supports one entry/target and cannot watch, detach, or explain"))
 	}
-	if hasOption(common, "--pdf-template") || hasOption(common, "--pdf-keep-last") {
+	if parsed.IsSet("pdf-template") || parsed.IsSet("pdf-keep-last") {
 		return failArgs(errors.New("pack does not export PDFs; use --output-template for the ZIP name"))
 	}
 	if opts.target == "" && opts.entry == "" {
@@ -176,7 +175,7 @@ func runPack(args []string) int {
 		}
 	}
 	if opts.target != "" {
-		if err := applyBuildTarget(&opts, cfg, common); err != nil {
+		if err := applyBuildTarget(&opts, cfg, parsed); err != nil {
 			return failArgs(err)
 		}
 	}

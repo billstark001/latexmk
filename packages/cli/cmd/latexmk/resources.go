@@ -13,7 +13,6 @@ import (
 
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
-	"github.com/billstark001/latexmk/packages/cli/internal/config"
 	cliresources "github.com/billstark001/latexmk/packages/cli/internal/resources"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 	shared "github.com/billstark001/latexmk/packages/shared/resources"
@@ -213,25 +212,27 @@ func resourceControlPaths(opts compileOptions) []string {
 }
 
 func runResources(args []string) int {
-	jsonOutput := hasJSONFlag(args)
+	jsonOutput := false
 	if len(args) == 0 {
 		return failAgentArguments("resources", jsonOutput, errors.New("resources requires lock, fetch, or inspect"))
 	}
 	action := args[0]
 	command := "resources." + action
-	if action != "lock" && action != "fetch" && action != "inspect" {
-		return failAgentArguments(command, jsonOutput, errors.New("resources supports lock, fetch, or inspect"))
-	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return failAgent(command, jsonOutput, err)
 	}
-	cfg, remaining, err := config.LoadArgs(cwd, args[1:])
+	changes := compileArguments()
+	cfg, parsed, err := loadCommand(command, cwd, args[1:], changes.Flags()...)
+	jsonOutput = parsed != nil && parsed.Bool("json")
 	if err != nil {
 		return failAgentArguments(command, jsonOutput, err)
 	}
+	if action != "lock" && action != "fetch" && action != "inspect" {
+		return failAgentArguments(command, jsonOutput, errors.New("resources supports lock, fetch, or inspect"))
+	}
 	opts := optionsFromConfig(cfg, false)
-	if err := parseCompileArgs(remaining, &opts); err != nil {
+	if err := applyCompileArguments(changes, &opts, parsed); err != nil {
 		return failAgentArguments(command, jsonOutput, err)
 	}
 	if opts.watch || opts.realtime || opts.detach {
@@ -251,7 +252,7 @@ func runResources(args []string) int {
 		if opts.target == "all" {
 			return failAgentArguments(command, jsonOutput, errors.New("resource commands select one target"))
 		}
-		if err := applyBuildTarget(&opts, cfg, remaining); err != nil {
+		if err := applyBuildTarget(&opts, cfg, parsed); err != nil {
 			return failAgentArguments(command, jsonOutput, err)
 		}
 	}

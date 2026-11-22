@@ -36,7 +36,7 @@ func TestNamingMergeAndEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("LATEXMK_NAME_TIMEZONE", "Asia/Tokyo")
-	cfg, err := Load(root)
+	cfg, err := Load(root, CredentialOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,13 +59,13 @@ func TestNamingConfigValidation(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(root, FileName), []byte(data), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Load(root); err == nil {
+			if _, err := Load(root, CredentialOptions{}); err == nil {
 				t.Fatal("accepted invalid naming configuration")
 			}
 		})
 	}
 	isolateUserConfig(t)
-	cfg, err := Load(t.TempDir())
+	cfg, err := Load(t.TempDir(), CredentialOptions{})
 	if err != nil || cfg.Naming.Scope != "invocation" || cfg.Naming.TimeZone != "local" || cfg.PDFRetention != nil {
 		t.Fatalf("defaults: %+v %v", cfg.Naming, err)
 	}

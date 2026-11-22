@@ -7,11 +7,12 @@ import (
 	"os"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
+	"github.com/urfave/cli/v3"
+
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
-	"github.com/billstark001/latexmk/packages/cli/internal/config"
+	"github.com/billstark001/latexmk/packages/shared/argv"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
@@ -34,30 +35,39 @@ type jobsListData struct {
 }
 
 func runJobs(args []string) int {
-	jsonOutput := hasJSONFlag(args)
 	command := "jobs"
-	if len(args) == 0 {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return failAgent(command, false, err)
+	}
+	changes := jobsArguments()
+	cfg, parsed, err := loadCommand(command, cwd, args, changes.Flags()...)
+	jsonOutput := parsed != nil && parsed.Bool("json")
+	positionals := []string(nil)
+	if parsed != nil {
+		positionals = parsed.Args().Slice()
+	}
+	if len(positionals) > 0 {
+		command += "." + positionals[0]
+	}
+	if err != nil {
+		return failAgentArguments(command, jsonOutput, err)
+	}
+	if len(positionals) == 0 {
 		return failAgentArguments(command, jsonOutput, errors.New("jobs requires list, show, or cancel"))
 	}
-	action := args[0]
-	command += "." + action
+	action := positionals[0]
 	if action != "list" && action != "show" && action != "cancel" {
 		return failAgentArguments(command, jsonOutput, fmt.Errorf("unknown jobs action %q", action))
 	}
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		return failAgent(command, jsonOutput, err)
-	}
-	cfg, args, err := config.LoadArgs(cwd, args)
-	if err != nil {
-		return failAgent(command, jsonOutput, err)
-	}
 	opts := jobsOptions{
 		server: cfg.Server, token: cfg.Token, timeout: cfg.Timeout,
-		insecure: cfg.InsecureSkipVerify, jsonOutput: jsonOutput, limit: protocol.DefaultJobListLimit,
+		insecure: cfg.InsecureSkipVerify, limit: protocol.DefaultJobListLimit,
 	}
-	if err := parseJobsArgs(action, args[1:], &opts); err != nil {
+	if err := changes.Apply(&opts); err != nil {
+		return failAgentArguments(command, jsonOutput, err)
+	}
+	if err := validateJobsArguments(action, positionals[1:], parsed, &opts); err != nil {
 		return failAgentArguments(command, jsonOutput, err)
 	}
 	if err := cfg.Authenticate(cfg.ProjectRoot); err != nil {
@@ -104,51 +114,28 @@ func runJobs(args []string) int {
 	return failAgentArguments(command, opts.jsonOutput, errors.New("unsupported jobs action"))
 }
 
-func parseJobsArgs(action string, args []string, opts *jobsOptions) error {
-	positionals := make([]string, 0, 1)
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		value := func(name string) (string, error) {
-			if strings.Contains(a, "=") {
-				return strings.SplitN(a, "=", 2)[1], nil
-			}
-			if i+1 >= len(args) {
-				return "", fmt.Errorf("%s requires a value", name)
-			}
-			i++
-			return args[i], nil
-		}
-		var err error
-		switch {
-		case a == "--server" || strings.HasPrefix(a, "--server="):
-			opts.server, err = value("--server")
-		case a == "--timeout" || strings.HasPrefix(a, "--timeout="):
-			var raw string
-			raw, err = value("--timeout")
-			if err == nil {
-				opts.timeout, err = time.ParseDuration(raw)
-			}
-		case a == "--insecure-skip-verify":
-			opts.insecure = true
-		case a == "--json":
-			opts.jsonOutput = true
-		case a == "--limit" || strings.HasPrefix(a, "--limit="):
-			if action != "list" {
-				return fmt.Errorf("--limit is only valid for jobs list")
-			}
-			var raw string
-			raw, err = value("--limit")
-			if err == nil {
-				opts.limit, err = strconv.Atoi(raw)
-			}
-		case strings.HasPrefix(a, "-"):
-			return fmt.Errorf("unknown option %q", a)
-		default:
-			positionals = append(positionals, a)
-		}
-		if err != nil {
-			return err
-		}
+func jobsArguments() *argv.Options[jobsOptions] {
+	changes := new(argv.Options[jobsOptions])
+	changes.Value("server", func(opts *jobsOptions, value string) error { opts.server = value; return nil })
+	changes.Value("timeout", func(opts *jobsOptions, value string) (err error) {
+		opts.timeout, err = time.ParseDuration(value)
+		return err
+	})
+	changes.Bool(
+		"insecure-skip-verify",
+		func(opts *jobsOptions, value bool) error { opts.insecure = value; return nil },
+	)
+	changes.Bool("json", func(opts *jobsOptions, value bool) error { opts.jsonOutput = value; return nil })
+	changes.Value("limit", func(opts *jobsOptions, value string) (err error) {
+		opts.limit, err = strconv.Atoi(value)
+		return err
+	})
+	return changes
+}
+
+func validateJobsArguments(action string, positionals []string, parsed *cli.Command, opts *jobsOptions) error {
+	if action != "list" && parsed.IsSet("limit") {
+		return errors.New("--limit is only valid for jobs list")
 	}
 	if opts.timeout <= 0 {
 		return errors.New("timeout must be positive")
@@ -196,13 +183,4 @@ func reportJob(command string, job protocol.Job, jsonOutput bool) int {
 		terminalPrintf("error: %s\n", job.Error)
 	}
 	return 0
-}
-
-func hasJSONFlag(args []string) bool {
-	for _, arg := range args {
-		if arg == "--json" {
-			return true
-		}
-	}
-	return false
 }

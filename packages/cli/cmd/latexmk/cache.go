@@ -3,47 +3,45 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
-	"github.com/billstark001/latexmk/packages/cli/internal/config"
+	"github.com/billstark001/latexmk/packages/shared/argv"
 )
 
+type cacheOptions struct {
+	root       string
+	jsonOutput bool
+}
+
 func runCache(args []string) int {
-	if len(args) > 0 && args[0] == "clean" {
-		return runCacheClean(args[1:])
-	}
-	jsonOutput := hasJSONFlag(args)
-	if len(args) == 0 || args[0] != "ignore" {
-		return failAgentArguments("cache", jsonOutput, errors.New("cache supports 'ignore' and 'clean'"))
-	}
 	cwd, err := os.Getwd()
 	if err != nil {
-		return failAgent("cache.ignore", jsonOutput, err)
+		return failAgent("cache", false, err)
 	}
-	cfg, args, err := config.LoadArgs(cwd, args)
+	changes := new(argv.Options[cacheOptions])
+	changes.Value("project-root", func(options *cacheOptions, value string) error { options.root = value; return nil })
+	changes.Bool("json", func(options *cacheOptions, value bool) error { options.jsonOutput = value; return nil })
+	cfg, parsed, err := loadCommand("cache", cwd, args, changes.Flags()...)
+	jsonOutput := parsed != nil && parsed.Bool("json")
 	if err != nil {
-		return failAgent("cache.ignore", jsonOutput, err)
+		return failAgentArguments("cache", jsonOutput, err)
 	}
-	root := cfg.ProjectRoot
-	if root == "" {
-		root = cwd
+	positionals := parsed.Args().Slice()
+	if len(positionals) != 1 || (positionals[0] != "ignore" && positionals[0] != "clean") {
+		return failAgentArguments("cache", jsonOutput, errors.New("cache supports 'ignore' and 'clean'"))
 	}
-	for i := 1; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "--project-root" && i+1 < len(args):
-			i++
-			root = args[i]
-		case strings.HasPrefix(a, "--project-root="):
-			root = strings.SplitN(a, "=", 2)[1]
-		case a == "--json":
-		default:
-			return failAgentArguments("cache.ignore", jsonOutput, fmt.Errorf("unknown option %q", a))
-		}
+	opts := cacheOptions{root: cfg.ProjectRoot}
+	if opts.root == "" {
+		opts.root = cwd
+	}
+	if err := changes.Apply(&opts); err != nil {
+		return failAgentArguments("cache."+positionals[0], jsonOutput, err)
+	}
+	root := opts.root
+	if positionals[0] == "clean" {
+		return cleanLocalCache(root, opts.jsonOutput)
 	}
 	root, err = filepath.Abs(root)
 	if err != nil {
@@ -68,33 +66,7 @@ func runCache(args []string) int {
 	return 0
 }
 
-func runCacheClean(args []string) int {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fail(err)
-	}
-	cfg, args, err := config.LoadArgs(cwd, args)
-	if err != nil {
-		return fail(err)
-	}
-	root := cfg.ProjectRoot
-	if root == "" {
-		root = cwd
-	}
-	jsonOutput := false
-	for i := 0; i < len(args); i++ {
-		switch {
-		case args[i] == "--project-root" && i+1 < len(args):
-			i++
-			root = args[i]
-		case strings.HasPrefix(args[i], "--project-root="):
-			root = strings.TrimPrefix(args[i], "--project-root=")
-		case args[i] == "--json":
-			jsonOutput = true
-		default:
-			return fail(fmt.Errorf("unknown cache clean option %q", args[i]))
-		}
-	}
+func cleanLocalCache(root string, jsonOutput bool) int {
 	fs, err := os.OpenRoot(root)
 	if err != nil {
 		return fail(err)

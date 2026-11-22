@@ -7,6 +7,7 @@ replace github.com/billstark001/latexmk/packages/shared => ../shared
 require (
 	github.com/billstark001/latexmk/packages/shared v0.0.0
 	github.com/gin-gonic/gin v1.11.0
+	github.com/urfave/cli/v3 v3.14.0
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.1
 )

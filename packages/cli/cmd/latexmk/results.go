@@ -10,8 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/urfave/cli/v3"
+
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
-	"github.com/billstark001/latexmk/packages/cli/internal/config"
+	"github.com/billstark001/latexmk/packages/shared/argv"
 )
 
 var artifactIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -37,27 +39,22 @@ type artifactsListData struct {
 }
 
 func runArtifacts(args []string) int {
-	jsonOutput := hasJSONFlag(args)
 	command := "artifacts"
-	if len(args) == 0 {
-		return failAgentArguments(command, jsonOutput, errors.New("artifacts requires list or get"))
+	opts, parsed, err := loadResultCommandOptions(command, args)
+	positionals := []string(nil)
+	if parsed != nil {
+		positionals = parsed.Args().Slice()
 	}
-	action := args[0]
-	command += "." + action
-	if action != "list" && action != "get" {
-		return failAgentArguments(command, jsonOutput, fmt.Errorf("unknown artifacts action %q", action))
+	if len(positionals) > 0 {
+		command += "." + positionals[0]
 	}
-	opts, args, err := loadResultCommandOptions(args)
 	if err != nil {
-		return failAgentArguments(command, jsonOutput, err)
+		return failAgentArguments(command, opts.jsonOutput, err)
 	}
-	opts.jsonOutput = jsonOutput
-	if err := parseResultCommandArgs("artifacts."+action, args[1:], &opts); err != nil {
-		return failAgentArguments(command, jsonOutput, err)
-	}
+	action := positionals[0]
 	c, err := client.New(opts.server, opts.token, opts.timeout, opts.insecure)
 	if err != nil {
-		return failAgentArguments(command, jsonOutput, err)
+		return failAgentArguments(command, opts.jsonOutput, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
@@ -93,19 +90,14 @@ func runArtifacts(args []string) int {
 }
 
 func runLogs(args []string) int {
-	jsonOutput := hasJSONFlag(args)
 	command := "logs.get"
-	opts, args, err := loadResultCommandOptions(args)
+	opts, _, err := loadResultCommandOptions("logs", args)
 	if err != nil {
-		return failAgentArguments(command, jsonOutput, err)
-	}
-	opts.jsonOutput = jsonOutput
-	if err := parseResultCommandArgs("logs", args, &opts); err != nil {
-		return failAgentArguments(command, jsonOutput, err)
+		return failAgentArguments(command, opts.jsonOutput, err)
 	}
 	c, err := client.New(opts.server, opts.token, opts.timeout, opts.insecure)
 	if err != nil {
-		return failAgentArguments(command, jsonOutput, err)
+		return failAgentArguments(command, opts.jsonOutput, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
@@ -136,19 +128,14 @@ func runLogs(args []string) int {
 }
 
 func runDiagnostics(args []string) int {
-	jsonOutput := hasJSONFlag(args)
 	command := "diagnostics.get"
-	opts, args, err := loadResultCommandOptions(args)
+	opts, _, err := loadResultCommandOptions("diagnostics", args)
 	if err != nil {
-		return failAgentArguments(command, jsonOutput, err)
-	}
-	opts.jsonOutput = jsonOutput
-	if err := parseResultCommandArgs("diagnostics", args, &opts); err != nil {
-		return failAgentArguments(command, jsonOutput, err)
+		return failAgentArguments(command, opts.jsonOutput, err)
 	}
 	c, err := client.New(opts.server, opts.token, opts.timeout, opts.insecure)
 	if err != nil {
-		return failAgentArguments(command, jsonOutput, err)
+		return failAgentArguments(command, opts.jsonOutput, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
@@ -191,88 +178,82 @@ func runDiagnostics(args []string) int {
 	return 0
 }
 
-func loadResultCommandOptions(args []string) (resultCommandOptions, []string, error) {
+func loadResultCommandOptions(command string, args []string) (resultCommandOptions, *cli.Command, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return resultCommandOptions{}, nil, err
 	}
-	cfg, args, err := config.LoadArgs(cwd, args)
+	changes := resultArguments()
+	cfg, parsed, err := loadCommand(command, cwd, args, changes.Flags()...)
+	opts := resultCommandOptions{jsonOutput: parsed != nil && parsed.Bool("json")}
 	if err != nil {
-		return resultCommandOptions{}, nil, err
+		return opts, parsed, err
+	}
+	opts.server, opts.token, opts.timeout = cfg.Server, cfg.Token, cfg.Timeout
+	opts.insecure = cfg.InsecureSkipVerify
+	opts.outDir, opts.source, opts.tailLines, opts.maxBytes = cwd, "all", 200, 64<<10
+	if err := changes.Apply(&opts); err != nil {
+		return opts, parsed, err
+	}
+	positionals := parsed.Args().Slice()
+	if command == "artifacts" {
+		if len(positionals) == 0 {
+			return opts, parsed, errors.New("artifacts requires list or get")
+		}
+		action := positionals[0]
+		if action != "list" && action != "get" {
+			return opts, parsed, fmt.Errorf("unknown artifacts action %q", action)
+		}
+		command += "." + action
+		positionals = positionals[1:]
+	}
+	if err := validateResultArguments(command, positionals, parsed, &opts); err != nil {
+		return opts, parsed, err
 	}
 	if err := cfg.Authenticate(cfg.ProjectRoot); err != nil {
-		return resultCommandOptions{}, nil, err
+		return opts, parsed, err
 	}
-	return resultCommandOptions{
-		server: cfg.Server, token: cfg.Token, timeout: cfg.Timeout,
-		insecure: cfg.InsecureSkipVerify,
-		outDir:   cwd, source: "all", tailLines: 200, maxBytes: 64 << 10,
-	}, args, nil
+	opts.token = cfg.Token
+	return opts, parsed, nil
 }
 
-func parseResultCommandArgs(command string, args []string, opts *resultCommandOptions) error {
-	positionals := make([]string, 0, 2)
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		value := func(name string) (string, error) {
-			if strings.Contains(a, "=") {
-				return strings.SplitN(a, "=", 2)[1], nil
-			}
-			if i+1 >= len(args) {
-				return "", fmt.Errorf("%s requires a value", name)
-			}
-			i++
-			return args[i], nil
-		}
-		var err error
-		switch {
-		case a == "--server" || strings.HasPrefix(a, "--server="):
-			opts.server, err = value("--server")
-		case a == "--timeout" || strings.HasPrefix(a, "--timeout="):
-			var raw string
-			raw, err = value("--timeout")
-			if err == nil {
-				opts.timeout, err = time.ParseDuration(raw)
-			}
-		case a == "--insecure-skip-verify":
-			opts.insecure = true
-		case a == "--json":
-			opts.jsonOutput = true
-		case a == "--out-dir" || strings.HasPrefix(a, "--out-dir="):
-			if command != "artifacts.get" {
-				return errors.New("--out-dir is only valid for artifacts get")
-			}
-			opts.outDir, err = value("--out-dir")
-		case a == "--source" || strings.HasPrefix(a, "--source="):
-			if command != "logs" {
-				return errors.New("--source is only valid for logs")
-			}
-			opts.source, err = value("--source")
-		case a == "--tail" || strings.HasPrefix(a, "--tail="):
-			if command != "logs" {
-				return errors.New("--tail is only valid for logs")
-			}
-			var raw string
-			raw, err = value("--tail")
-			if err == nil {
-				opts.tailLines, err = strconv.Atoi(raw)
-			}
-		case a == "--max-bytes" || strings.HasPrefix(a, "--max-bytes="):
-			if command != "logs" {
-				return errors.New("--max-bytes is only valid for logs")
-			}
-			var raw string
-			raw, err = value("--max-bytes")
-			if err == nil {
-				opts.maxBytes, err = strconv.ParseInt(raw, 10, 64)
-			}
-		case strings.HasPrefix(a, "-"):
-			return fmt.Errorf("unknown option %q", a)
-		default:
-			positionals = append(positionals, a)
-		}
-		if err != nil {
-			return err
+func resultArguments() *argv.Options[resultCommandOptions] {
+	changes := new(argv.Options[resultCommandOptions])
+	changes.Value("server", func(opts *resultCommandOptions, value string) error { opts.server = value; return nil })
+	changes.Value("timeout", func(opts *resultCommandOptions, value string) (err error) {
+		opts.timeout, err = time.ParseDuration(value)
+		return err
+	})
+	changes.Bool(
+		"insecure-skip-verify",
+		func(opts *resultCommandOptions, value bool) error { opts.insecure = value; return nil },
+	)
+	changes.Bool("json", func(opts *resultCommandOptions, value bool) error { opts.jsonOutput = value; return nil })
+	changes.Value("out-dir", func(opts *resultCommandOptions, value string) error { opts.outDir = value; return nil })
+	changes.Value("source", func(opts *resultCommandOptions, value string) error { opts.source = value; return nil })
+	changes.Value("tail", func(opts *resultCommandOptions, value string) (err error) {
+		opts.tailLines, err = strconv.Atoi(value)
+		return err
+	})
+	changes.Value("max-bytes", func(opts *resultCommandOptions, value string) (err error) {
+		opts.maxBytes, err = strconv.ParseInt(value, 10, 64)
+		return err
+	})
+	return changes
+}
+
+func validateResultArguments(
+	command string,
+	positionals []string,
+	parsed *cli.Command,
+	opts *resultCommandOptions,
+) error {
+	if parsed.IsSet("out-dir") && command != "artifacts.get" {
+		return errors.New("--out-dir is only valid for artifacts get")
+	}
+	for _, name := range []string{"source", "tail", "max-bytes"} {
+		if parsed.IsSet(name) && command != "logs" {
+			return fmt.Errorf("--%s is only valid for logs", name)
 		}
 	}
 	if opts.timeout <= 0 {

@@ -11,10 +11,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/urfave/cli/v3"
+
 	projectarchive "github.com/billstark001/latexmk/packages/cli/internal/archive"
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
+	"github.com/billstark001/latexmk/packages/shared/argv"
 )
+
+func compileTestArguments(args []string, opts *compileOptions) (*cli.Command, error) {
+	changes := compileArguments()
+	parsed, err := argv.Parse("compile", args, changes.Flags()...)
+	if err != nil {
+		return parsed, err
+	}
+	return parsed, applyCompileArguments(changes, opts, parsed)
+}
 
 func captureCommandOutput(t *testing.T, fn func() int) (int, string, string) {
 	t.Helper()
@@ -130,7 +142,7 @@ func TestNormalizeCompilePathsUsesGitRootOnlyWhenRequested(t *testing.T) {
 
 func TestParseCompileArgsRejectsUnknownRootMode(t *testing.T) {
 	opts := compileOptions{timeout: time.Minute}
-	if err := parseCompileArgs([]string{"--root-mode", "parent", "main.tex"}, &opts); err == nil {
+	if _, err := compileTestArguments([]string{"--root-mode", "parent", "main.tex"}, &opts); err == nil {
 		t.Fatal("expected invalid root mode error")
 	}
 }
@@ -141,14 +153,19 @@ func TestParseCompileArgsReadsTokenFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts := compileOptions{timeout: time.Minute}
-	cfg, args, err := config.LoadArgs(t.TempDir(), []string{"--token-file", path, "main.tex"})
+	changes := compileArguments()
+	cfg, parsed, err := loadCommand(
+		"compile",
+		t.TempDir(),
+		[]string{"--token-file", path, "main.tex"},
+		changes.Flags()...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := cfg.Authenticate(""); err != nil {
 		t.Fatal(err)
 	}
-	if err := parseCompileArgs(args, &opts); err != nil {
+	if err := applyCompileArguments(changes, &opts, parsed); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Token != "file-token" {
@@ -158,13 +175,13 @@ func TestParseCompileArgsReadsTokenFile(t *testing.T) {
 
 func TestParseCompileArgsUploadMode(t *testing.T) {
 	opts := compileOptions{timeout: time.Minute, uploadMode: "auto"}
-	if err := parseCompileArgs([]string{"--upload-mode", "all", "main.tex"}, &opts); err != nil {
+	if _, err := compileTestArguments([]string{"--upload-mode", "all", "main.tex"}, &opts); err != nil {
 		t.Fatal(err)
 	}
 	if opts.uploadMode != "all" {
 		t.Fatalf("upload mode = %q, want all", opts.uploadMode)
 	}
-	if err := parseCompileArgs([]string{"--upload-mode", "legacy", "main.tex"}, &opts); err == nil {
+	if _, err := compileTestArguments([]string{"--upload-mode", "legacy", "main.tex"}, &opts); err == nil {
 		t.Fatal("expected unsupported upload mode to fail")
 	}
 }
@@ -181,7 +198,7 @@ func TestParseCompileArgsManifestFiles(t *testing.T) {
 		"--include-file=figure.pdf",
 		"main.tex",
 	}
-	if err := parseCompileArgs(args, &opts); err != nil {
+	if _, err := compileTestArguments(args, &opts); err != nil {
 		t.Fatal(err)
 	}
 	if opts.uploadMode != "manifest" || opts.manifestFile != ".latexmk-files" {
@@ -199,7 +216,7 @@ func TestParseCompileArgsWatchOptions(t *testing.T) {
 		watchDebounce: 500 * time.Millisecond,
 		watchMaxWait:  time.Second,
 	}
-	if err := parseCompileArgs(
+	if _, err := compileTestArguments(
 		[]string{"--watch", "--watch-interval", "25ms", "--watch-debounce=75ms", "--watch-max-wait=100ms", "main.tex"},
 		&opts,
 	); err != nil {
@@ -210,18 +227,18 @@ func TestParseCompileArgsWatchOptions(t *testing.T) {
 		t.Fatalf("watch options = %#v", opts)
 	}
 	opts.watchInterval = 0
-	if err := parseCompileArgs([]string{"--watch", "main.tex"}, &opts); err == nil {
+	if _, err := compileTestArguments([]string{"--watch", "main.tex"}, &opts); err == nil {
 		t.Fatal("expected zero watch interval to fail")
 	}
 	opts.watchInterval, opts.watchMaxWait = time.Second, 0
-	if err := parseCompileArgs([]string{"--realtime", "main.tex"}, &opts); err == nil {
+	if _, err := compileTestArguments([]string{"--realtime", "main.tex"}, &opts); err == nil {
 		t.Fatal("expected zero realtime max wait to fail")
 	}
 }
 
 func TestParseCompileArgsDetach(t *testing.T) {
 	opts := compileOptions{timeout: time.Minute}
-	if err := parseCompileArgs([]string{"--detach", "--json", "main.tex"}, &opts); err != nil {
+	if _, err := compileTestArguments([]string{"--detach", "--json", "main.tex"}, &opts); err != nil {
 		t.Fatal(err)
 	}
 	if !opts.detach || !opts.jsonOutput || opts.entry != "main.tex" {
@@ -241,7 +258,7 @@ func TestCapabilityErrorUsesStableAgentCode(t *testing.T) {
 
 func TestParseResultCommandArgs(t *testing.T) {
 	opts := resultCommandOptions{timeout: time.Minute, source: "all", tailLines: 200, maxBytes: 64 << 10}
-	if err := parseResultCommandArgs(
+	if err := resultTestArguments(
 		"logs",
 		[]string{"job_test", "--source", "compiler", "--tail", "25", "--max-bytes", "4096", "--json"},
 		&opts,
@@ -253,7 +270,7 @@ func TestParseResultCommandArgs(t *testing.T) {
 		t.Fatalf("log options = %#v", opts)
 	}
 	opts = resultCommandOptions{timeout: time.Minute}
-	if err := parseResultCommandArgs(
+	if err := resultTestArguments(
 		"artifacts.get",
 		[]string{"job_test", strings.Repeat("a", 32), "--out-dir", "build"},
 		&opts,
@@ -264,13 +281,13 @@ func TestParseResultCommandArgs(t *testing.T) {
 		t.Fatalf("artifact options = %#v", opts)
 	}
 	opts = resultCommandOptions{timeout: time.Minute}
-	if err := parseResultCommandArgs("diagnostics", []string{"job_test", "--json"}, &opts); err != nil {
+	if err := resultTestArguments("diagnostics", []string{"job_test", "--json"}, &opts); err != nil {
 		t.Fatal(err)
 	}
 	if opts.jobID != "job_test" || !opts.jsonOutput {
 		t.Fatalf("diagnostic options = %#v", opts)
 	}
-	if err := parseResultCommandArgs("diagnostics", []string{"job_test", "--tail", "20"}, &opts); err == nil {
+	if err := resultTestArguments("diagnostics", []string{"job_test", "--tail", "20"}, &opts); err == nil {
 		t.Fatal("expected diagnostics to reject log-only options")
 	}
 }
@@ -455,21 +472,70 @@ func TestJobsInvalidArgumentsUseJSONError(t *testing.T) {
 
 func TestParseServerCache(t *testing.T) {
 	opts := compileOptions{timeout: time.Minute, watchInterval: time.Second, watchDebounce: time.Second}
-	if err := parseCompileArgs(
+	if _, err := compileTestArguments(
 		[]string{"--server-cache", "reuse", "--force", "main.tex"},
 		&opts,
 	); err != nil || opts.auxiliary.Server != "reuse" ||
 		!opts.force {
 		t.Fatalf("parse %+v %v", opts, err)
 	}
-	if err := parseCompileArgs(
+	if _, err := compileTestArguments(
 		[]string{"--server-cache=none", "main.tex"},
 		&opts,
 	); err != nil ||
 		opts.auxiliary.Server != "none" {
 		t.Fatal("none override failed")
 	}
-	if err := parseCompileArgs([]string{"--server-cache=invalid", "main.tex"}, &opts); err == nil {
+	if _, err := compileTestArguments([]string{"--server-cache=invalid", "main.tex"}, &opts); err == nil {
 		t.Fatal("accepted invalid cache mode")
+	}
+}
+
+func TestLocalMaintenanceDoesNotReadBrokenConfiguration(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	userRoot := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", userRoot)
+	if err := os.MkdirAll(filepath.Join(userRoot, "latexmk"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(userRoot, "latexmk/config.json"),
+		[]byte("invalid user JSON"),
+		0600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := captureCommandOutput(
+		t,
+		func() int { return run([]string{"latexmk", "init", "--server", "https://latex.example.edu"}) },
+	)
+	if code != 0 {
+		t.Fatalf("init read unrelated broken user config: %d %s %s", code, stdout, stderr)
+	}
+	generated, err := os.ReadFile(".latexmk.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var configuration config.FileConfig
+	if err := json.Unmarshal(generated, &configuration); err != nil {
+		t.Fatal(err)
+	}
+	if len(configuration.Server) != 1 || configuration.Server[0].Value == nil ||
+		*configuration.Server[0].Value != "https://latex.example.edu" {
+		t.Fatalf("init ignored its parsed server: %s", generated)
+	}
+	if err := os.WriteFile(".latexmk.json", []byte("invalid project JSON"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("main.aux", []byte("generated auxiliary"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr = captureCommandOutput(t, func() int { return run([]string{"latexmk", "clean"}) })
+	if code != 0 {
+		t.Fatalf("clean read unrelated broken config: %d %s %s", code, stdout, stderr)
+	}
+	if _, err := os.Stat("main.aux"); !os.IsNotExist(err) {
+		t.Fatalf("clean did not remove its default entry auxiliary: %v", err)
 	}
 }

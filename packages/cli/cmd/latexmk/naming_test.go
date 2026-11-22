@@ -20,6 +20,7 @@ import (
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
 	"github.com/billstark001/latexmk/packages/cli/internal/naming"
+	"github.com/billstark001/latexmk/packages/shared/argv"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
@@ -338,13 +339,14 @@ func TestPDFNamingPrecedenceAndValidation(t *testing.T) {
 	}
 	opts := optionsFromConfig(cfg, false)
 	opts.target = "paper"
-	if err := parseCompileArgs([]string{"--pdf-template=cli-{date}.pdf", "--pdf-keep-last=all"}, &opts); err != nil {
+	parsed, err := compileTestArguments([]string{"--pdf-template=cli-{date}.pdf", "--pdf-keep-last=all"}, &opts)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := applyBuildTarget(
 		&opts,
 		cfg,
-		[]string{"--pdf-template=cli-{date}.pdf", "--pdf-keep-last=all"},
+		parsed,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +355,7 @@ func TestPDFNamingPrecedenceAndValidation(t *testing.T) {
 	}
 	for _, args := range [][]string{{"--name-scope=wrong"}, {"--name-timezone=Unknown/Nowhere"}, {"--pdf-keep-last=0"}, {"--pdf-keep-last=-2"}, {"--pdf-template="}} {
 		candidate := compileOptions{timeout: time.Second}
-		if err := parseCompileArgs(args, &candidate); err == nil {
+		if _, err := compileTestArguments(args, &candidate); err == nil {
 			t.Fatalf("accepted %v", args)
 		}
 	}
@@ -455,7 +457,16 @@ func TestPackTemplatesPreserveLiteralOutputAndExcludeHistory(t *testing.T) {
 	if _, err := os.Stat("literal-{date}.zip"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := parsePackArgs([]string{"--output=a.zip", "--output-template=b.zip"}); err == nil {
-		t.Fatal("accepted conflicting outputs")
+	changes := packArguments()
+	parsed, err := argv.Parse("pack", []string{"--output=a.zip", "--output-template=b.zip"}, changes.Flags()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packing := packOptions{mode: "default"}
+	if err := changes.Apply(&packing); err != nil {
+		t.Fatal(err)
+	}
+	if err := validatePackArguments(packing, parsed); err == nil {
+		t.Fatal("expected mutually exclusive pack outputs to fail")
 	}
 }

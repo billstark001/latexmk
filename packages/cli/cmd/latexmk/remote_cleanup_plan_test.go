@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/billstark001/latexmk/packages/shared/argv"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 )
 
@@ -57,11 +58,25 @@ func TestRemoteCleanupPlanIsPrivateAndContainsNoToken(t *testing.T) {
 }
 
 func TestParseRemoteCleanupRequiresPlanForApply(t *testing.T) {
-	if err := parseRemoteCleanArgs([]string{"--scope", "project", "--yes"}, &remoteCleanOptions{}); err == nil {
-		t.Fatal("expected --yes without a plan to fail")
-	}
-	if err := parseRemoteCleanArgs([]string{"--scope", "project"}, &remoteCleanOptions{}); err != nil {
-		t.Fatal(err)
+	for _, test := range []struct {
+		args    []string
+		invalid bool
+	}{{args: []string{"--scope", "project", "--yes"}, invalid: true}, {args: []string{"--scope", "project"}}} {
+		changes := remoteCleanArguments()
+		parsed, err := argv.Parse("remote-clean", test.args, changes.Flags()...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var options remoteCleanOptions
+		if err := changes.Apply(&options); err != nil {
+			t.Fatal(err)
+		}
+		if parsed.Args().Len() != 0 {
+			t.Fatal("unexpected positional arguments")
+		}
+		if err := validateRemoteCleanOptions(options); (err != nil) != test.invalid {
+			t.Fatalf("validation %q = %v", test.args, err)
+		}
 	}
 }
 

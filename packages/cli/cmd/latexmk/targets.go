@@ -4,8 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
+
+	"github.com/urfave/cli/v3"
 
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
@@ -50,15 +53,6 @@ func selectionClient(opts compileOptions) *client.Client {
 	return c
 }
 
-func hasOption(args []string, flag string) bool {
-	for _, arg := range args {
-		if arg == flag || strings.HasPrefix(arg, flag+"=") {
-			return true
-		}
-	}
-	return false
-}
-
 func implicitTarget(cfg config.Resolved) (string, error) {
 	if cfg.DefaultTarget != "" {
 		if cfg.DefaultTarget == "all" {
@@ -91,14 +85,17 @@ func implicitTarget(cfg config.Resolved) (string, error) {
 	return "", nil
 }
 
-func runAllTargets(args []string, cfg config.Resolved, invocation *nameInvocation) int {
-	if hasOption(args, "--realtime") || hasOption(args, "--watch") || hasOption(args, "--detach") {
+func runAllTargets(cwd string, cfg config.Resolved, opts compileOptions, parsed *cli.Command) int {
+	if opts.realtime || opts.watch || opts.detach {
 		return fail(errors.New("--target all does not support watch or detach"))
+	}
+	if opts.entry != "" {
+		return fail(errors.New("--target cannot be combined with an entry"))
 	}
 	if _, ok := cfg.Targets["all"]; ok {
 		return fail(errors.New("target name \"all\" is reserved"))
 	}
-	var names []string
+	names := make([]string, 0, len(cfg.Targets))
 	for name := range cfg.Targets {
 		names = append(names, name)
 	}
@@ -106,21 +103,25 @@ func runAllTargets(args []string, cfg config.Resolved, invocation *nameInvocatio
 	if len(names) == 0 {
 		return fail(errors.New("no build targets configured"))
 	}
-	var common []string
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--target" {
-			i++
-			continue
-		}
-		if strings.HasPrefix(args[i], "--target=") {
-			continue
-		}
-		common = append(common, args[i])
-	}
 	code := 0
 	for _, name := range names {
-		next := append(append([]string{}, common...), "--target", name)
-		if result := runCompileWithInvocation(next, "", hasOption(args, "--dry-run"), invocation); result != 0 {
+		target := opts
+		target.target = name
+		// Each target owns the mutable option lists it extends during execution.
+		target.includeFiles = slices.Clone(opts.includeFiles)
+		target.ignoreFiles = slices.Clone(opts.ignoreFiles)
+		target.denyFiles = slices.Clone(opts.denyFiles)
+		target.exclude = slices.Clone(opts.exclude)
+		target.resourceIDs = slices.Clone(opts.resourceIDs)
+		target.resourceAddIDs = slices.Clone(opts.resourceAddIDs)
+		target.resourceRemoveIDs = slices.Clone(opts.resourceRemoveIDs)
+		target.controlFiles = slices.Clone(opts.controlFiles)
+		if err := applyBuildTarget(&target, cfg, parsed); err != nil {
+			_ = fail(err)
+			code = 1
+			continue
+		}
+		if result := runResolvedCompile(cwd, cfg, target); result != 0 {
 			code = result
 		}
 	}
@@ -208,7 +209,7 @@ func requestFromOptions(opts compileOptions) protocol.CompileRequest {
 	}
 }
 
-func applyBuildTarget(opts *compileOptions, cfg config.Resolved, args []string) error {
+func applyBuildTarget(opts *compileOptions, cfg config.Resolved, parsed *cli.Command) error {
 	target, ok := cfg.Targets[opts.target]
 	if !ok {
 		return fmt.Errorf("unknown target %q", opts.target)
@@ -217,12 +218,12 @@ func applyBuildTarget(opts *compileOptions, cfg config.Resolved, args []string) 
 		return errors.New("--target cannot be combined with an entry")
 	}
 	opts.entry = target.Entry
-	if !hasOption(args, "--pdf-template") {
+	if !parsed.IsSet("pdf-template") {
 		if target.PDF != "" || target.PDFTemplate != "" {
 			opts.pdfExport, opts.pdfTemplate = target.PDF, target.PDFTemplate
 		}
 	}
-	if target.PDFRetention != nil && !hasOption(args, "--pdf-keep-last") {
+	if target.PDFRetention != nil && !parsed.IsSet("pdf-keep-last") {
 		opts.pdfKeepLast = target.PDFRetention.KeepLast
 	}
 	if cfg.ConfigPath != "" && !filepath.IsAbs(opts.entry) {
@@ -231,7 +232,7 @@ func applyBuildTarget(opts *compileOptions, cfg config.Resolved, args []string) 
 	if target.Engine != "" && !opts.engineExplicit {
 		opts.engine = target.Engine
 	}
-	if target.OutDir != "" && !hasOption(args, "--out-dir") && !hasOption(args, "-output-directory") {
+	if target.OutDir != "" && !parsed.IsSet("out-dir") {
 		opts.outDir = target.OutDir
 	}
 	if target.Resources != nil && !opts.resourceExplicit {

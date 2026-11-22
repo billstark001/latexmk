@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -12,14 +13,14 @@ func TestLazyAuthenticationAndPriority(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("LATEXMK_TOKEN_FILE", filepath.Join(root, "missing"))
 	t.Setenv("LATEXMK_TOKEN", "environment")
-	cfg, _, err := LoadArgs(root, []string{"--token", "explicit", "main.tex"})
+	cfg, err := Load(root, CredentialOptions{Token: "explicit", TokenSet: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := cfg.Authenticate(root); err != nil || cfg.Token != "explicit" {
 		t.Fatalf("token precedence: %v", err)
 	}
-	cfg, _, err = LoadArgs(root, nil)
+	cfg, err = Load(root, CredentialOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +28,7 @@ func TestLazyAuthenticationAndPriority(t *testing.T) {
 		t.Fatalf("environment precedence: %v", err)
 	}
 	t.Setenv("LATEXMK_TOKEN", "")
-	cfg, _, err = LoadArgs(root, []string{"--token-file", "missing"})
+	cfg, err = Load(root, CredentialOptions{TokenFile: "missing", TokenFileSet: true})
 	if err != nil {
 		t.Fatalf("preview tried to read a token file: %v", err)
 	}
@@ -42,7 +43,7 @@ func TestDefaultTokenAtResolvedRoot(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, TokenFileName), []byte("local-token\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, _, err := LoadArgs(t.TempDir(), nil)
+	cfg, err := Load(t.TempDir(), CredentialOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +79,7 @@ func TestDotenvDoesNotMutateProcessOrExecuteShell(t *testing.T) {
 			_ = os.Unsetenv("LATEXMK_TOKEN_FILE")
 		}
 	})
-	cfg, _, err := LoadArgs(root, nil)
+	cfg, err := Load(root, CredentialOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +95,7 @@ func TestDotenvDoesNotMutateProcessOrExecuteShell(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "should-not-exist")); !os.IsNotExist(err) {
 		t.Fatal("shell executed")
 	}
-	cfg, _, err = LoadArgs(root, []string{"--no-env-file"})
+	cfg, err = Load(root, CredentialOptions{EnvFile: new(string)})
 	if err != nil || cfg.EnvPath != "" {
 		t.Fatalf("no env file: %v", err)
 	}
@@ -115,7 +116,10 @@ func TestConfiguredTokenFileRelativeToItsConfig(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(userDir, "token.txt"), []byte("user-file"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := Load(t.TempDir())
+	cfg, err := Load(t.TempDir(), CredentialOptions{})
+	if err == nil {
+		err = cfg.Authenticate("")
+	}
 	if err != nil || cfg.Token != "user-file" || !strings.Contains(cfg.TokenSource, "user config") {
 		t.Fatalf("user credential source: %v", err)
 	}
@@ -133,7 +137,7 @@ func TestLegacyAuxiliaryConfigurationPreserved(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(root, FileName), []byte(test.json), 0600); err != nil {
 			t.Fatal(err)
 		}
-		cfg, _, err := LoadArgs(root, nil)
+		cfg, err := Load(root, CredentialOptions{})
 		if err != nil || cfg.Auxiliary.Local != test.local || cfg.Auxiliary.Server != test.server {
 			t.Fatalf("legacy defaults: %+v %v", cfg.Auxiliary, err)
 		}
@@ -154,7 +158,7 @@ func TestUserPolicyAndDefaultCredentialsAreDeniedBeforeAuthentication(t *testing
 	if err := os.WriteFile(filepath.Join(project, FileName), []byte(`{"engine":"pdflatex"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, _, err := LoadArgs(project, nil)
+	cfg, err := Load(project, CredentialOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +182,7 @@ func TestAuthenticationRejectsWhitespaceAndControlTokens(t *testing.T) {
 	isolateUserConfig(t)
 	root := t.TempDir()
 	for _, token := range []string{"secret with-space", "secret\twith-tab", "secret\x00with-control"} {
-		cfg, _, err := LoadArgs(root, []string{"--token", token})
+		cfg, err := Load(root, CredentialOptions{Token: token, TokenSet: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -196,12 +200,51 @@ func TestAuthenticationRejectsWhitespaceAndControlTokens(t *testing.T) {
 	}
 }
 
-func TestCredentialFlagsRejectEmptyAndUnexpectedValues(t *testing.T) {
+func TestCredentialOptionsRejectExplicitEmptyAndConflictingValues(t *testing.T) {
 	isolateUserConfig(t)
-	for _, args := range [][]string{{"--token="}, {"--token", ""}, {"--token-mode="}, {"--no-env-file=true"}} {
-		if _, _, err := LoadArgs(t.TempDir(), args); err == nil {
-			t.Errorf("accepted malformed credential flags %q", args)
+	for _, options := range []CredentialOptions{{TokenSet: true}, {TokenFileSet: true}, {TokenModeSet: true}, {Token: "secret", TokenFile: "secret-file"}, {TokenSet: true, TokenFileSet: true}} {
+		if _, err := Load(t.TempDir(), options); err == nil {
+			t.Errorf("accepted malformed credential options %+v", options)
 		}
+	}
+}
+
+func TestCredentialOptionsRemainLazyAndPreserveParsedValues(t *testing.T) {
+	isolateUserConfig(t)
+	root := t.TempDir()
+	t.Setenv("LATEXMK_TOKEN", "environment")
+	for _, token := range []string{"explicit", "--json", "a=b", `"quoted"`} {
+		cfg, err := Load(root, CredentialOptions{Token: token})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Token != "" {
+			t.Fatal("configuration loading performed authentication")
+		}
+		if err = cfg.Authenticate(root); err != nil || cfg.Token != token {
+			t.Fatalf("parsed token changed or lost priority: %v", err)
+		}
+	}
+	missing := filepath.Join(root, "missing-secret")
+	cfg, err := Load(
+		root,
+		CredentialOptions{TokenFile: missing, TokenFileSet: true, TokenMode: "none", TokenModeSet: true},
+	)
+	if err != nil {
+		t.Fatalf("loading read a credential file: %v", err)
+	}
+	if !slices.Contains(cfg.DenyFiles, missing) {
+		t.Fatal("explicit credential path was not denied before authentication")
+	}
+	if err = cfg.Authenticate(root); err != nil || cfg.Token != "" {
+		t.Fatalf("none mode attempted explicit credential file access: %v", err)
+	}
+	cfg, err = Load(root, CredentialOptions{TokenMode: "unsupported", TokenModeSet: true})
+	if err != nil {
+		t.Fatalf("token-mode validation moved before authentication: %v", err)
+	}
+	if err = cfg.Authenticate(root); err == nil {
+		t.Fatal("authentication accepted an unsupported token mode")
 	}
 }
 
@@ -212,7 +255,7 @@ func TestConfigurationRejectsCaseVariantLiteralTokensAndNull(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(root, FileName), []byte(payload), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := LoadArgs(root, nil); err == nil {
+		if _, err := Load(root, CredentialOptions{}); err == nil {
 			t.Errorf("accepted configuration %s", payload)
 		}
 	}
@@ -235,7 +278,10 @@ func TestCaseVariantSourceKeysAndSecretSymlinks(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := Load(root)
+	cfg, err := Load(root, CredentialOptions{})
+	if err == nil {
+		err = cfg.Authenticate(root)
+	}
 	if err != nil || cfg.Token != "secret-token" || cfg.Server != "https://test.example" {
 		t.Fatalf("case variant sources: cfg=%+v err=%v", cfg, err)
 	}

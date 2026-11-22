@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 
@@ -23,81 +22,54 @@ type credentials struct {
 	cliSet                                      bool
 }
 
-// Load resolves configuration and authenticates against the resolved project root.
-// Local-only callers should use LoadArgs to keep credential reads deferred.
-func Load(start string) (Resolved, error) {
-	cfg, err := load(start, nil)
-	if err == nil {
-		err = cfg.Authenticate(cfg.ProjectRoot)
-	}
-	return cfg, err
+// CredentialOptions contains already parsed command options. Set markers retain
+// explicit empty values without exposing argv syntax to configuration loading.
+type CredentialOptions struct {
+	EnvFile      *string
+	Token        string
+	TokenFile    string
+	TokenMode    string
+	TokenSet     bool
+	TokenFileSet bool
+	TokenModeSet bool
 }
 
-// LoadArgs removes shared credential flags without opening token files. Authenticate
-// is called only for network operations, after entry/root and CLI options are resolved.
-func LoadArgs(start string, args []string) (Resolved, []string, error) {
-	var envFile *string
-	var token, tokenFile, mode string
-	var hasToken, hasFile bool
-	remaining := make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--" {
-			remaining = append(remaining, args[i:]...)
-			break
-		}
-		key, value, inline := strings.Cut(args[i], "=")
-		switch key {
-		case "--no-env-file":
-			if inline {
-				return Resolved{}, nil, fmt.Errorf("--no-env-file does not accept a value")
-			}
-			empty := ""
-			envFile = &empty
-		case "--token", "--token-file", "--token-mode", "--env-file":
-			if !inline {
-				i++
-				if i >= len(args) {
-					return Resolved{}, nil, fmt.Errorf("%s requires a value", key)
-				}
-				value = args[i]
-			}
-			if value == "" && key != "--env-file" {
-				return Resolved{}, nil, fmt.Errorf("%s requires a nonempty value", key)
-			}
-			switch key {
-			case "--token":
-				token = value
-				hasToken = true
-			case "--token-file":
-				tokenFile = value
-				hasFile = true
-			case "--token-mode":
-				mode = value
-			case "--env-file":
-				envFile = &value
-			}
-		default:
-			remaining = append(remaining, args[i])
-		}
-	}
+func (o CredentialOptions) Validate() error {
+	hasToken, hasFile := o.TokenSet || o.Token != "", o.TokenFileSet || o.TokenFile != ""
 	if hasToken && hasFile {
-		return Resolved{}, nil, fmt.Errorf("--token and --token-file are mutually exclusive")
+		return fmt.Errorf("--token and --token-file are mutually exclusive")
 	}
-	if hasFile && tokenFile == "" {
-		return Resolved{}, nil, fmt.Errorf("--token-file requires a nonempty path")
+	if hasToken && o.Token == "" {
+		return fmt.Errorf("--token requires a nonempty value")
 	}
-	cfg, err := load(start, envFile)
+	if hasFile && o.TokenFile == "" {
+		return fmt.Errorf("--token-file requires a nonempty path")
+	}
+	if o.TokenModeSet && o.TokenMode == "" {
+		return fmt.Errorf("--token-mode requires a nonempty value")
+	}
+	return nil
+}
+
+// Load resolves configuration without opening credential files. Network callers
+// authenticate explicitly after their entry and project root have been resolved.
+func Load(start string, options CredentialOptions) (Resolved, error) {
+	if err := options.Validate(); err != nil {
+		return Resolved{}, err
+	}
+	cfg, err := load(start, options.EnvFile)
 	if err != nil {
-		return cfg, nil, err
+		return cfg, err
 	}
-	cfg.auth.cliToken, cfg.auth.cliFile, cfg.auth.cliSet = token, tokenFile, hasToken || hasFile
-	if mode != "" {
-		cfg.TokenMode = mode
+	cfg.auth.cliToken, cfg.auth.cliFile = options.Token, options.TokenFile
+	cfg.auth.cliSet = options.TokenSet || options.TokenFileSet || options.Token != "" || options.TokenFile != ""
+	if options.TokenMode != "" {
+		cfg.TokenMode = options.TokenMode
 	}
-	if tokenFile != "" {
-		cfg.DenyFiles = append(cfg.DenyFiles, tokenFile)
+	if options.TokenFile != "" {
+		cfg.DenyFiles = append(cfg.DenyFiles, options.TokenFile)
 	}
-	return cfg, remaining, nil
+	return cfg, nil
 }
 
 // Authenticate selects the highest-priority credential for root, opening only

@@ -33,7 +33,7 @@ func TestServerValueSources(t *testing.T) {
 			root := t.TempDir()
 			writeSourceFixture(t, root, FileName, `{"server":`+declaration+`}`)
 			writeSourceFixture(t, root, "address.txt", " https://example.test\n")
-			cfg, err := Load(root)
+			cfg, err := Load(root, CredentialOptions{})
 			if err != nil || cfg.Server != "https://example.test" {
 				t.Fatalf("server = %q, error = %v", cfg.Server, err)
 			}
@@ -79,7 +79,10 @@ func TestSourceErrorsAreRedacted(t *testing.T) {
 			if err := os.Mkdir(filepath.Join(root, "directory"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			_, err := Load(root)
+			cfg, err := Load(root, CredentialOptions{})
+			if err == nil {
+				err = cfg.Authenticate(root)
+			}
 			if err == nil || !strings.Contains(err.Error(), test.message) ||
 				strings.Contains(err.Error(), "DO_NOT_EXPOSE") {
 				t.Fatalf("unexpected error: %v", err)
@@ -96,24 +99,27 @@ func TestDeclaredSourceLayeringAndDotenv(t *testing.T) {
 	writeSourceFixture(t, userDir, "credential", "user-secret")
 	root := t.TempDir()
 	writeSourceFixture(t, root, FileName, `{"token":{"file":"missing"}}`)
-	cfg, err := Load(root)
+	cfg, err := Load(root, CredentialOptions{})
+	if err == nil {
+		err = cfg.Authenticate(root)
+	}
 	if err != nil || cfg.Server != "https://user.test" || cfg.Token != "user-secret" {
 		t.Fatalf("user source resolution failed: %v", err)
 	}
 	writeSourceFixture(t, root, FileName, `{"server":{"env":"DECLARED_SERVER"},"token":{"file":"missing"}}`)
 	writeSourceFixture(t, root, EnvFileName, "DECLARED_SERVER=https://dotenv.test\n")
-	cfg, err = Load(root)
+	cfg, err = Load(root, CredentialOptions{})
 	if err != nil || cfg.Server != "https://dotenv.test" {
 		t.Fatalf("dotenv source failed: %v", err)
 	}
 	t.Setenv("DECLARED_SERVER", "https://process.test")
-	cfg, err = Load(root)
+	cfg, err = Load(root, CredentialOptions{})
 	if err != nil || cfg.Server != "https://process.test" {
 		t.Fatalf("process source failed: %v", err)
 	}
 	t.Setenv("LATEXMK_SERVER", "https://override.test")
 	writeSourceFixture(t, root, FileName, `{"server":{"file":"missing"}}`)
-	cfg, err = Load(root)
+	cfg, err = Load(root, CredentialOptions{})
 	if err != nil || cfg.Server != "https://override.test" {
 		t.Fatalf("server override opened unused file: %v", err)
 	}
@@ -123,7 +129,7 @@ func TestDeclaredCredentialLazyResolutionAndDeny(t *testing.T) {
 	isolateUserConfig(t)
 	root := t.TempDir()
 	writeSourceFixture(t, root, FileName, `{"token":{"file":"custom-secret"}}`)
-	cfg, _, err := LoadArgs(root, nil)
+	cfg, err := Load(root, CredentialOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,18 +149,24 @@ func TestDeclaredCredentialLazyResolutionAndDeny(t *testing.T) {
 	}
 	writeSourceFixture(t, root, FileName, `{"token":{"env":"DECLARED_TOKEN"}}`)
 	writeSourceFixture(t, root, EnvFileName, "DECLARED_TOKEN=dotenv-secret\n")
-	cfg, err = Load(root)
+	cfg, err = Load(root, CredentialOptions{})
+	if err == nil {
+		err = cfg.Authenticate(root)
+	}
 	if err != nil || cfg.Token != "dotenv-secret" {
 		t.Fatalf("token dotenv source failed: %v", err)
 	}
 	t.Setenv("DECLARED_TOKEN", "process-secret")
-	cfg, err = Load(root)
+	cfg, err = Load(root, CredentialOptions{})
+	if err == nil {
+		err = cfg.Authenticate(root)
+	}
 	if err != nil || cfg.Token != "process-secret" {
 		t.Fatalf("token process source failed: %v", err)
 	}
 	writeSourceFixture(t, root, FileName, `{"token":{"file":"missing"}}`)
-	for _, args := range [][]string{{"--token", "cli-secret"}, {"--token-mode", "none"}} {
-		cfg, _, err = LoadArgs(root, args)
+	for _, options := range []CredentialOptions{{Token: "cli-secret", TokenSet: true}, {TokenMode: "none", TokenModeSet: true}} {
+		cfg, err = Load(root, options)
 		if err != nil {
 			t.Fatal(err)
 		}

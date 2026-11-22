@@ -41,7 +41,8 @@ func TestResourceSelectionAddsAndRemovesAfterTargetDefaults(t *testing.T) {
 		"--prepare-timeout",
 		"2m",
 	}
-	if err := parseCompileArgs(args, &opts); err != nil {
+	parsed, err := compileTestArguments(args, &opts)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := applyBuildTarget(
@@ -49,7 +50,7 @@ func TestResourceSelectionAddsAndRemovesAfterTargetDefaults(t *testing.T) {
 		config.Resolved{
 			Targets: map[string]config.Target{"paper": {Entry: "main.tex", Resources: []string{"body", "algorithm"}}},
 		},
-		args,
+		parsed,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -389,5 +390,22 @@ func TestEnvironmentResourceFilesRejectsInvalidOrChangedDestinations(t *testing.
 	}
 	if _, err := environmentResourceFiles(changed, captured); err == nil {
 		t.Fatal("local capture with different environment bytes was reused")
+	}
+}
+
+func TestUnknownResourceActionRetainsParsedJSONEnvelope(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	code, stdout, stderr := captureCommandOutput(
+		t,
+		func() int { return run([]string{"latexmk", "resources", "bad", "--json"}) },
+	)
+	var envelope agentJSONEnvelope
+	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+		t.Fatalf("semantic action error lost JSON: code=%d stdout=%s stderr=%s err=%v", code, stdout, stderr, err)
+	}
+	if code == 0 || envelope.OK || envelope.Command != "resources.bad" || envelope.Error == nil ||
+		envelope.Error.Code != "invalid_arguments" {
+		t.Fatalf("unexpected semantic failure: %s", stdout)
 	}
 }

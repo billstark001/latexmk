@@ -3,13 +3,11 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -32,34 +30,8 @@ var (
 )
 
 func main() {
-	if len(os.Args) > 1 {
-		if len(os.Args) == 3 && os.Args[1] == "resource-font-scan" {
-			maxBytes, err := strconv.ParseInt(os.Args[2], 10, 64)
-			if err != nil || maxBytes <= 0 {
-				fmt.Fprintln(os.Stderr, "invalid font scan limit")
-				os.Exit(2)
-			}
-			if err = resources.ScanFont(os.Stdin, os.Stdout, maxBytes); err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
-			}
-			return
-		}
-		if len(os.Args) != 4 || os.Args[1] != "compile-worker" {
-			fmt.Fprintln(os.Stderr, "invalid server invocation")
-			os.Exit(2)
-		}
-		maxBytes, err := strconv.ParseInt(os.Args[2], 10, 64)
-		maxFiles, parseErr := strconv.Atoi(os.Args[3])
-		if err != nil || parseErr != nil || maxBytes <= 0 || maxFiles <= 0 {
-			fmt.Fprintln(os.Stderr, "invalid worker limits")
-			os.Exit(2)
-		}
-		if err := sandbox.Worker(os.Stdin, os.Stdout, maxBytes, maxFiles); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
+	if handled, code := runInternal(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); handled {
+		os.Exit(code)
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
