@@ -51,7 +51,7 @@ def write_json(path, value):
     os.replace(staged, path)
 
 
-def docker(*args):
+def docker(*args, merge_output=False):
     try:
         result = subprocess.run(["docker", *args], capture_output=True, text=True, check=False, timeout=30)
     except subprocess.TimeoutExpired:
@@ -60,7 +60,65 @@ def docker(*args):
     if result.returncode:
         # Do not include argv: `docker run` contains the disposable API token.
         raise RuntimeError(f"docker {args[0]} failed ({result.returncode}): {result.stderr.strip()}")
-    return (result.stdout + result.stderr).strip()
+    return (result.stdout + result.stderr if merge_output else result.stdout).strip()
+
+
+
+def timestamp():
+    return {"monotonic_ns": time.monotonic_ns(), "time_ns": time.time_ns()}
+
+
+def journal_save(output, case, sample_index, save):
+    # Keep the measured path bounded: never serialize the growing raw result here.
+    record = {"case": case["run_index"], "sample": sample_index, "save": save}
+    with (output / "samples.jsonl").open("a", encoding="utf-8") as journal:
+        journal.write(json.dumps(record, separators=(",", ":")) + "\n")
+
+
+def prepare_output(output):
+    output.mkdir(parents=True, exist_ok=True)
+    previous = [name for pattern in ("raw.json", "summary.md", "samples.jsonl", "server.log", "case-*.log")
+                for name in output.glob(pattern)]
+    if previous:
+        raise RuntimeError("output contains earlier benchmark results; choose a new --output directory")
+
+
+def cleanup_containers(namespace):
+    if not re.fullmatch(r"latexmk-realtime-diagnostics-[a-zA-Z0-9-]+", namespace):
+        return ["refusing cleanup of an invalid diagnostic namespace"]
+    errors = []
+    for label in ("latexmk.runner.namespace=", "latexmk.diagnostics.namespace="):
+        try:
+            identifiers = docker("ps", "-aq", "--filter", "label=" + label + namespace).split()
+            if identifiers:
+                docker("rm", "--force", "-v", *identifiers)
+        except Exception as error:
+            errors.append("cleanup: " + str(error))
+    return errors
+
+
+def cleanup_run(output, run_id):
+    """CI fallback, including discovery when raw.json is absent or unreadable."""
+    namespaces, errors = set(), []
+    path = output / "raw.json"
+    if path.exists():
+        try:
+            metadata = json.loads(path.read_text())["metadata"]
+            if metadata.get("ci_run_id") == run_id and metadata.get("runner_namespace"):
+                namespaces.add(metadata["runner_namespace"])
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            errors.append("read cleanup metadata: " + str(error))
+    try:
+        identifiers = docker("ps", "-aq", "--filter", "label=latexmk.diagnostics.run=" + run_id).split()
+        for identifier in identifiers:
+            namespace = docker("inspect", "--format", '{{index .Config.Labels "latexmk.diagnostics.namespace"}}', identifier)
+            if namespace:
+                namespaces.add(namespace)
+    except Exception as error:
+        errors.append("discover cleanup namespace: " + str(error))
+    for namespace in namespaces:
+        errors.extend(cleanup_containers(namespace))
+    return errors
 
 
 def read_events(log, prefix=""):
@@ -134,7 +192,7 @@ def snapshot_id(project_id, static_files, data):
 def atomic_save(entry, staged, data):
     staged.write_bytes(data)
     os.replace(staged, entry)
-    return {"monotonic_ns": time.monotonic_ns(), "time_ns": time.time_ns()}
+    return timestamp()
 
 
 def wait_publication(process, output, expected, marker, pointer=None):
@@ -150,7 +208,7 @@ def wait_publication(process, output, expected, marker, pointer=None):
                 publication = json.loads(pointer.read_bytes())
                 last_seen = publication["snapshotId"]
                 if last_seen == expected:
-                    detected = {"monotonic_ns": time.monotonic_ns(), "time_ns": time.time_ns()}
+                    detected = timestamp()
                     artifacts = [item for item in publication["artifacts"] if item["path"] == "main.pdf"]
                     if len(artifacts) != 1:
                         raise RuntimeError("publication does not contain exactly one main.pdf")
@@ -234,13 +292,16 @@ def collect_case(args, case, base, token, asset, checkpoint):
                                 save = atomic_save(entry, staged, data)
                                 save["snapshot_id"] = snapshot_id(case["project_id"], static_files, data)
                                 sample["saves"].append(save)
-                                checkpoint()
+                                journal_save(args.output, case, len(case["samples"]), save)
                             published, _, detected = wait_publication(
                                 process, output, sample["saves"][-1]["snapshot_id"], marker, pointer)
                             if published["sessionId"] != case["session_id"] or published["revision"] <= previous_revision:
                                 raise RuntimeError("measured saves crossed sessions or did not advance the revision")
                             job = api(base, token, "/v1/jobs/" + published["jobId"])
-                            if job["status"] != "succeeded" or job["snapshotId"] != sample["saves"][-1]["snapshot_id"]:
+                            if (job["status"] != "succeeded" or job["snapshotId"] != sample["saves"][-1]["snapshot_id"]
+                                    or job.get("id") != published["jobId"] or job.get("sessionId") != case["session_id"]
+                                    or job.get("revision") != published["revision"] or job.get("projectId") != case["project_id"]
+                                    or not isinstance(job.get("result"), dict) or job["result"].get("success") is not True):
                                 raise RuntimeError("published revision does not match the successful server job")
                             sample.update({"status": "succeeded", "job": job, "published": detected,
                                            "last_save_to_preview_ms": (detected["monotonic_ns"] - sample["saves"][-1]["monotonic_ns"]) / 1e6,
@@ -249,7 +310,12 @@ def collect_case(args, case, base, token, asset, checkpoint):
                             checkpoint()
                         print(f"Measured {case['case']} block {case['block']} {workload}: {case['sample_count']} samples", flush=True)
                 finally:
-                    stop_cli(process)
+                    try:
+                        stop_cli(process)
+                    except Exception as error:
+                        case.setdefault("cleanup_errors", []).append(str(error))
+            if case.get("cleanup_errors"):
+                raise RuntimeError("CLI cleanup failed; see raw case cleanup_errors")
             if process.returncode:
                 raise RuntimeError(f"CLI exited with status {process.returncode}; see {case['log']}")
         case["status"] = "succeeded"
@@ -257,10 +323,16 @@ def collect_case(args, case, base, token, asset, checkpoint):
         case["status"], case["error"] = "failed", str(error)
         if case["samples"] and case["samples"][-1]["status"] == "running":
             case["samples"][-1]["status"] = "failed"
+            case["samples"][-1]["ended"] = timestamp()
         raise
     finally:
+        case["ended"] = timestamp()
+        case["cli_log_complete"] = False
         if log_path.exists():
             case["cli_events"], case["diagnostic_errors"] = read_events(log_path.read_text(encoding="utf-8", errors="replace"), DIAGNOSTIC_PREFIX)
+            case["cli_log_complete"] = not case["diagnostic_errors"] and not case.get("cleanup_errors")
+        else:
+            case["diagnostic_errors"] = ["CLI log is missing"]
         checkpoint()
 
 
@@ -271,8 +343,24 @@ def percentile_summary(values):
     return {"n": len(ordered), "p50": statistics.median(ordered), "p95": ordered[math.ceil(0.95 * len(ordered)) - 1]}
 
 
-def enrich_samples(cases, server_events):
-    """Join admissions, attempts and executions without counting a cancelled pending job as executed."""
+def committed_revisions(events):
+    commits, jobs = {}, {}
+    for event in events:
+        if event.get("event") != "commit" or event.get("ok") is not True:
+            continue
+        revision, job = event.get("revision"), event.get("job_id")
+        if type(revision) is not int or revision < 1 or not isinstance(job, str) or not job:
+            raise ValueError("invalid successful commit diagnostics")
+        if revision in commits and commits[revision]["job_id"] != job:
+            raise ValueError("conflicting jobs for one committed revision")
+        if job in jobs and jobs[job] != revision:
+            raise ValueError("one job belongs to conflicting revisions")
+        commits[revision], jobs[job] = event, revision
+    return commits
+
+
+def enrich_samples(cases, server_events, *, server_logs_complete):
+    """Keep counts for failed samples; only validated publications receive stage timings."""
     stages = {event["job_id"]: event for event in server_events
               if event.get("msg") == "compile job stages" and event.get("job_id")}
     started = {event["job_id"] for event in server_events
@@ -280,36 +368,66 @@ def enrich_samples(cases, server_events):
     errors = []
     for case in cases:
         events = [event for event in case.get("cli_events", []) if event.get("session_id") == case.get("session_id")]
-        commits = {event["revision"]: event for event in events
-                   if event.get("event") == "commit" and event.get("ok") and "revision" in event}
+        try:
+            commits = committed_revisions(events)
+        except ValueError as error:
+            errors.append(f"{case['case']}: {error}")
+            continue
+        client_complete = case.get("cli_log_complete") is True
+        if case["samples"] and (not client_complete or not server_logs_complete):
+            errors.append(f"{case['case']}: incomplete CLI or server logs; counts are unknown")
         for sample in case["samples"]:
-            if sample["status"] != "succeeded":
-                continue
             try:
-                job = sample["job"]
-                admitted = [commits[revision] for revision in range(sample["before_revision"] + 1, job["revision"] + 1)]
-                if not admitted or admitted[-1]["job_id"] != job["id"]:
-                    raise ValueError("final admission does not match the published job")
-                identifiers = list(dict.fromkeys(event["job_id"] for event in admitted))
+                final_revision = sample["job"]["revision"] if sample["status"] == "succeeded" else max(commits, default=sample["before_revision"])
+                admitted = [commits[revision] for revision in range(sample["before_revision"] + 1, final_revision + 1)]
+                identifiers = [event["job_id"] for event in admitted]
                 executions = [identifier for identifier in identifiers if identifier in started]
-                if job["id"] not in executions or any(identifier not in stages for identifier in executions):
+                boundary = sample.get("published", sample.get("ended", case.get("ended", {}))).get("time_ns")
+                submits = {event["attempt"] for event in events if event.get("event") == "submit_start" and "attempt" in event
+                           and sample["saves"] and boundary is not None
+                           and sample["saves"][0]["time_ns"] <= event["time_ns"] <= boundary}
+                if sample["status"] == "succeeded" and (not admitted or admitted[-1]["job_id"] != sample["job"]["id"]):
+                    raise ValueError("final admission does not match the published job")
+                sample.update({"admitted_job_ids": identifiers, "executed_job_ids": executions,
+                               "submit_attempt_count": len(submits) if client_complete else None,
+                               "submit_count": len(identifiers) if client_complete else None,
+                               "execution_count": len(executions) if server_logs_complete else None,
+                               "counts_status": "complete" if client_complete and server_logs_complete else "partial"})
+                if not server_logs_complete or not client_complete:
+                    sample["analysis_error"] = "incomplete CLI or server logs"
+                    continue
+                if sample["status"] != "succeeded":
+                    continue
+                job = sample["job"]
+                if job["id"] not in executions:
+                    sample["execution_count"], sample["counts_status"] = None, "partial"
                     raise ValueError("missing execution diagnostics")
+                if any(identifier not in stages for identifier in executions):
+                    raise ValueError("missing execution diagnostics")
+                for event in admitted:
+                    stage = stages.get(event["job_id"])
+                    if stage is not None and (stage.get("session_id") != case["session_id"] or stage.get("revision") != event["revision"]):
+                        sample["counts_status"] = "partial"
+                        raise ValueError("execution diagnostics belong to a different session or revision")
                 attempt = admitted[-1]["attempt"]
                 related = [event for event in events if event.get("attempt") == attempt or event.get("job_id") == job["id"]]
-                client = {event["event"]: event["duration_ns"] / 1e6 for event in related
-                          if event.get("event") in CLIENT_STAGES and event.get("ok") and "duration_ns" in event}
+                client = {}
+                for event in related:
+                    if event.get("event") in CLIENT_STAGES and event.get("ok") is True and "duration_ns" in event:
+                        duration = event["duration_ns"]
+                        if type(duration) not in (int, float) or not math.isfinite(duration) or duration < 0:
+                            raise ValueError("invalid client duration diagnostics")
+                        client[event["event"]] = client.get(event["event"], 0) + duration / 1e6
+                server = {key: stages[job["id"]][key] for key in SERVER_STAGES if key in stages[job["id"]]}
+                if any(type(value) not in (int, float) or not math.isfinite(value) or value < 0 for value in server.values()):
+                    raise ValueError("invalid server duration diagnostics")
                 if "download_publish" not in client:
                     raise ValueError("missing final publication diagnostics")
-                submits = [event for event in events if event.get("event") == "submit_start"
-                           and sample["saves"][0]["time_ns"] <= event["time_ns"] <= sample["published"]["time_ns"]]
                 final_submit = next((event for event in related if event.get("event") == "submit_start"), None)
                 if final_submit is not None and final_submit["time_ns"] >= sample["saves"][-1]["time_ns"]:
                     client["last_save_to_submit_start"] = (final_submit["time_ns"] - sample["saves"][-1]["time_ns"]) / 1e6
-                sample.update({"admitted_job_ids": identifiers, "executed_job_ids": executions,
-                               "submit_attempt_count": len(submits), "submit_count": len(identifiers),
-                               "execution_count": len(executions), "client_ms": client,
-                               "server_ms": {key: stages[job["id"]][key] for key in SERVER_STAGES if key in stages[job["id"]]}})
-            except (KeyError, ValueError) as error:
+                sample.update({"client_ms": client, "server_ms": server})
+            except (KeyError, ValueError, TypeError) as error:
                 sample["analysis_error"] = str(error)
                 errors.append(f"{case['case']}: {error}")
     return errors
@@ -324,15 +442,16 @@ def summarize(cases):
     summaries = []
     for (fixture, debounce, mode, workload), observed in sorted(groups.items()):
         samples = [sample for sample in observed if sample["status"] == "succeeded"]
-        analyzed = [sample for sample in samples if "analysis_error" not in sample and "submit_count" in sample]
+        analyzed = [sample for sample in samples if "analysis_error" not in sample and "client_ms" in sample]
+        counted = [sample for sample in observed if sample.get("counts_status") == "complete"]
         row = {"fixture": fixture, "debounce_ms": debounce, "mode": mode, "workload": workload,
-               "n": len(samples), "failed_samples": len(observed) - len(samples), "analyzed_samples": len(analyzed),
+               "n": len(samples), "failed_samples": len(observed) - len(samples), "analyzed_samples": len(analyzed), "counted_samples": len(counted),
                "last_save_to_preview_ms": percentile_summary([sample["last_save_to_preview_ms"] for sample in samples]),
                "first_save_to_preview_ms": percentile_summary([sample["first_save_to_preview_ms"] for sample in samples]),
                "workspace_reuse_total": sum(bool(sample["job"].get("result", {}).get("workspaceReuse")) for sample in samples)}
         for metric in ("submit_attempt_count", "submit_count", "execution_count"):
-            row[metric + "_total"] = sum(sample[metric] for sample in analyzed)
-            row[metric + "_per_sample"] = percentile_summary([sample[metric] for sample in analyzed])
+            row[metric + "_total"] = sum(sample[metric] for sample in counted) if counted else None
+            row[metric + "_per_sample"] = percentile_summary([sample[metric] for sample in counted])
         for side in ("client_ms", "server_ms"):
             names = sorted({name for sample in analyzed for name in sample[side]})
             row[side] = {name: percentile_summary([sample[side][name] for sample in analyzed if name in sample[side]]) for name in names}
@@ -344,6 +463,10 @@ def metric(stats, percentile="p50"):
     return f"{stats[percentile]:.1f}" if stats is not None else "—"
 
 
+def display_count(value):
+    return str(value) if value is not None else "—"
+
+
 def markdown(raw):
     metadata = raw["metadata"]
     lines = ["# Realtime diagnostics", "", f"Status: **{raw['status']}**. Commit `{metadata.get('commit', 'unknown')}`.",
@@ -353,17 +476,18 @@ def markdown(raw):
              "across two blocks, each with new sessions and an untimed warm-up. Bursts use three atomic saves 230 ms apart.",
              "Save → preview ends at the first matching current.json (5 ms polling); PDF hash/text checks follow timing.",
              "P50 is the median; p95 uses nearest rank. Durations are milliseconds. Submits are admitted revisions;",
-             "executions count jobs that actually started, excluding cancelled pending revisions. Attempts include no-op capture attempts.", "",
-             "| Fixture | Saves | Debounce | Mode | n | Analyzed | Last p50 | Last p95 | First p50 | First p95 | Submits | Executions | Attempts | Reused |",
-             "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
+             "executions count jobs that actually started, excluding cancelled pending revisions. Attempts include no-op capture attempts.",
+             "Counts include failed samples with complete admission logs; latency n and stage analysis only include successful previews.", "",
+             "| Fixture | Saves | Debounce | Mode | n | Failed | Counted | Analyzed | Last p50 | Last p95 | First p50 | First p95 | Submits | Executions | Attempts | Reused |",
+             "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for row in raw.get("summaries", []):
         last, first = row["last_save_to_preview_ms"], row["first_save_to_preview_ms"]
-        lines.append(f"| {row['fixture']} | {row['workload']} | {row['debounce_ms']} | {row['mode']} | {row['n']} | {row['analyzed_samples']} | "
+        lines.append(f"| {row['fixture']} | {row['workload']} | {row['debounce_ms']} | {row['mode']} | {row['n']} | {row['failed_samples']} | {row['counted_samples']} | {row['analyzed_samples']} | "
                      f"{metric(last)} | {metric(last, 'p95')} | {metric(first)} | {metric(first, 'p95')} | "
-                     f"{row['submit_count_total']} | {row['execution_count_total']} | {row['submit_attempt_count_total']} | {row['workspace_reuse_total']} |")
+                     f"{display_count(row['submit_count_total'])} | {display_count(row['execution_count_total'])} | {display_count(row['submit_attempt_count_total'])} | {row['workspace_reuse_total']} |")
     lines += ["", "Stage durations (p50 / p95); raw.json gives each stage's sample count.", "",
               "| Fixture | Saves | Debounce | Mode | Capture | Upload | Commit | Queue | Execute | Runner | Overhead | Archive | Cache publish | Download/publish |",
-              "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
+              "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
     selected = [("client_ms", name) for name in ("capture", "upload", "commit")]
     selected += [("server_ms", name) for name in ("queue_wait_ms", "execution_ms", "compile_runner_ms",
                                                   "execute_overhead_ms", "result_archive_ms", "cache_publish_ms")]
@@ -372,7 +496,7 @@ def markdown(raw):
         values = [row[side].get(name) for side, name in selected]
         rendered = [metric(value) + " / " + metric(value, "p95") for value in values]
         lines.append(f"| {row['fixture']} | {row['workload']} | {row['debounce_ms']} | {row['mode']} | " + " | ".join(rendered) + " |")
-    lines += ["", "All raw CLI/server events, intermediate execution timings and failed samples are in raw.json.",
+    lines += ["", "All raw CLI/server events, intermediate execution timings and failed samples are in raw.json; samples.jsonl journals saves without rewriting raw.json in the measured window.",
               "Compile runner (including artifact collection) and execution overhead subdivide server execution and must not be added to it.",
               "Server execution can include a failed warm attempt and a cold retry; these timings do not isolate pure TeX or container startup."]
     for error in raw.get("errors", []):
@@ -381,9 +505,19 @@ def markdown(raw):
 
 
 def metadata(args):
-    commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
-    return {"commit": commit.stdout.strip() or os.getenv("GITHUB_SHA", "unknown"), "image": args.image,
-            "base_image": args.base_image, "cli": file_record(args.cli.name, args.cli.read_bytes()),
+    commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False, timeout=10)
+    checkout = commit.stdout.strip() or os.getenv("GITHUB_SHA", "unknown")
+    version = subprocess.run([str(args.cli), "--version"], capture_output=True, text=True, check=False, timeout=10)
+    if version.returncode:
+        raise RuntimeError("CLI version probe failed")
+    match = re.search(r"(?m)^commit: (.+)$", version.stdout)
+    cli = {**file_record(args.cli.name, args.cli.read_bytes()), "version_output": version.stdout,
+           "commit": match.group(1).strip() if match else "unknown"}
+    expected = args.expected_commit
+    if expected and (checkout != expected or cli["commit"] != expected):
+        raise RuntimeError("checkout or CLI commit differs from --expected-commit")
+    return {"commit": checkout, "image": args.image, "expected_commit": expected,
+            "base_image": args.base_image or args.image, "cli": cli,
             "host": {"system": platform.system(), "release": platform.release(), "machine": platform.machine(),
                      "python": platform.python_version(), "cpu_count": os.cpu_count()},
             "runner": {key: os.environ[key] for key in ("RUNNER_NAME", "RUNNER_OS", "RUNNER_ARCH", "RUNNER_ENVIRONMENT", "ImageOS", "ImageVersion",
@@ -393,33 +527,47 @@ def metadata(args):
 
 
 def run_benchmark(args):
-    args.output.mkdir(parents=True, exist_ok=True)
-    raw = {"schemaVersion": 1, "status": "running", "started_at": utc_now(), "metadata": metadata(args),
-           "cases": [], "errors": []}
+    prepare_output(args.output)
+    raw = {"schemaVersion": 1, "status": "running", "started_at": utc_now(),
+           "metadata": {"image": args.image, "base_image": args.base_image or args.image,
+                        "host": {"system": platform.system(), "machine": platform.machine()}, "runner": {}},
+           "cases": [], "errors": [], "server_logs_complete": False}
     checkpoint = lambda: write_json(args.output / "raw.json", raw)
     name = "latexmk-realtime-diagnostics-" + secrets.token_hex(6)
     namespace = name
-    raw["metadata"].update(controller_container=name, runner_namespace=namespace)
+    run_id = "-".join((os.environ["GITHUB_RUN_ID"], os.getenv("GITHUB_RUN_ATTEMPT", "1"))) if os.getenv("GITHUB_RUN_ID") else name
+    raw["metadata"].update(controller_container=name, runner_namespace=namespace, ci_run_id=run_id)
     checkpoint()
     token = secrets.token_hex(32)
-    started = False
+    controller_requested = False
     try:
+        raw["metadata"].update(metadata(args))
         image = json.loads(docker("image", "inspect", args.image))[0]
         raw["metadata"]["image_details"] = {key: image.get(key) for key in ("Id", "RepoDigests", "Architecture", "Os", "Created")}
+        labels = image.get("Config", {}).get("Labels") or {}
+        raw["metadata"]["image_details"]["labels"] = {key: labels[key] for key in
+            ("org.opencontainers.image.revision", "org.opencontainers.image.base.name", "latexmk.server.sha256") if key in labels}
+        expected = args.expected_commit
+        if expected and labels.get("org.opencontainers.image.revision") != expected:
+            raise RuntimeError("candidate image revision differs from --expected-commit")
         raw["metadata"]["docker"] = json.loads(docker("info", "--format", "{{json .}}"))
         # Only portable, non-sensitive host fields belong in the artifact.
         raw["metadata"]["docker"] = {key: raw["metadata"]["docker"].get(key) for key in
                                       ("ServerVersion", "KernelVersion", "OperatingSystem", "OSType", "Architecture", "NCPU", "MemTotal", "CgroupVersion")}
         checkpoint()
-        docker("run", "-d", "--platform", "linux/amd64", "--name", name, "--user", "0:0", "-p", "127.0.0.1::8080",
+        controller_requested = True
+        docker("run", "-d", "--platform", "linux/amd64", "--name", name,
+               "--label", "latexmk.diagnostics.run=" + run_id, "--label", "latexmk.diagnostics.namespace=" + namespace, "--user", "0:0", "-p", "127.0.0.1::8080",
                "--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,exec,size=512m,mode=1777", "-v", "/var/run/docker.sock:/var/run/docker.sock",
                "-v", "/diagnostic-state", "-e", "LATEXMK_AUTH_MODE=token", "-e", "LATEXMK_API_TOKEN=" + token,
                "-e", "LATEXMK_REALTIME_DIAGNOSTICS=1", "-e", "LATEXMK_ENGINES=xelatex", "-e", "LATEXMK_MAX_CONCURRENT_COMPILES=1", "-e", "LATEXMK_COMPILE_TIMEOUT=60s",
                "-e", "LATEXMK_STATE_DIR=/diagnostic-state", "-e", "LATEXMK_RUNNER_IMAGE=" + args.image,
                "-e", "LATEXMK_RUNNER_NAMESPACE=" + namespace, args.image)
-        started = True
         base = "http://127.0.0.1:" + docker("port", name, "8080/tcp").rsplit(":", 1)[1]
         raw["metadata"]["server"] = wait_ready(base, token)
+        if expected and raw["metadata"]["server"].get("commit") != expected:
+            raise RuntimeError("controller commit differs from --expected-commit")
+        checkpoint()
         asset = png_asset()
         matrix = [(fixture, debounce, mode) for fixture in ("tiny", "graphic-bib")
                   for debounce, mode in ((500, "fresh"), (150, "reuse"), (150, "fresh"), (500, "reuse"))]
@@ -436,26 +584,40 @@ def run_benchmark(args):
     except BaseException as error:
         raw["errors"].append(str(error) or type(error).__name__)
     finally:
-        if started:
+        if controller_requested:
+            controller_stopped = False
+            # Terminal jobs are visible before cache publication and stage logging finish.
+            # Graceful stop drains that work before taking the final log snapshot.
             try:
-                log = docker("logs", name)
+                docker("stop", "--time", "20", name)
+                state = json.loads(docker("inspect", "--format", "{{json .State}}", name))
+                raw["metadata"]["controller_state"] = state
+                controller_stopped = (state.get("Status") == "exited" and state.get("Running") is False
+                                      and state.get("ExitCode") == 0 and state.get("OOMKilled") is False)
+                if not controller_stopped:
+                    raw["errors"].append("controller exited abnormally; server counts are unknown")
+            except Exception as error:
+                raw["errors"].append("stop controller: " + str(error))
+            try:
+                log = docker("logs", name, merge_output=True)
                 (args.output / "server.log").write_text(log + "\n", encoding="utf-8")
                 raw["server_events"], parse_errors = read_events(log)
                 raw["errors"].extend("server log: " + error for error in parse_errors)
+                raw["server_logs_complete"] = controller_stopped and bool(raw["server_events"]) and not parse_errors
             except Exception as error:
                 raw["errors"].append(str(error))
-        # Even a failed docker run may have created a container. Namespace cleanup is bounded and unconditional.
-        for command in (("rm", "--force", "-v", name), ("ps", "-aq", "--filter", "label=latexmk.runner.namespace=" + namespace)):
-            try:
-                remaining = docker(*command)
-                if command[0] == "ps" and remaining:
-                    docker("rm", "--force", *remaining.split())
-            except Exception as error:
-                raw["errors"].append("cleanup: " + str(error))
-        raw["errors"].extend(enrich_samples(raw["cases"], raw.get("server_events", [])))
+            raw["errors"].extend(cleanup_containers(namespace))
+        try:
+            raw["errors"].extend(enrich_samples(raw["cases"], raw.get("server_events", []), server_logs_complete=raw["server_logs_complete"]))
+        except Exception as error:
+            raw["errors"].append("analyze samples: " + str(error))
         for case in raw["cases"]:
-            raw["errors"].extend(f"{case['log']}: {error}" for error in case.get("diagnostic_errors", []))
-        raw["summaries"] = summarize(raw["cases"])
+            raw["errors"].extend(f"{case['log']}: {error}" for error in case.get("diagnostic_errors", []) + case.get("cleanup_errors", []))
+        try:
+            raw["summaries"] = summarize(raw["cases"])
+        except Exception as error:
+            raw["errors"].append("summarize samples: " + str(error))
+            raw["summaries"] = []
         raw["status"] = "failed" if raw["errors"] else "succeeded"
         raw["finished_at"] = utc_now()
         checkpoint()
@@ -485,14 +647,18 @@ def main():
     parser.add_argument("--cli", type=Path, default=Path("packages/cli/dist/latexmk"))
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--samples", type=sample_count, default=10)
+    parser.add_argument("--expected-commit", help="Require checkout, CLI, candidate label and controller to match this full commit")
     args = parser.parse_args()
-    args.cli = args.cli.resolve(strict=True)
+    args.cli = args.cli.resolve()
 
     def interrupted(_signal, _frame):
         raise KeyboardInterrupt("benchmark interrupted")
 
     signal.signal(signal.SIGTERM, interrupted)
-    return run_benchmark(args)
+    try:
+        return run_benchmark(args)
+    except (OSError, RuntimeError) as error:
+        parser.exit(2, f"{parser.prog}: {error}\n")
 
 
 if __name__ == "__main__":

@@ -70,10 +70,20 @@ jobs:
           DOCKERFILE
           candidate="localhost:5000/latexmk-diagnostics:$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           echo "tag=$candidate" >> "$GITHUB_OUTPUT"
-          docker build --pull=false --platform linux/amd64 --build-arg "BASE_IMAGE=$BASE_IMAGE" --tag "$candidate" dist/diagnostic-image 2>&1 | tee "$OUTPUT/build-image.log"
+          server_sha=$(sha256sum dist/diagnostic-image/latexmk-server | cut -d ' ' -f 1)
+          docker build --pull=false --platform linux/amd64 --build-arg "BASE_IMAGE=$BASE_IMAGE" --label "org.opencontainers.image.revision=$GITHUB_SHA" --label "org.opencontainers.image.base.name=$BASE_IMAGE" --label "latexmk.server.sha256=$server_sha" --tag "$candidate" dist/diagnostic-image 2>&1 | tee "$OUTPUT/build-image.log"
           # This is the only push: an unauthenticated loopback registry on this runner.
           docker push "$candidate" 2>&1 | tee "$OUTPUT/local-registry.log"
-          reference=$(docker inspect --format '{{index .RepoDigests 0}}' "$candidate")
+          repository=${candidate%:*}
+          reference=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$candidate" | awk -v prefix="$repository@" 'index($0, prefix) == 1 {print}')
+          REFERENCE="$reference" python3 - <<'PY'
+          import importlib.util
+          import os
+          spec = importlib.util.spec_from_file_location('diagnostics', 'scripts/realtime-diagnostics.py')
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module.pinned_image(os.environ['REFERENCE'])
+          PY
           echo "image=$reference" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$BASE_IMAGE" > "$OUTPUT/base-image.txt"
           printf '%s\n' "$reference" > "$OUTPUT/measured-image.txt"
@@ -92,6 +102,7 @@ jobs:
             --base-image "$BASE_IMAGE" \
             --cli packages/cli/dist/latexmk \
             --samples "$SAMPLES" \
+            --expected-commit "$GITHUB_SHA" \
             --output "$OUTPUT" 2>&1 | tee "$OUTPUT/benchmark.log"
       - name: Add complete or partial measurements to run summary
         if: always()
@@ -105,30 +116,27 @@ jobs:
           CANDIDATE: ${{ steps.candidate.outputs.tag }}
           DIAGNOSTIC_IMAGE: ${{ steps.candidate.outputs.image }}
         run: |
-          # Fallback if the benchmark was terminated before its own finally cleanup.
-          if test -f "$OUTPUT/raw.json"; then
-            python3 - <<'PYTHON'
-          import json
+          cleanup_status=0
+          # Each cleanup boundary runs even when raw.json is unreadable or Docker times out.
+          python3 - <<'PYTHON' || cleanup_status=1
+          import importlib.util
           import os
           from pathlib import Path
-          import subprocess
-          metadata = json.loads((Path(os.environ['OUTPUT']) / 'raw.json').read_text())['metadata']
-          namespace = metadata.get('runner_namespace')
-          if namespace:
-              result = subprocess.run(['docker', 'ps', '-aq', '--filter', 'label=latexmk.runner.namespace=' + namespace], capture_output=True, text=True)
-              identifiers = result.stdout.split()
-              if identifiers:
-                  subprocess.run(['docker', 'rm', '--force', *identifiers], check=False)
-          controller = metadata.get('controller_container')
-          if controller:
-              subprocess.run(['docker', 'rm', '--force', '-v', controller], check=False)
+          spec = importlib.util.spec_from_file_location('diagnostics', 'scripts/realtime-diagnostics.py')
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          run_id = os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT']
+          errors = module.cleanup_run(Path(os.environ['OUTPUT']), run_id)
+          for error in errors:
+              print(error)
+          raise SystemExit(bool(errors))
           PYTHON
-          fi
           for image in "$DIAGNOSTIC_IMAGE" "$CANDIDATE" "$BASE_IMAGE"; do
-            if test -n "$image"; then docker image rm "$image" || true; fi
+            if test -n "$image"; then timeout 30s docker image rm "$image" || true; fi
           done
-          docker rm --force -v "$REGISTRY" || true
-          docker image rm registry:3 || true
+          timeout 30s docker rm --force -v "$REGISTRY" || true
+          timeout 30s docker image rm registry:3 || true
+          exit "$cleanup_status"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

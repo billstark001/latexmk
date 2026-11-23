@@ -42,6 +42,7 @@ All notable changes to latexmk are documented in this file. Entries follow the c
 
 - Keep doctor path selection consistent across symbolic links, check the selected engine on metadata-only servers, and return structured JSON for configuration and service failures.
 - Include failed materialization, result packaging and early completion persistence in server stage timings; verify retry and no-op client attempt correlation.
+- Keep benchmark checkpoints outside measured windows, validate build and revision provenance, retain partial results and distinguish unknown execution counts from zero after missing logs or abnormal shutdown.
 
 ## @latexmk/cli [0.4.3] - 2026-10-22
 
