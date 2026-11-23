@@ -26,9 +26,8 @@ func newSourceTracker(
 	request protocol.CompileRequest,
 	opts compileOptions,
 	files []projectarchive.File,
-	extra []projectwatch.Target,
 ) (*sourceTracker, error) {
-	targets := append(watchTargets(opts, files), extra...)
+	targets := watchTargets(opts, files)
 	tracker, err := projectwatch.New(targets, opts.watchInterval, opts.watchDebounce, opts.watchMaxWait)
 	if err != nil {
 		return nil, err
@@ -39,7 +38,7 @@ func newSourceTracker(
 		if err != nil {
 			return nil, err
 		}
-		source.targets = append(watchTargets(opts, selection.Files), extra...)
+		source.targets = watchTargets(opts, selection.Files)
 		return source.targets, nil
 	}
 	return source, nil
@@ -106,17 +105,7 @@ func observeLive(
 			observation.errors <- err
 			return observation
 		}
-		var settings []projectwatch.Target
-		for _, file := range opts.controlFiles {
-			if file == "" {
-				continue
-			}
-			if !filepath.IsAbs(file) {
-				file = filepath.Join(opts.projectRoot, file)
-			}
-			settings = append(settings, projectwatch.Target{Name: "settings: " + file, Path: file})
-		}
-		tracker, err := newSourceTracker(c, request, opts, selection.Files, settings)
+		tracker, err := newSourceTracker(c, request, opts, selection.Files)
 		if err != nil {
 			observation.errors <- err
 			return observation
@@ -208,10 +197,38 @@ func selectedFilesChanged(before, after []projectarchive.File) bool {
 	return false
 }
 
+// Configuration has optional credential and user-file candidates. Only concrete
+// paths become control files; missing files still need watching for creation.
+func configControlPaths(root string, cfg config.Resolved) []string {
+	candidates := append([]string{
+		cfg.ConfigPath,
+		cfg.UserConfigPath,
+		cfg.EnvPath,
+		filepath.Join(root, config.FileName),
+		filepath.Join(root, config.EnvFileName),
+	}, cfg.DenyFiles...)
+	seen := make(map[string]bool, len(candidates))
+	var paths []string
+	for _, path := range candidates {
+		if path == "" {
+			continue
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(root, path)
+		}
+		path = filepath.Clean(path)
+		if !seen[path] {
+			seen[path] = true
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
 func watchTargets(opts compileOptions, files []projectarchive.File) []projectwatch.Target {
 	targets := make([]projectwatch.Target, 0, len(files)+8)
 	for _, file := range append(resourceControlPaths(opts), opts.controlFiles...) {
-		targets = append(targets, projectwatch.Target{Name: "settings resources: " + file, Path: file})
+		targets = append(targets, projectwatch.Target{Name: "settings: " + file, Path: file})
 	}
 	for _, file := range files {
 		targets = append(targets, projectwatch.Target{Name: file.Path, Path: file.Source})

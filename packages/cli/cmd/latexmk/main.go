@@ -281,15 +281,7 @@ func runResolvedCompile(cwd string, cfg config.Resolved, opts compileOptions) in
 		return fail(err)
 	}
 	opts.token = cfg.Token
-	opts.controlFiles = append(
-		[]string{
-			cfg.ConfigPath,
-			cfg.UserConfigPath,
-			cfg.EnvPath,
-			filepath.Join(opts.projectRoot, config.FileName),
-			filepath.Join(opts.projectRoot, config.EnvFileName),
-		},
-		cfg.DenyFiles...)
+	opts.controlFiles = configControlPaths(opts.projectRoot, cfg)
 	c, err := client.New(opts.server, opts.token, opts.timeout, opts.insecure)
 	if err != nil {
 		if opts.detach {
@@ -360,8 +352,6 @@ func runResolvedCompile(cwd string, cfg config.Resolved, opts compileOptions) in
 	if prepErr != nil {
 		return fail(prepErr)
 	}
-	opts.controlFiles = append(opts.controlFiles, resourceControlPaths(opts)...)
-
 	if opts.realtime {
 		return runLive(c, request, opts)
 	}
@@ -545,7 +535,7 @@ func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOpt
 			continue
 		}
 		files = after
-		tracker, trackErr := newSourceTracker(c, request, opts, files, nil)
+		tracker, trackErr := newSourceTracker(c, request, opts, files)
 		if trackErr != nil {
 			return fail(trackErr)
 		}
@@ -558,7 +548,7 @@ func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOpt
 			return fail(waitErr)
 		}
 		for _, name := range changed {
-			if strings.HasPrefix(name, "settings resources: ") {
+			if strings.HasPrefix(name, "settings: ") {
 				return reloadLiveSettings
 			}
 		}

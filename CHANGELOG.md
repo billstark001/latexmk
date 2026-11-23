@@ -45,6 +45,7 @@ All notable changes to latexmk are documented in this file. Entries follow the c
 - Keep benchmark checkpoints outside measured windows, validate build and revision provenance, retain partial results and distinguish unknown execution counts from zero after missing logs or abnormal shutdown.
 - Fail performance CI on pipeline errors or incomplete raw evidence instead of accepting a successful log-writing process as a successful benchmark.
 - Preserve measured zero-duration timing fields and capture large test output without pipe-capacity deadlocks on Windows.
+- Build watch control targets from concrete configuration paths and dynamically discover resource paths through one observer for ordinary watch and realtime reloads.
 
 ## @latexmk/cli [0.4.3] - 2026-10-22
 
