@@ -22,6 +22,7 @@ import (
 // Publish revision one only after revision two has been captured. The exported
 // filename must still come from revision one's clock, including commit replay.
 func TestRealtimeBuildNamingBelongsToPublishedRevision(t *testing.T) {
+	t.Setenv("LATEXMK_REALTIME_DIAGNOSTICS", "1")
 	root := t.TempDir()
 	entry := filepath.Join(root, "main.tex")
 	if err := os.WriteFile(entry, []byte("one"), 0600); err != nil {
@@ -160,6 +161,7 @@ func TestRealtimeBuildNamingBelongsToPublishedRevision(t *testing.T) {
 		}
 	}()
 	code, _, stderr := captureCommandOutput(t, func() int {
+		observation.timing = newLiveTiming()
 		return runLiveSession(ctx, c,
 			protocol.CompileRequest{Entry: "main.tex", Engine: "xelatex"}, opts,
 			protocol.Metadata{Capabilities: protocol.Capabilities{MaxFiles: 100, MaxExpandedBytes: 1 << 20}},
@@ -173,9 +175,24 @@ func TestRealtimeBuildNamingBelongsToPublishedRevision(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "exports/000002.pdf")); !os.IsNotExist(err) {
 		t.Fatal("old result used the newer naming context", err)
 	}
+	var commitEvents []liveTimingEvent
+	for _, event := range readLiveTiming(t, stderr) {
+		if event.Event == "commit" {
+			commitEvents = append(commitEvents, event)
+		}
+	}
+	if len(commitEvents) != 3 || commitEvents[0].OK || !commitEvents[1].OK || !commitEvents[2].OK {
+		t.Fatalf("commit retry/admission events changed: %+v", commitEvents)
+	}
+	if commitEvents[0].Attempt == 0 || commitEvents[0].Attempt != commitEvents[1].Attempt ||
+		commitEvents[1].JobID != "job_1" || commitEvents[1].Revision != 1 ||
+		commitEvents[2].Attempt <= commitEvents[1].Attempt || commitEvents[2].JobID != "job_2" || commitEvents[2].Revision != 2 {
+		t.Fatalf("pending retry was attributed to the new source capture: %+v", commitEvents)
+	}
 }
 
 func TestRealtimeNoOpDoesNotCaptureOrRetainBuildNames(t *testing.T) {
+	t.Setenv("LATEXMK_REALTIME_DIAGNOSTICS", "1")
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte("source"), 0600); err != nil {
 		t.Fatal(err)
@@ -253,6 +270,7 @@ func TestRealtimeNoOpDoesNotCaptureOrRetainBuildNames(t *testing.T) {
 		}
 	}()
 	code, _, stderr := captureCommandOutput(t, func() int {
+		observation.timing = newLiveTiming()
 		return runLiveSession(
 			ctx,
 			c,
@@ -278,5 +296,26 @@ func TestRealtimeNoOpDoesNotCaptureOrRetainBuildNames(t *testing.T) {
 	}
 	if len(opts.generated.snapshot()) != 1 {
 		t.Fatal("session exit retained build reservations", opts.generated.snapshot())
+	}
+	var attempts, uploads, admitted int
+	for _, event := range readLiveTiming(t, stderr) {
+		switch event.Event {
+		case "submit_start":
+			attempts++
+		case "upload":
+			uploads++
+		case "commit":
+			if event.OK {
+				admitted++
+			}
+		}
+	}
+	if attempts < 2 || uploads != 1 || admitted != 1 {
+		t.Fatalf(
+			"no-op attempts became admissions in diagnostics: attempts=%d uploads=%d admitted=%d",
+			attempts,
+			uploads,
+			admitted,
+		)
 	}
 }

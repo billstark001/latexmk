@@ -797,10 +797,17 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 			"worker_total_ms", time.Since(workerStarted).Milliseconds(),
 		)
 	}()
+	finish := func(result *protocol.CompileResult, message string, archived bool) bool {
+		started := time.Now()
+		completed, success := m.finish(ctx, rec, result, message, archived)
+		persistenceTime += time.Since(started)
+		rec = completed // Session cleanup uses the confirmed durable terminal state.
+		return success
+	}
 
 	jobWorkspace, err := compile.NewWorkspace(m.cfg.TempDir)
 	if err != nil {
-		rec, _ = m.finish(ctx, rec, nil, "could not create compile workspace", false)
+		finish(nil, "could not create compile workspace", false)
 		return
 	}
 	defer func() {
@@ -811,11 +818,12 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	workspace := jobWorkspace.Project
 
 	if m.cfg.RunnerImage == "" {
-		if err := m.projects.Materialize(rec.Snapshot, workspace); err != nil {
-			rec, _ = m.finish(ctx, rec, nil, "could not materialize project: "+err.Error(), false)
+		err = m.projects.Materialize(rec.Snapshot, workspace)
+		materializeTime = time.Since(workerStarted)
+		if err != nil {
+			finish(nil, "could not materialize project: "+err.Error(), false)
 			return
 		}
-		materializeTime = time.Since(workerStarted)
 	}
 
 	compileCtx, cancelCompile := context.WithTimeout(jobCtx, m.cfg.CompileTimeout)
@@ -837,17 +845,15 @@ func (m *Manager) run(ctx context.Context, worker int, id string) {
 	output.Result.ImageProfile = m.meta.ImageProfile
 	retained := compile.RetainArtifacts(output, rec.Request, m.cfg.ResultRetention)
 	archiveStarted := time.Now()
-	if _, err := m.projects.WriteResult(rec.OwnerID, rec.Job.ID, retained); err != nil {
-		rec, _ = m.finish(ctx, rec, &output.Result, "could not package compile result: "+err.Error(), false)
+	_, err = m.projects.WriteResult(rec.OwnerID, rec.Job.ID, retained)
+	archiveTime = time.Since(archiveStarted)
+	if err != nil {
+		finish(&output.Result, "could not package compile result: "+err.Error(), false)
 		return
 	}
-	archiveTime = time.Since(archiveStarted)
 	executed.output = output
 	retained.Result.CompileCache = executed.cache
-	persistStarted := time.Now()
-	completed, success := m.finish(ctx, rec, &retained.Result, retained.Result.Error, true)
-	persistenceTime = time.Since(persistStarted)
-	rec = completed // Session cleanup uses the confirmed durable terminal state.
+	success := finish(&retained.Result, retained.Result.Error, true)
 	if success {
 		cacheStarted := time.Now()
 		m.publishExecution(compileCtx, rec, jobWorkspace, &executed)

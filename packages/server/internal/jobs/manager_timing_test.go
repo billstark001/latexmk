@@ -22,7 +22,10 @@ import (
 type compileStageLog struct {
 	Message           string `json:"msg"`
 	JobID             string `json:"job_id"`
+	SessionID         string `json:"session_id"`
+	Revision          uint64 `json:"revision"`
 	ExecutionMS       *int64 `json:"execution_ms"`
+	PersistenceMS     *int64 `json:"completion_persist_ms"`
 	CompileRunnerMS   *int64 `json:"compile_runner_ms"`
 	ExecuteOverheadMS *int64 `json:"execute_overhead_ms"`
 	WorkspaceReuse    *bool  `json:"workspace_reuse"`
@@ -44,19 +47,110 @@ func requireCompileStageLog(t *testing.T, output []byte, job protocol.Job) compi
 		if record.Message != "compile job stages" || record.JobID != job.ID {
 			continue
 		}
-		if record.ExecutionMS == nil || record.CompileRunnerMS == nil || record.ExecuteOverheadMS == nil ||
-			record.WorkspaceReuse == nil || record.ColdRetry == nil {
+		if record.ExecutionMS == nil || record.PersistenceMS == nil ||
+			record.CompileRunnerMS == nil || record.ExecuteOverheadMS == nil ||
+			record.WorkspaceReuse == nil ||
+			record.ColdRetry == nil {
 			t.Fatalf("stage log omitted timing or reuse fields: %s", output)
 		}
 		if *record.ExecuteOverheadMS < 0 ||
 			*record.ExecuteOverheadMS != max(0, *record.ExecutionMS-*record.CompileRunnerMS) {
 			t.Fatalf("stage log reported inconsistent execution overhead: %s", output)
 		}
-		coldRetry := job.Result.CompileCache != nil && job.Result.CompileCache.ColdRetry
-		if *record.WorkspaceReuse != job.Result.WorkspaceReuse || *record.ColdRetry != coldRetry {
+		var workspaceReuse, coldRetry bool
+		if job.Result != nil {
+			workspaceReuse = job.Result.WorkspaceReuse
+			coldRetry = job.Result.CompileCache != nil && job.Result.CompileCache.ColdRetry
+		}
+		if *record.WorkspaceReuse != workspaceReuse || *record.ColdRetry != coldRetry {
 			t.Fatalf("stage log did not use the final attempt's reuse state: %s", output)
 		}
+		if record.SessionID != job.SessionID || record.Revision != job.Revision {
+			t.Fatalf("stage log lost the submitted job's session identity: %s", output)
+		}
 		return record
+	}
+}
+
+type completionTimingHandler struct {
+	slog.Handler
+	entered chan struct{}
+	release <-chan struct{}
+	blocked time.Duration
+}
+
+func (h *completionTimingHandler) Handle(ctx context.Context, record slog.Record) error {
+	if record.Message == "compile job finished" {
+		started := time.Now()
+		close(h.entered)
+		<-h.release
+		h.blocked = time.Since(started)
+	}
+	return h.Handler.Handle(ctx, record)
+}
+
+func TestFailedWorkspaceCreationLogsCompletionTimingAndSessionIdentity(t *testing.T) {
+	manager, request := sessionManager(t)
+	invalidTemp := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(invalidTemp, []byte("invalid temporary directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	manager.cfg.TempDir = invalidTemp
+	var logs bytes.Buffer
+	release := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+	handler := &completionTimingHandler{
+		Handler: slog.NewJSONHandler(&logs, nil),
+		entered: make(chan struct{}),
+		release: release,
+	}
+	manager.logger = slog.New(handler)
+	ctx := context.Background()
+	session, err := manager.CreateSession(ctx, "owner", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := manager.SubmitRevision(ctx, "owner", session.ID, planRevision(t, manager, request, "source", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if running := manager.takeSession(<-manager.queue); running != job.ID {
+		t.Fatalf("unexpected scheduled job: %s", running)
+	}
+	finished := make(chan struct{})
+	go func() { manager.run(ctx, 1, job.ID); close(finished) }()
+	select {
+	case <-handler.entered:
+	case <-time.After(time.Second):
+		t.Fatal("workspace failure did not reach completion")
+	}
+	// Hold a real operation inside m.finish, after it has reached the handler.
+	// Compare against the observed interval rather than assuming scheduler speed.
+	timer := time.NewTimer(10 * time.Millisecond)
+	<-timer.C
+	close(release)
+	released = true
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("completion did not finish after releasing the handler")
+	}
+	job, err = manager.Get(ctx, "owner", job.ID)
+	if err != nil || job.Status != "failed" || job.Result != nil ||
+		!strings.Contains(job.Error, "could not create compile workspace") {
+		t.Fatalf("unexpected early failure: %+v %v", job, err)
+	}
+	stage := requireCompileStageLog(t, logs.Bytes(), job)
+	if *stage.PersistenceMS < handler.blocked.Milliseconds() || *stage.PersistenceMS == 0 {
+		t.Fatalf("early failure omitted completion work: blocked=%v logs=%s", handler.blocked, logs.Bytes())
+	}
+	if *stage.ExecutionMS != 0 || *stage.CompileRunnerMS != 0 || *stage.ExecuteOverheadMS != 0 {
+		t.Fatalf("workspace creation failure reported compiler work: %s", logs.Bytes())
 	}
 }
 
