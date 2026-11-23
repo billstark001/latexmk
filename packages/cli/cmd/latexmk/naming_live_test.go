@@ -56,8 +56,20 @@ func TestRealtimeBuildNamingBelongsToPublishedRevision(t *testing.T) {
 	archive := packArchive(t, result, map[string]string{"main.pdf": pdf})
 	session := protocol.Session{ID: "ses_test"}
 	var mu sync.Mutex
-	var commits atomic.Int32
+	var commits, replays, coalesced atomic.Int32
 	observation := liveObservation{changed: make(chan struct{}, 1)}
+	notifyChange := func() {
+		select {
+		case observation.changed <- struct{}{}:
+		default:
+			coalesced.Add(1)
+		}
+	}
+	type receipt struct {
+		request protocol.RevisionRequest
+		job     protocol.Job
+	}
+	receipts := make(map[string]receipt)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/uploads/plans":
@@ -67,34 +79,65 @@ func TestRealtimeBuildNamingBelongsToPublishedRevision(t *testing.T) {
 			defer mu.Unlock()
 			_ = json.NewEncoder(w).Encode(session)
 		case "/v1/sessions/ses_test/revisions":
-			// Lose the first response without admitting it, exercising the
-			// pending operation path while the clock changes.
-			n := commits.Add(1)
-			if n == 1 {
+			var request protocol.RevisionRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.IdempotencyKey == "" {
+				t.Errorf("invalid revision request: %+v %v", request, err)
+				http.Error(w, "invalid revision", http.StatusBadRequest)
+				return
+			}
+			// The first request fails before admission. A queued notification
+			// retries the pending operation without waiting for the poll ticker.
+			if commits.Add(1) == 1 {
 				clock.Store(2)
+				notifyChange()
 				http.Error(w, "retry", http.StatusServiceUnavailable)
 				return
 			}
-			revision := uint64(n - 1)
+			mu.Lock()
+			if accepted, exists := receipts[request.IdempotencyKey]; exists {
+				mu.Unlock()
+				if accepted.request != request {
+					t.Error("pending revision replay changed its payload")
+					http.Error(w, "changed replay", http.StatusConflict)
+					return
+				}
+				replays.Add(1)
+				_ = json.NewEncoder(w).Encode(accepted.job)
+				return
+			}
+			if request.BaseRevision != session.Revision {
+				mu.Unlock()
+				t.Errorf("new revision used stale base %d", request.BaseRevision)
+				http.Error(w, "stale revision", http.StatusConflict)
+				return
+			}
+			revision := session.Revision + 1
 			job := protocol.Job{
 				ID:        fmt.Sprintf("job_%d", revision),
 				SessionID: "ses_test",
 				Revision:  revision,
 				Status:    "running",
 			}
-			mu.Lock()
+			receipts[request.IdempotencyKey] = receipt{request: request, job: job}
 			session.Revision, session.LatestJobID, session.RunningJobID = revision, job.ID, job.ID
 			if revision == 2 {
 				session.LastSuccessfulJobID = "job_1"
 			}
 			mu.Unlock()
-			_ = json.NewEncoder(w).Encode(job)
 			if revision == 1 {
 				if err := os.WriteFile(entry, []byte("two"), 0600); err != nil {
 					t.Error(err)
 				}
-				observation.changed <- struct{}{}
+				// Admission succeeded but its response was lost. Replaying this
+				// key must return job_1, rather than allocate another revision.
+				// Duplicate editor notifications coalesce while commit is active;
+				// they must never block the handler from completing its response.
+				notifyChange()
+				notifyChange()
+				http.Error(w, "accepted response lost", http.StatusServiceUnavailable)
+				return
 			}
+			_ = json.NewEncoder(w).Encode(job)
 		case "/v1/jobs/job_1":
 			_ = json.NewEncoder(
 				w,
@@ -135,8 +178,6 @@ func TestRealtimeBuildNamingBelongsToPublishedRevision(t *testing.T) {
 	c.GeneratedFiles = generatedFiles(opts)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	// A transient commit is normally retried by the poll ticker. Explicit
-	// source notifications let this test exercise that path without waiting 5s.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -147,12 +188,6 @@ func TestRealtimeBuildNamingBelongsToPublishedRevision(t *testing.T) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if commits.Load() == 1 {
-					select {
-					case observation.changed <- struct{}{}:
-					default:
-					}
-				}
 				if _, err := os.Stat(filepath.Join(root, "exports/000001.pdf")); err == nil {
 					cancel()
 					return
@@ -181,13 +216,22 @@ func TestRealtimeBuildNamingBelongsToPublishedRevision(t *testing.T) {
 			commitEvents = append(commitEvents, event)
 		}
 	}
-	if len(commitEvents) != 3 || commitEvents[0].OK || !commitEvents[1].OK || !commitEvents[2].OK {
+	if len(commitEvents) != 4 || commitEvents[0].OK || commitEvents[1].OK || !commitEvents[2].OK ||
+		!commitEvents[3].OK {
 		t.Fatalf("commit retry/admission events changed: %+v", commitEvents)
 	}
 	if commitEvents[0].Attempt == 0 || commitEvents[0].Attempt != commitEvents[1].Attempt ||
-		commitEvents[1].JobID != "job_1" || commitEvents[1].Revision != 1 ||
-		commitEvents[2].Attempt <= commitEvents[1].Attempt || commitEvents[2].JobID != "job_2" || commitEvents[2].Revision != 2 {
+		commitEvents[1].Attempt != commitEvents[2].Attempt || commitEvents[2].JobID != "job_1" || commitEvents[2].Revision != 1 ||
+		commitEvents[3].Attempt <= commitEvents[2].Attempt || commitEvents[3].JobID != "job_2" || commitEvents[3].Revision != 2 {
 		t.Fatalf("pending retry was attributed to the new source capture: %+v", commitEvents)
+	}
+	if commits.Load() != 4 || replays.Load() != 1 || coalesced.Load() == 0 {
+		t.Fatalf(
+			"fixture did not exercise an idempotent receipt and coalesced notifications: commits=%d replays=%d coalesced=%d",
+			commits.Load(),
+			replays.Load(),
+			coalesced.Load(),
+		)
 	}
 }
 
