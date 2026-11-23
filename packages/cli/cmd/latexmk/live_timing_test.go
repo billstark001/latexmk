@@ -66,6 +66,27 @@ func TestLiveTimingRequiresExplicitOptIn(t *testing.T) {
 	}
 }
 
+func TestLiveTimingDistinguishesMeasuredZeroFromInstantEvent(t *testing.T) {
+	for _, measured := range []bool{false, true} {
+		event := liveTimingEvent{Event: "capture", OK: true}
+		if measured {
+			event.DurationNS = new(int64)
+		}
+		raw, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			t.Fatal(err)
+		}
+		duration, present := fields["duration_ns"]
+		if present != measured || (measured && string(duration) != "0") {
+			t.Fatalf("measured zero and instant event share a representation: measured=%t event=%s", measured, raw)
+		}
+	}
+}
+
 func TestLiveTimingConcurrentLinesAndElapsedDuration(t *testing.T) {
 	var output bytes.Buffer
 	timing := &liveTiming{writer: &output}
@@ -86,7 +107,7 @@ func TestLiveTimingConcurrentLinesAndElapsedDuration(t *testing.T) {
 	seen := make(map[uint64]bool, count)
 	for _, event := range events {
 		if seen[event.Attempt] || event.Event != "capture" || event.SessionID != "ses_concurrent" ||
-			event.DurationNS < 0 || event.TimeNS == 0 || event.OK != ((event.Attempt-1)%2 == 0) {
+			event.DurationNS == nil || *event.DurationNS < 0 || event.TimeNS == 0 || event.OK != ((event.Attempt-1)%2 == 0) {
 			t.Fatalf("invalid concurrent record: %+v", event)
 		}
 		seen[event.Attempt] = true
@@ -96,7 +117,7 @@ func TestLiveTimingConcurrentLinesAndElapsedDuration(t *testing.T) {
 	minimum := time.Since(started).Nanoseconds()
 	timing.record(started, liveTimingEvent{Event: "upload", OK: true})
 	maximum := time.Since(started).Nanoseconds()
-	measured := readLiveTiming(t, output.String())[0].DurationNS
+	measured := *readLiveTiming(t, output.String())[0].DurationNS
 	if measured < minimum || measured > maximum {
 		t.Fatalf("duration %d outside monotonic elapsed bounds [%d,%d]", measured, minimum, maximum)
 	}
@@ -233,7 +254,7 @@ func TestLiveTimingCorrelatesSubmissionAndPublicationWithoutSourceData(t *testin
 			}
 			byName := make(map[string]liveTimingEvent, len(events))
 			for _, event := range events {
-				if !event.OK || event.SessionID != "ses_timing" || event.DurationNS < 0 {
+				if !event.OK || event.SessionID != "ses_timing" || (event.DurationNS != nil && *event.DurationNS < 0) {
 					t.Fatalf("invalid session record: %+v", event)
 				}
 				byName[event.Event] = event
@@ -244,7 +265,8 @@ func TestLiveTimingCorrelatesSubmissionAndPublicationWithoutSourceData(t *testin
 				}
 			}
 			for _, name := range []string{"capture", "submit_state", "upload", "commit"} {
-				if byName[name].Attempt != byName["submit_start"].Attempt || byName[name].DurationNS <= 0 {
+				if event := byName[name]; event.Attempt != byName["submit_start"].Attempt || event.DurationNS == nil ||
+					*event.DurationNS < 0 {
 					t.Fatalf("phase not linked to measured submit: %+v", byName[name])
 				}
 			}

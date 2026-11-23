@@ -17,9 +17,10 @@ type liveTiming struct {
 }
 
 type liveTimingEvent struct {
-	Event      string `json:"event"`
-	TimeNS     int64  `json:"time_ns"`
-	DurationNS int64  `json:"duration_ns,omitempty"`
+	Event  string `json:"event"`
+	TimeNS int64  `json:"time_ns"`
+	// A measured phase may take zero clock ticks; nil denotes an instant event.
+	DurationNS *int64 `json:"duration_ns,omitempty"`
 	SessionID  string `json:"session_id,omitempty"`
 	JobID      string `json:"job_id,omitempty"`
 	Revision   uint64 `json:"revision,omitempty"`
@@ -52,7 +53,8 @@ func (timing *liveTiming) record(started time.Time, event liveTimingEvent) {
 	if !started.IsZero() {
 		// Sub uses the monotonic readings carried by start and now. Wall clock
 		// adjustments therefore cannot distort a measured phase duration.
-		event.DurationNS = max(0, now.Sub(started).Nanoseconds())
+		duration := max(0, now.Sub(started).Nanoseconds())
+		event.DurationNS = &duration
 	}
 	encoded, err := json.Marshal(event)
 	if err != nil {

@@ -159,7 +159,8 @@ func TestRealtimeRetriesTransientDiagnosticDownload(t *testing.T) {
 		t.Fatalf("download retry timing was not recorded: %+v", downloadEvents)
 	}
 	for _, event := range downloadEvents {
-		if event.SessionID != session.ID || event.JobID != job.ID || event.Revision != 1 || event.DurationNS <= 0 {
+		if event.SessionID != session.ID || event.JobID != job.ID || event.Revision != 1 || event.DurationNS == nil ||
+			*event.DurationNS < 0 {
 			t.Fatalf("failed/successful download lost its correlation or timing: %+v", event)
 		}
 	}

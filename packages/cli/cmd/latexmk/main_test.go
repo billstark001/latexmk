@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/json"
-	"io"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,32 +31,56 @@ func compileTestArguments(args []string, opts *compileOptions) (*cli.Command, er
 func captureCommandOutput(t *testing.T, fn func() int) (int, string, string) {
 	t.Helper()
 	oldStdout, oldStderr := os.Stdout, os.Stderr
-	stdoutR, stdoutW, err := os.Pipe()
+	directory := t.TempDir()
+	stdoutW, err := os.Create(filepath.Join(directory, "stdout"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	stderrR, stderrW, err := os.Pipe()
+	defer func() { _ = stdoutW.Close() }()
+	stderrW, err := os.Create(filepath.Join(directory, "stderr"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	os.Stdout, os.Stderr = stdoutW, stderrW
 	defer func() {
 		os.Stdout, os.Stderr = oldStdout, oldStderr
+		_ = stderrW.Close()
 	}()
 	code := fn()
-	_ = stdoutW.Close()
-	_ = stderrW.Close()
-	stdout, err := io.ReadAll(stdoutR)
+	if err := errors.Join(stdoutW.Close(), stderrW.Close()); err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := os.ReadFile(stdoutW.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	stderr, err := io.ReadAll(stderrR)
+	stderr, err := os.ReadFile(stderrW.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = stdoutR.Close()
-	_ = stderrR.Close()
 	return code, string(stdout), string(stderr)
+}
+
+func TestCaptureCommandOutputPreservesLargeStreams(t *testing.T) {
+	wantStdout := strings.Repeat("stdout\n", 32<<10)
+	wantStderr := strings.Repeat("stderr\n", 32<<10)
+	code, stdout, stderr := captureCommandOutput(t, func() int {
+		if _, err := os.Stdout.WriteString(wantStdout); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stderr.WriteString(wantStderr); err != nil {
+			t.Fatal(err)
+		}
+		return 7
+	})
+	if code != 7 || stdout != wantStdout || stderr != wantStderr {
+		t.Fatalf(
+			"capture changed stream data or exit code: code=%d stdout=%d stderr=%d",
+			code,
+			len(stdout),
+			len(stderr),
+		)
+	}
 }
 
 func TestNormalizeCompilePathsResolvesProjectRootSymlink(t *testing.T) {
