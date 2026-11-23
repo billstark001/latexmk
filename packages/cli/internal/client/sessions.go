@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	"io"
 	"mime"
 	"net/http"
 	"net/url"
@@ -176,17 +177,21 @@ func (c *Client) StreamSessionEvents(
 	stream.Timeout = 0
 	resp, err := stream.Do(req)
 	if err != nil {
-		return err
+		return c.failedRequest(req, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
-		return readHTTPError(resp)
+		return c.readHTTPError(resp)
 	}
 	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if err != nil || mediaType != "text/event-stream" {
-		return errors.New("unexpected session event content type")
+		return c.responseError(resp, "unexpected_event_content_type", nil)
 	}
-	return readSessionEvents(resp.Body, after, receive)
+	err = readSessionEvents(resp.Body, after, receive)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return c.responseError(resp, "invalid_event_stream", err)
+	}
+	return err
 }
 
 func (c *Client) ValidateRealtimeRequest(request protocol.CompileRequest, meta protocol.Metadata) error {

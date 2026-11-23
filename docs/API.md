@@ -4,6 +4,12 @@
 
 The current protocol version is `2`. Version 2 adds content-addressed, incremental uploads and asynchronous jobs. The legacy `POST /v1/compile` endpoint is disabled by default; set `LATEXMK_ENABLE_LEGACY_COMPILE=true` only while migrating older clients.
 
+## Error responses
+
+Service failures use the HTTP status and a JSON object `{ "error": "message" }`. `X-Request-ID` correlates the response with server logs, including authentication failures. The service does not currently define a separate structured error-code field. A gateway may return another content type or a standard `Retry-After` header; neither changes the service error schema.
+
+The CLI retains the status, request ID, validated retry delay and bounded JSON message in human and machine diagnostics. It does not print arbitrary gateway bodies or HTML. Malformed successful responses are reported with their actual 2xx status and an invalid-response diagnostic, separately from local filesystem failures. See [CLI HTTP failure details](AGENT_CLI.md#http-failure-details) for limits and JSON fields.
+
 ## `GET /healthz`
 
 Process liveness check. It does not access the database or TeX toolchain.

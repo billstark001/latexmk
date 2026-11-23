@@ -131,7 +131,7 @@ func (c *Client) DownloadArtifact(
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if err := extractSelectedArtifact(resp.Body, outputRoot, selected); err != nil {
-		return DownloadedArtifact{}, err
+		return DownloadedArtifact{}, c.resultResponseError(resp, err)
 	}
 	rootAbs, err := filepath.Abs(outputRoot)
 	if err != nil {
@@ -191,7 +191,7 @@ func (c *Client) Logs(ctx context.Context, jobID, source string, tailLines int, 
 	output := LogsOutput{JobID: jobID, Source: source, TailLines: tailLines, MaxBytes: maxBytes}
 	entries, returned, err := readBoundedLogs(resp.Body, source, tailLines, maxBytes, selectedLogs, declared)
 	if err != nil {
-		return LogsOutput{}, err
+		return LogsOutput{}, c.resultResponseError(resp, err)
 	}
 	output.Entries = entries
 	output.Returned = returned
@@ -258,14 +258,14 @@ func extractSelectedArtifact(r io.Reader, outputRoot string, selected ArtifactIn
 			continue
 		}
 		if header.Size != selected.Size {
-			return errors.New("artifact size does not match job metadata")
+			return invalidResult("artifact size does not match job metadata")
 		}
 		if err := writeArtifact(outputRoot, selected.Path, tarReader, selected.Size, selected.SHA256); err != nil {
 			return err
 		}
 		return nil
 	}
-	return errors.New("result archive omitted the selected artifact")
+	return invalidResult("result archive omitted the selected artifact")
 }
 
 func readBoundedLogs(
@@ -304,7 +304,7 @@ func readBoundedLogs(
 		}
 		selectedEntries++
 		if selectedEntries > maxSelectedLogs {
-			return nil, 0, errors.New("result archive contains too many selected log files")
+			return nil, 0, invalidResult("result archive contains too many selected log files")
 		}
 		limit := perEntry
 		if int64(selectedEntries) <= extra {
@@ -317,14 +317,14 @@ func readBoundedLogs(
 			writer = io.MultiWriter(hash, buffer)
 		}
 		if _, err := io.CopyN(writer, tarReader, header.Size); err != nil {
-			return nil, 0, err
+			return nil, 0, invalidResult("read selected log: %w", err)
 		}
 		if expected != nil {
 			if header.Size != expected.Size {
-				return nil, 0, fmt.Errorf("compiler log %q size mismatch", path)
+				return nil, 0, invalidResult("compiler log %q size mismatch", path)
 			}
 			if !strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), expected.SHA256) {
-				return nil, 0, fmt.Errorf("compiler log %q SHA-256 mismatch", path)
+				return nil, 0, invalidResult("compiler log %q SHA-256 mismatch", path)
 			}
 		}
 		content := tailLinesBytes(buffer.Bytes(), tailLines)

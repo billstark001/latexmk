@@ -4,10 +4,10 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"errors"
-	"fmt"
 	"io"
 
 	"github.com/billstark001/latexmk/packages/shared/archiveutil"
+	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
 const (
@@ -30,7 +30,7 @@ type resultReader struct {
 func newResultReader(reader io.Reader) (*resultReader, error) {
 	gz, err := gzip.NewReader(reader)
 	if err != nil {
-		return nil, fmt.Errorf("open result gzip: %w", err)
+		return nil, invalidResult("open result gzip: %w", err)
 	}
 	return &resultReader{Reader: tar.NewReader(gz), gzip: gz, seen: make(map[string]struct{})}, nil
 }
@@ -41,24 +41,59 @@ func (r *resultReader) Next() (*tar.Header, error) {
 	header, err := r.Reader.Next()
 	if errors.Is(err, io.EOF) {
 		if err := archiveutil.VerifyTrailer(r.gzip); err != nil {
-			return nil, err
+			return nil, invalidResult("verify result trailer: %w", err)
 		}
 		return nil, io.EOF
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read result tar: %w", err)
+		return nil, invalidResult("read result tar: %w", err)
 	}
 	if len(r.seen) >= maxResultEntries || header.Size < 0 || header.Size > maxResultEntryBytes ||
 		header.Size > maxResultBytes-r.totalBytes {
-		return nil, errors.New("result archive exceeds safety limits")
+		return nil, invalidResult("result archive exceeds safety limits")
 	}
 	if header.Typeflag != tar.TypeReg {
-		return nil, fmt.Errorf("unexpected result entry type for %q", header.Name)
+		return nil, invalidResult("unexpected result entry type for %q", header.Name)
 	}
 	if _, duplicate := r.seen[header.Name]; duplicate {
-		return nil, fmt.Errorf("result archive contains duplicate entry %q", header.Name)
+		return nil, invalidResult("result archive contains duplicate entry %q", header.Name)
 	}
 	r.seen[header.Name] = struct{}{}
 	r.totalBytes += header.Size
 	return header, nil
+}
+
+func (r *resultReader) Read(buffer []byte) (int, error) {
+	n, err := r.Reader.Read(buffer)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return n, invalidResult("read result member: %w", err)
+	}
+	return n, err
+}
+
+// Integrity/read failures belong to the input. Preserve destination write
+// failures separately so local disk errors never become HTTP response failures.
+func verifyArtifactInput(output io.Writer, input io.Reader, size int64, digest string) error {
+	destination := &artifactOutput{Writer: output}
+	err := safefs.CopyVerified(destination, input, size, digest)
+	if err != nil && destination.err == nil {
+		return invalidResult("invalid artifact input: %w", err)
+	}
+	return err
+}
+
+type artifactOutput struct {
+	io.Writer
+	err error
+}
+
+func (w *artifactOutput) Write(buffer []byte) (int, error) {
+	n, err := w.Writer.Write(buffer)
+	if err == nil && n != len(buffer) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		w.err = err
+	}
+	return n, err
 }

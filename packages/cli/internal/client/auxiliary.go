@@ -85,7 +85,7 @@ func storeReturnedArtifact(
 	}
 	switch req.Auxiliary.Local {
 	case "", "none":
-		if err := safefs.CopyVerified(io.Discard, input, artifact.Size, strings.ToLower(artifact.SHA256)); err != nil {
+		if err := verifyArtifactInput(io.Discard, input, artifact.Size, strings.ToLower(artifact.SHA256)); err != nil {
 			return fmt.Errorf("verify discarded auxiliary %q: %w", artifact.Path, err)
 		}
 		return nil

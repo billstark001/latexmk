@@ -65,27 +65,12 @@ type StartCompileOutput struct {
 	Warnings []string
 }
 
-// HTTPError preserves the status code without exposing request credentials.
-// CLI and MCP adapters use it to produce stable machine-readable errors.
-type HTTPError struct {
-	StatusCode int
-	Status     string
-	Message    string
-}
-
 type CapabilityError struct {
 	Capability string
 }
 
 func (e *CapabilityError) Error() string {
 	return fmt.Sprintf("server does not support %s", e.Capability)
-}
-
-func (e *HTTPError) Error() string {
-	if e.Message == "" {
-		return fmt.Sprintf("server returned %s", e.Status)
-	}
-	return fmt.Sprintf("server returned %s: %s", e.Status, e.Message)
 }
 
 const (
@@ -104,7 +89,7 @@ func New(baseURL, token string, timeout time.Duration, insecure bool) (*Client, 
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	parsed, err := url.Parse(baseURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid server URL: %w", err)
+		return nil, errors.New("invalid server URL")
 	}
 	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.Opaque != "" ||
 		parsed.User != nil ||
@@ -134,14 +119,14 @@ func (c *Client) Metadata(ctx context.Context) (protocol.Metadata, error) {
 	c.decorate(req)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return meta, err
+		return meta, c.failedRequest(req, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
-		return meta, readHTTPError(resp)
+		return meta, c.readHTTPError(resp)
 	}
 	if err := decodeAPIResponse(resp.Body, 1<<20, &meta, false); err != nil {
-		return meta, fmt.Errorf("decode metadata: %w", err)
+		return meta, c.responseError(resp, "invalid_api_response", err)
 	}
 	return meta, nil
 }
@@ -154,11 +139,11 @@ func (c *Client) Health(ctx context.Context) error {
 	c.decorate(req)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return err
+		return c.failedRequest(req, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
-		return readHTTPError(resp)
+		return c.readHTTPError(resp)
 	}
 	return nil
 }
@@ -444,14 +429,14 @@ func (c *Client) compileLegacy(
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return out, err
+		return out, c.failedRequest(req, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
-		return out, readHTTPError(resp)
+		return out, c.readHTTPError(resp)
 	}
 	if err := unpackResponseWithPolicy(resp.Body, outputRoot, &out, request, c.ProjectRoot); err != nil {
-		return out, err
+		return out, c.resultResponseError(resp, err)
 	}
 	return out, nil
 }
@@ -492,10 +477,10 @@ func (c *Client) compileQueued(
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if err := unpackResponseWithPolicy(resp.Body, outputRoot, &out, request, c.ProjectRoot); err != nil {
-		return out, err
+		return out, c.resultResponseError(resp, err)
 	}
 	if out.Result.RequestID != job.ID {
-		return out, errors.New("result archive does not match the requested job")
+		return out, c.responseError(resp, "invalid_result_archive", nil)
 	}
 	// Cache publication happens after the immutable result archive is durable.
 	if job.Result != nil {
@@ -821,7 +806,7 @@ func (c *Client) jsonRequest(ctx context.Context, method, path string, body any,
 		return nil
 	}
 	if err := decodeAPIResponse(resp.Body, 8<<20, output, true); err != nil {
-		return fmt.Errorf("decode API response: %w", err)
+		return c.responseError(resp, "invalid_api_response", err)
 	}
 	return nil
 }
@@ -862,11 +847,11 @@ func (c *Client) rawRequest(
 	c.decorate(req)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, c.failedRequest(req, err)
 	}
 	if resp.StatusCode/100 != 2 {
 		defer func() { _ = resp.Body.Close() }()
-		return nil, readHTTPError(resp)
+		return nil, c.readHTTPError(resp)
 	}
 	return resp, nil
 }
@@ -917,69 +902,69 @@ func unpackResponseWithPolicy(
 		switch h.Name {
 		case "result.json":
 			if resultSeen {
-				return errors.New("result archive contains duplicate result.json")
+				return invalidResult("result archive contains duplicate result.json")
 			}
 			if h.Size > 1<<20 {
-				return errors.New("result.json is too large")
+				return invalidResult("result.json is too large")
 			}
 			if err := jsonutil.DecodeStrict(tr, 1<<20, &out.Result); err != nil {
-				return fmt.Errorf("decode result: %w", err)
+				return invalidResult("decode result: %w", err)
 			}
 			if out.Result.ProtocolVersion != 1 && out.Result.ProtocolVersion != protocol.Version {
-				return fmt.Errorf("unsupported response protocol version %d", out.Result.ProtocolVersion)
+				return invalidResult("unsupported response protocol version %d", out.Result.ProtocolVersion)
 			}
 			if request.EnvironmentDigest != "" && out.Result.EnvironmentDigest != request.EnvironmentDigest {
-				return errors.New("result does not match the requested resource environment")
+				return invalidResult("result does not match the requested resource environment")
 			}
 			resultSeen = true
 			for _, artifact := range out.Result.Artifacts {
 				if err := validateArtifactMetadata(artifact); err != nil {
-					return err
+					return invalidResult("invalid artifact metadata: %w", err)
 				}
 				if _, duplicate := expected[artifact.Path]; duplicate {
-					return fmt.Errorf("result declares duplicate artifact %q", artifact.Path)
+					return invalidResult("result declares duplicate artifact %q", artifact.Path)
 				}
 				expected[artifact.Path] = artifact
 			}
 		case "stdout.log":
 			if stdoutSeen {
-				return errors.New("result archive contains duplicate stdout.log")
+				return invalidResult("result archive contains duplicate stdout.log")
 			}
 			if h.Size > 16<<20 {
-				return errors.New("stdout.log is too large")
+				return invalidResult("stdout.log is too large")
 			}
 			out.Stdout, err = io.ReadAll(io.LimitReader(tr, h.Size))
 			if err != nil {
-				return err
+				return invalidResult("read stdout: %w", err)
 			}
 			stdoutSeen = true
 		case "stderr.log":
 			if stderrSeen {
-				return errors.New("result archive contains duplicate stderr.log")
+				return invalidResult("result archive contains duplicate stderr.log")
 			}
 			if h.Size > 16<<20 {
-				return errors.New("stderr.log is too large")
+				return invalidResult("stderr.log is too large")
 			}
 			out.Stderr, err = io.ReadAll(io.LimitReader(tr, h.Size))
 			if err != nil {
-				return err
+				return invalidResult("read stderr: %w", err)
 			}
 			stderrSeen = true
 		default:
 			if strings.HasPrefix(h.Name, "artifacts/") {
 				if !resultSeen {
-					return errors.New("artifact appeared before result.json")
+					return invalidResult("artifact appeared before result.json")
 				}
 				rel := strings.TrimPrefix(h.Name, "artifacts/")
 				artifact, ok := expected[rel]
 				if !ok {
-					return fmt.Errorf("server returned undeclared artifact %q", rel)
+					return invalidResult("server returned undeclared artifact %q", rel)
 				}
 				if seen[rel] {
-					return fmt.Errorf("server returned duplicate artifact %q", rel)
+					return invalidResult("server returned duplicate artifact %q", rel)
 				}
 				if artifact.Size != h.Size {
-					return fmt.Errorf("artifact %q size mismatch", rel)
+					return invalidResult("artifact %q size mismatch", rel)
 				}
 				if err := storeReturnedArtifact(root, outputRoot, request, artifact, tr); err != nil {
 					return err
@@ -987,15 +972,15 @@ func unpackResponseWithPolicy(
 				seen[rel] = true
 				continue
 			}
-			return fmt.Errorf("unexpected result entry %q", h.Name)
+			return invalidResult("unexpected result entry %q", h.Name)
 		}
 	}
 	if !resultSeen {
-		return errors.New("server response did not contain result.json")
+		return invalidResult("server response did not contain result.json")
 	}
 	for rel := range expected {
 		if !seen[rel] {
-			return fmt.Errorf("server omitted declared artifact %q", rel)
+			return invalidResult("server omitted declared artifact %q", rel)
 		}
 	}
 	return nil
@@ -1015,7 +1000,7 @@ func writeArtifact(root, rel string, r io.Reader, size int64, expectedSHA256 str
 	}
 	defer func() { _ = scoped.Close() }()
 	pending, err := scoped.Stage(rel, size, func(out io.Writer) error {
-		return safefs.CopyVerified(out, r, size, strings.ToLower(expectedSHA256))
+		return verifyArtifactInput(out, r, size, strings.ToLower(expectedSHA256))
 	})
 	if err != nil {
 		return fmt.Errorf("verify artifact %q: %w", rel, err)
@@ -1056,19 +1041,4 @@ func ensureSafeParent(root, relativeDir string) (string, error) {
 		current = next
 	}
 	return current, nil
-}
-
-func readHTTPError(resp *http.Response) error {
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	b = bytes.TrimSpace(b)
-	if len(b) == 0 {
-		return &HTTPError{StatusCode: resp.StatusCode, Status: resp.Status}
-	}
-	var payload struct {
-		Error string `json:"error"`
-	}
-	if json.Unmarshal(b, &payload) == nil && payload.Error != "" {
-		return &HTTPError{StatusCode: resp.StatusCode, Status: resp.Status, Message: payload.Error}
-	}
-	return &HTTPError{StatusCode: resp.StatusCode, Status: resp.Status, Message: string(b)}
 }

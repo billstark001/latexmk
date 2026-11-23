@@ -102,7 +102,7 @@ func (c *Client) Diagnostics(ctx context.Context, jobID string) (DiagnosticsOutp
 	defer func() { _ = resp.Body.Close() }()
 	diagnostics, logs, incomplete, err := readDiagnostics(resp.Body, declared)
 	if err != nil {
-		return DiagnosticsOutput{}, err
+		return DiagnosticsOutput{}, c.resultResponseError(resp, err)
 	}
 	return DiagnosticsOutput{
 		JobID: jobID, Count: len(diagnostics), Diagnostics: diagnostics,
@@ -135,11 +135,11 @@ func readDiagnostics(r io.Reader, declared map[string]protocol.Artifact) ([]Diag
 		}
 		selectedEntries++
 		if selectedEntries > maxSelectedLogs {
-			return nil, nil, false, errors.New("result archive contains too many selected log files")
+			return nil, nil, false, invalidResult("result archive contains too many selected log files")
 		}
 		logKey := source + "\x00" + path
 		if _, duplicate := selectedPaths[logKey]; duplicate {
-			return nil, nil, false, fmt.Errorf("result archive contains duplicate log %q", path)
+			return nil, nil, false, invalidResult("result archive contains duplicate log %q", path)
 		}
 		selectedPaths[logKey] = struct{}{}
 		parser := newDiagnosticStream(source, path)
@@ -149,15 +149,15 @@ func readDiagnostics(r io.Reader, declared map[string]protocol.Artifact) ([]Diag
 			writer = io.MultiWriter(hash, parser)
 		}
 		if _, err := io.CopyN(writer, tarReader, header.Size); err != nil {
-			return nil, nil, false, err
+			return nil, nil, false, invalidResult("read diagnostic log: %w", err)
 		}
 		parser.finish()
 		if expected != nil {
 			if header.Size != expected.Size {
-				return nil, nil, false, fmt.Errorf("compiler log %q size mismatch", path)
+				return nil, nil, false, invalidResult("compiler log %q size mismatch", path)
 			}
 			if !strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), expected.SHA256) {
-				return nil, nil, false, fmt.Errorf("compiler log %q SHA-256 mismatch", path)
+				return nil, nil, false, invalidResult("compiler log %q SHA-256 mismatch", path)
 			}
 		}
 		raw = append(raw, parser.diagnostics...)

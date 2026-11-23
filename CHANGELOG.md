@@ -38,6 +38,7 @@ All notable changes to latexmk are documented in this file. Entries follow the c
 - Stop CLI-only changes from triggering automatic application-image publication. Keep ordinary CI and CLI releases independent; manual nonpublishing image workflows remain available for CLI/server integration checks.
 - Parse Go command options through urfave/cli, removing handwritten parsers and repeated credential/publication scans. Preserve public spellings and ordered overrides; accept explicit boolean values, stop at the first syntax error, and classify compile/cache configuration errors with exit status `2`.
 - Align all workspace packages, executable defaults, deployment defaults and the CLI user agent on the coordinated `0.5.0` release line.
+- Preserve bounded HTTP status, request ID, retry delay and service diagnostics in compile failures, including invalid successful responses, while keeping local output errors distinct and omitting raw gateway bodies and credentials.
 
 ### Fixed
 

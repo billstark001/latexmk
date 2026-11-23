@@ -350,7 +350,11 @@ func runResolvedCompile(cwd string, cfg config.Resolved, opts compileOptions) in
 	}
 	prepCancel()
 	if prepErr != nil {
-		return fail(prepErr)
+		command := "compile"
+		if opts.detach {
+			command = "compile.start"
+		}
+		return failAgent(command, opts.jsonOutput, prepErr)
 	}
 	if opts.realtime {
 		return runLive(c, request, opts)
@@ -419,7 +423,7 @@ func compileWithTimeout(
 
 func reportCompile(out client.CompileOutput, err error, opts compileOptions) int {
 	if err != nil {
-		return fail(err)
+		return failAgent("compile", opts.jsonOutput, err)
 	}
 	for _, warning := range out.Warnings {
 		terminalFprintln(os.Stderr, "latexmk: warning:", terminalText(warning))

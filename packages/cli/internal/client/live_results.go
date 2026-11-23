@@ -73,12 +73,13 @@ func (c *Client) DownloadLiveResult(
 		return out, "", err
 	}
 	decodeErr := unpackResponseWithPolicy(resp.Body, generation, &out, request, c.ProjectRoot)
+	decodeErr = c.resultResponseError(resp, decodeErr)
 	err = errors.Join(decodeErr, resp.Body.Close())
 	if err != nil {
 		return out, "", err
 	}
 	if out.Result.RequestID != job.ID || out.Result.SessionID != job.SessionID || out.Result.Revision != job.Revision {
-		return out, "", errors.New("result does not match the requested session revision")
+		return out, "", c.responseError(resp, "invalid_result_archive", nil)
 	}
 	out.Result.CompileCache = job.Result.CompileCache
 	if !out.Result.Success {

@@ -6,7 +6,7 @@ This contract is for local agents and scripts. The CLI uses the same token, time
 
 ## Compatibility
 
-New Agent-facing commands use a versioned JSON envelope. Existing JSON output from `compile`, `files`, `meta`, `cache ignore`, and `remote clean` remains unchanged for now. Those commands will move to the versioned contract only through an explicit compatibility mechanism. Their current top-level JSON shape will not change silently.
+New Agent-facing commands use a versioned JSON envelope. Successful attached `compile` output remains the raw compile result; request/preparation and result-download failures now use the failure envelope with command `compile` so HTTP diagnostics remain machine-readable. Earlier local argument/configuration errors retain their existing interface. Existing JSON output from `files`, `meta`, `cache ignore`, and `remote clean` remains unchanged. Their current top-level JSON shape will not change silently.
 
 ## Envelope
 
@@ -55,6 +55,7 @@ Stable error codes currently include:
 - `rate_limited`;
 - `http_error`;
 - `server_error`;
+- `invalid_response`;
 - `network_error`;
 - `timeout`;
 - `cancelled`;
@@ -63,6 +64,16 @@ Stable error codes currently include:
 - `result_not_ready`;
 - `result_unavailable`;
 - `artifact_not_found`.
+
+## HTTP failure details
+
+HTTP failures preserve `details.httpStatus`, the safe request `method` and `path` (without URL credentials or query), and the following fields when available: `requestId` from `X-Request-ID`, validated `retryAfter` seconds or HTTP-date, `contentType`, and `serverMessage` from the service's JSON `error` string. Human-readable failures include status, request ID, retry delay and that message. The current service error schema is `{ "error": "message" }`; the client does not guess a server error-code schema from other JSON bodies or gateway pages.
+
+Error bodies are limited to 64 KiB, with one extra byte read to detect overflow. Only a complete JSON error object supplies a message, limited to 1,024 Unicode characters with control characters removed and the current bearer token redacted. Arbitrary text/HTML and incomplete/oversized bodies are omitted. `responseIssue` explains omitted or invalid responses; `bodyTruncated` and `messageTruncated` identify their respective limits. Response headers outside the diagnostic allowlist are never dumped.
+
+A received HTTP 200 can still fail JSON, event-stream or result-archive validation. These failures report `invalid_response` and retain the actual HTTP status and request ID. Local input/output errors do not acquire HTTP status. While reading a 2xx body, transport failures retain `network_error`, `timeout` or `cancelled` classification alongside the received HTTP context. An already received non-2xx status remains authoritative even if its error body cannot be read completely, so an authentication rejection does not become a retryable timeout. HTTP 408, 429 and 5xx errors are classified as retryable; other 4xx and invalid 2xx responses are not. `Retry-After` is advisory metadata, and a retryable result does not replace the upload/session APIs' idempotency rules.
+
+Failures before a valid HTTP response retain their transport/context cause without inventing a status. They report a safe connection-refused/reset, DNS, TLS, timeout/cancellation or incomplete-response category. Invalid URL credentials, redirect query strings and malformed proxy status lines are not echoed.
 
 ## Doctor
 
