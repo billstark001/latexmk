@@ -20,6 +20,9 @@ jobs:
   measure:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
     env:
       BASE_IMAGE: ${{ inputs.image }}
       SAMPLES: ${{ inputs.samples }}
@@ -104,6 +107,21 @@ jobs:
             --samples "$SAMPLES" \
             --expected-commit "$GITHUB_SHA" \
             --output "$OUTPUT" 2>&1 | tee "$OUTPUT/benchmark.log"
+      - name: Require complete measurement evidence
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import importlib.util
+          import json
+          import os
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('diagnostics', 'scripts/realtime-diagnostics.py')
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          raw = json.loads((Path(os.environ['OUTPUT']) / 'raw.json').read_text())
+          module.require_complete_report(raw, int(os.environ['SAMPLES']), os.environ['GITHUB_SHA'])
+          print('Verified complete samples, stage/count coverage and commit provenance')
+          PY
       - name: Add complete or partial measurements to run summary
         if: always()
         run: |

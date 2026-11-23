@@ -627,6 +627,32 @@ def run_benchmark(args):
     return 1 if raw["errors"] else 0
 
 
+def require_complete_report(raw, samples, commit):
+    """A green CI job requires completed measurements, not merely a successful tee."""
+    if raw.get("status") != "succeeded" or raw.get("errors"):
+        raise ValueError("benchmark did not complete successfully; inspect raw.json and case logs")
+    if raw.get("server_logs_complete") is not True:
+        raise ValueError("benchmark server log is incomplete")
+    cases = raw.get("cases", [])
+    measured = [sample for case in cases for sample in case.get("samples", [])]
+    if len(cases) != 16 or len(measured) != 16 * samples:
+        raise ValueError("benchmark did not collect the complete 16-condition/workload sample matrix")
+    if any(case.get("status") != "succeeded" for case in cases):
+        raise ValueError("benchmark has an unfinished case")
+    if any(sample.get("status") != "succeeded" or sample.get("counts_status") != "complete"
+           or sample.get("analysis_error") for sample in measured):
+        raise ValueError("benchmark contains failed or incompletely counted samples")
+    rows = raw.get("summaries", [])
+    if len(rows) != 16 or any(row.get("n") != samples or row.get("counted_samples") != samples
+                              or row.get("analyzed_samples") != samples for row in rows):
+        raise ValueError("benchmark summary is incomplete")
+    metadata = raw["metadata"]
+    revisions = (metadata["commit"], metadata["cli"]["commit"], metadata["server"]["commit"],
+                 metadata["image_details"]["labels"]["org.opencontainers.image.revision"])
+    if any(revision != commit for revision in revisions):
+        raise ValueError("benchmark provenance does not match the workflow commit")
+
+
 def pinned_image(value):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}", value):
         raise argparse.ArgumentTypeError("image must be a digest-pinned application image")

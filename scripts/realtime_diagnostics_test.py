@@ -6,6 +6,9 @@ import hashlib
 import importlib.util
 import io
 import json
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 import struct
 import tempfile
@@ -380,6 +383,34 @@ class FailureRetentionTests(unittest.TestCase):
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_explicit_bash_fails_a_python_pipeline_even_when_tee_succeeds(self):
+        workflow = (SCRIPT.parent.parent / ".github/workflows/realtime-diagnostics.yml").read_text()
+        self.assertRegex(workflow, r"defaults:\n\s+run:\n\s+shell: bash")
+        command = shlex.quote(sys.executable) + " -c 'raise SystemExit(7)' | tee failure.log"
+        with tempfile.TemporaryDirectory() as directory:
+            masked = subprocess.run(["bash", "-e", "-c", command], cwd=directory, capture_output=True)
+            checked = subprocess.run(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", command],
+                                     cwd=directory, capture_output=True)
+            self.assertTrue((Path(directory) / "failure.log").exists())
+        self.assertEqual(masked.returncode, 0)
+        self.assertEqual(checked.returncode, 7)
+
+    def test_terminal_contract_rejects_false_green_and_missing_samples(self):
+        metadata = {"commit": "commit", "cli": {"commit": "commit"}, "server": {"commit": "commit"},
+                    "image_details": {"labels": {"org.opencontainers.image.revision": "commit"}}}
+        sample = {"status": "succeeded", "counts_status": "complete"}
+        raw = {"status": "succeeded", "errors": [], "server_logs_complete": True, "metadata": metadata,
+               "cases": [{"status": "succeeded", "samples": [dict(sample), dict(sample)]} for _ in range(16)],
+               "summaries": [{"n": 2, "counted_samples": 2, "analyzed_samples": 2} for _ in range(16)]}
+        DIAG.require_complete_report(raw, 2, "commit")
+        raw["status"], raw["errors"] = "failed", ["CLI exited with status 2"]
+        with self.assertRaisesRegex(ValueError, "did not complete successfully"):
+            DIAG.require_complete_report(raw, 2, "commit")
+        raw["status"], raw["errors"] = "succeeded", []
+        raw["cases"][0]["samples"] = []
+        with self.assertRaisesRegex(ValueError, "complete 16-condition"):
+            DIAG.require_complete_report(raw, 2, "commit")
+
     def test_benchmark_is_manual_and_loopback_only(self):
         workflow = (SCRIPT.parent.parent / ".github/workflows/realtime-diagnostics.yml").read_text()
         self.assertIn("  workflow_dispatch:", workflow)
