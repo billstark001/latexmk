@@ -38,6 +38,10 @@ All notable changes to latexmk are documented in this file. Entries follow the c
 - Parse Go command options through urfave/cli, removing handwritten parsers and repeated credential/publication scans. Preserve public spellings and ordered overrides; accept explicit boolean values, stop at the first syntax error, and classify compile/cache configuration errors with exit status `2`.
 - Align all workspace packages, executable defaults, deployment defaults and the CLI user agent on the coordinated `0.5.0` release line.
 
+### Fixed
+
+- Keep doctor path selection consistent across symbolic links, check the selected engine on metadata-only servers, and return structured JSON for configuration and service failures.
+
 ## @latexmk/cli [0.4.3] - 2026-10-22
 
 ### Added

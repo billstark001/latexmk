@@ -66,7 +66,7 @@ Stable error codes currently include:
 
 ## Doctor
 
-`doctor --realtime --server-cache reuse --target NAME --json` retains the existing metadata fields at the top level and adds `doctor` with target/entry/engine, status and realtime diagnostics. `meta --json` remains raw metadata without a doctor report. This is the existing unversioned JSON interface, not the envelope shown above.
+`doctor --realtime --server-cache reuse --target NAME --json` retains the existing metadata fields at the top level and adds `doctor` with target/entry/engine, status and realtime diagnostics. Successful reports use this existing unversioned JSON interface. Failures use the envelope shown above with command `doctor`: local configuration and argument errors return `invalid_arguments` (exit 2), while service failures use the corresponding error classification. Syntax errors honor `--json` only when it was parsed before the error. `meta --json` remains raw metadata without a doctor report.
 
 `doctor.realtime` separates requested policy/workspace, infrastructure `supported`, and configuration `enabled`. It includes server limits, selected baseline/source/state, resource-lock state, `resourceContentsChecked`, structured `reasons` (`code`, `message`, `blocking`) and suggested `actions`. Doctor only reads service/baseline metadata and existing local lock data. An available runtime or matching recorded requirement is not a verified prepared environment, a cache hit or a successful build. Health/report success can coexist with `doctor.status: "attention"`; inspect blockers before requesting reuse.
 

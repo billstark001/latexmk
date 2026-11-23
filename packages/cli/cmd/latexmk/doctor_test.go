@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
+	"github.com/billstark001/latexmk/packages/cli/internal/config"
 	cliresources "github.com/billstark001/latexmk/packages/cli/internal/resources"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 	"github.com/billstark001/latexmk/packages/shared/resources"
@@ -273,5 +274,165 @@ func TestDoctorReportsFrozenLocksAndUnavailableInventory(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, ".latexmk-cache")); !os.IsNotExist(err) {
 		t.Fatalf("diagnosis created project identity: %v", err)
+	}
+}
+
+func TestDoctorPathsUsesPhysicalPathsWithoutRequiringEntry(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "project")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.tex"), []byte("source"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ name, root, entry, want string }{
+		{"root-alias", alias, filepath.Join(root, "main.tex"), "main.tex"},
+		{"entry-alias", root, filepath.Join(alias, "main.tex"), "main.tex"},
+		{"missing-entry", root, filepath.Join(alias, "missing", "main.tex"), "missing/main.tex"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			opts := compileOptions{projectRoot: test.root, entry: test.entry}
+			if err := doctorPaths(root, config.Resolved{}, &opts); err != nil {
+				t.Fatal(err)
+			}
+			if opts.projectRoot != root || opts.entry != test.want {
+				t.Fatalf("root=%s entry=%s", opts.projectRoot, opts.entry)
+			}
+		})
+	}
+	opts := compileOptions{entry: filepath.Join(alias, "main.tex")}
+	if err := doctorPaths(
+		root,
+		config.Resolved{},
+		&opts,
+	); err != nil || opts.projectRoot != root ||
+		opts.entry != "main.tex" {
+		t.Fatalf("implicit root differs from compilation: %#v %v", opts, err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.tex")
+	if err := os.WriteFile(outside, []byte("source"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "outside.tex")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	opts = compileOptions{projectRoot: root, entry: link}
+	if err := doctorPaths(root, config.Resolved{}, &opts); err == nil {
+		t.Fatal("doctor accepted an entry symlink escaping the project")
+	}
+	loop := filepath.Join(root, "loop")
+	if err := os.Symlink("loop", loop); err != nil {
+		t.Fatal(err)
+	}
+	opts = compileOptions{projectRoot: loop}
+	if err := doctorPaths(root, config.Resolved{}, &opts); err == nil {
+		t.Fatal("doctor ignored a project root resolution error")
+	}
+}
+
+func TestDoctorJSONErrorsRespectParsedFormat(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Chdir(t.TempDir())
+	for _, test := range []struct {
+		name string
+		args []string
+		json bool
+	}{
+		{"unknown-target", []string{"--target", "absent", "--json"}, true},
+		{"invalid-value-before-json", []string{"--server-cache", "invalid", "--json"}, true},
+		{"syntax-after-json", []string{"--json", "--invalid-option"}, true},
+		{"syntax-before-json", []string{"--invalid-option", "--json"}, false},
+		{"json-is-value", []string{"--server", "--json"}, false},
+		{"json-disabled", []string{"--json=false", "--server-cache", "invalid"}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			code, stdout, stderr := captureCommandOutput(t, func() int {
+				return runDoctor(append([]string{"--token-mode", "none"}, test.args...))
+			})
+			if !test.json {
+				if code != 2 || stderr == "" || strings.Contains(stdout, `"schemaVersion"`) {
+					t.Fatalf("human error: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+				}
+				return
+			}
+			var envelope agentJSONEnvelope
+			if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+				t.Fatalf("JSON error missing: code=%d stdout=%q stderr=%q: %v", code, stdout, stderr, err)
+			}
+			if code != 2 || stderr != "" || envelope.OK || envelope.Command != "doctor" ||
+				envelope.Error == nil || envelope.Error.Code != "invalid_arguments" {
+				t.Fatalf("invalid JSON error: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+		})
+	}
+}
+
+func TestDoctorChecksMetadataEngineWhenNoResourceBaseline(t *testing.T) {
+	meta := doctorTestMetadata()
+	meta.Capabilities.ResourceEnvironments = false
+	meta.Capabilities.IsolatedWorkspaces = true
+	meta.Capabilities.Engines = []string{"pdflatex"}
+	opts := compileOptions{projectRoot: t.TempDir(), entry: "main.tex", engine: "xelatex", realtime: true,
+		auxiliary: protocol.AuxiliaryOptions{Server: "reuse"}}
+	result := diagnoseRealtime(opts, meta, client.EnvironmentInventory{}, nil)
+	if result.Realtime.Enabled || !hasDoctorReason(result, "engine-unavailable") {
+		t.Fatalf("unsupported legacy engine reported enabled: %#v", result)
+	}
+	opts.engine = "pdflatex"
+	result = diagnoseRealtime(opts, meta, client.EnvironmentInventory{}, nil)
+	if !result.Realtime.Enabled {
+		t.Fatalf("supported metadata engine rejected: %#v", result)
+	}
+}
+
+func TestDoctorJSONReportsConfigurationAndConnectionFailures(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("LATEXMK_TOKEN", "")
+	t.Setenv("LATEXMK_TOKEN_FILE", "")
+	t.Chdir(t.TempDir())
+	for _, test := range []struct {
+		name, configuration, endpoint, wantCode string
+		status, wantExit                        int
+	}{
+		{name: "configuration", configuration: `{"timeout":"bad"}`, wantCode: "invalid_arguments", wantExit: 2},
+		{name: "authentication", configuration: `{"token":{"file":"absent-token"}}`, wantCode: "invalid_arguments", wantExit: 2},
+		{name: "health", endpoint: "/healthz", status: http.StatusUnauthorized, wantCode: "authentication_failed", wantExit: 1},
+		{name: "metadata", endpoint: "/v1/meta", status: http.StatusServiceUnavailable, wantCode: "server_error", wantExit: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := os.WriteFile(".latexmk.json", []byte(test.configuration), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if test.configuration == "" {
+				if err := os.Remove(".latexmk.json"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					t.Errorf("unexpected method: %s", r.Method)
+				}
+				if r.URL.Path == test.endpoint {
+					http.Error(w, "service unavailable", test.status)
+				}
+			}))
+			defer server.Close()
+			code, stdout, stderr := captureCommandOutput(t, func() int {
+				return runDoctor([]string{"--server", server.URL, "--json"})
+			})
+			var envelope agentJSONEnvelope
+			if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+				t.Fatalf("invalid JSON failure: code=%d stdout=%q stderr=%q: %v", code, stdout, stderr, err)
+			}
+			if code != test.wantExit || stderr != "" || envelope.OK || envelope.Command != "doctor" ||
+				envelope.Error == nil || envelope.Error.Code != test.wantCode {
+				t.Fatalf("wrong failure boundary: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+		})
 	}
 }

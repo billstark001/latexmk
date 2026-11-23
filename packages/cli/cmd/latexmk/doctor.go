@@ -74,53 +74,54 @@ func runDoctor(args []string) int {
 	}
 	changes := compileArguments()
 	cfg, parsed, err := loadCommand("doctor", cwd, args, changes.Flags()...)
+	jsonOutput := parsed != nil && parsed.Bool("json")
 	if err != nil {
-		return fail(err)
+		return failAgentArguments("doctor", jsonOutput, err)
 	}
 	opts := optionsFromConfig(cfg, false)
 	if err := applyCompileArguments(changes, &opts, parsed); err != nil {
-		return fail(err)
+		return failAgentArguments("doctor", jsonOutput, err)
 	}
 	if opts.target == "" && opts.entry == "" {
 		opts.target, err = implicitTarget(cfg)
 		if err != nil {
-			return fail(err)
+			return failAgentArguments("doctor", jsonOutput, err)
 		}
 	}
 	if opts.target == "all" {
-		return fail(errors.New("doctor selects one target; use --target NAME"))
+		return failAgentArguments("doctor", jsonOutput, errors.New("doctor selects one target; use --target NAME"))
 	}
 	if opts.target != "" {
 		if err := applyBuildTarget(&opts, cfg, parsed); err != nil {
-			return fail(err)
+			return failAgentArguments("doctor", jsonOutput, err)
 		}
 	}
 	finalizeResourceOptions(&opts)
 	if err := validateResourceCLI(opts); err != nil {
-		return fail(err)
+		return failAgentArguments("doctor", jsonOutput, err)
 	}
 	if err := doctorPaths(cwd, cfg, &opts); err != nil {
-		return fail(err)
+		return failAgentArguments("doctor", jsonOutput, err)
 	}
 	reportDoctorProjectCache(cwd, opts.projectRoot, opts.jsonOutput)
 	if err := cfg.Authenticate(opts.projectRoot); err != nil {
-		return fail(err)
+		return failAgentArguments("doctor", jsonOutput, err)
 	}
 	if !opts.jsonOutput {
 		terminalFprintln(os.Stderr, "authentication:", cfg.TokenSource)
 	}
 	connected, err := client.New(opts.server, cfg.Token, opts.timeout, opts.insecure)
 	if err != nil {
-		return fail(err)
+		return failAgentArguments("doctor", jsonOutput, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
 	if err := connected.Health(ctx); err != nil {
-		return fail(fmt.Errorf("health check failed: %w", err))
+		return failAgent("doctor", jsonOutput, fmt.Errorf("health check failed: %w", err))
 	}
 	meta, err := connected.Metadata(ctx)
 	if err != nil {
-		return fail(err)
+		return failAgent("doctor", jsonOutput, err)
 	}
 	var inventory client.EnvironmentInventory
 	var inventoryErr error
@@ -145,8 +146,15 @@ func runDoctor(args []string) int {
 func doctorPaths(cwd string, cfg config.Resolved, opts *compileOptions) error {
 	root := opts.projectRoot
 	entry := opts.entry
-	if entry != "" && !filepath.IsAbs(entry) {
-		entry = filepath.Join(cwd, entry)
+	if entry != "" {
+		if !filepath.IsAbs(entry) {
+			entry = filepath.Join(cwd, entry)
+		}
+		physical, err := doctorPhysicalPath(entry)
+		if err != nil {
+			return fmt.Errorf("entry: %w", err)
+		}
+		entry = physical
 	}
 	if root == "" {
 		root = cwd
@@ -163,14 +171,14 @@ func doctorPaths(cwd string, cfg config.Resolved, opts *compileOptions) error {
 			}
 		}
 	}
-	absolute, err := filepath.Abs(root)
+	if !filepath.IsAbs(root) {
+		root = filepath.Join(cwd, root)
+	}
+	absolute, err := doctorPhysicalPath(root)
 	if err != nil {
-		return err
+		return fmt.Errorf("project root: %w", err)
 	}
 	opts.projectRoot = absolute
-	if physical, err := filepath.EvalSymlinks(absolute); err == nil {
-		opts.projectRoot = physical
-	}
 	if entry != "" {
 		rel, err := filepath.Rel(absolute, entry)
 		if err != nil {
@@ -182,6 +190,30 @@ func doctorPaths(cwd string, cfg config.Resolved, opts *compileOptions) error {
 		opts.entry = filepath.ToSlash(rel)
 	}
 	return nil
+}
+
+// Resolve existing symlink prefixes while allowing missing entry directories.
+// Doctor needs consistent path identity, not access to the source contents.
+func doctorPhysicalPath(name string) (string, error) {
+	var missing []string
+	for {
+		physical, err := filepath.EvalSymlinks(name)
+		if err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				physical = filepath.Join(physical, missing[i])
+			}
+			return physical, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(name)
+		if parent == name {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(name))
+		name = parent
+	}
 }
 
 func diagnoseRealtime(
@@ -273,8 +305,13 @@ func diagnoseRealtime(
 			false,
 		)
 	}
-	if baseline != nil && !slices.Contains(baseline.Engines, opts.engine) {
-		add("engine-unavailable", "The selected baseline does not enable engine "+opts.engine+".", true)
+	engines := meta.Capabilities.Engines
+	if baseline != nil {
+		engines = baseline.Engines
+	}
+	if baselineKnown && !slices.Contains(engines, opts.engine) {
+		realtime.Supported = false
+		add("engine-unavailable", "The selected runtime does not enable engine "+opts.engine+".", true)
 		action("Select an engine listed by the chosen runtime, or another target/environment.")
 	}
 	probe := &client.Client{}
