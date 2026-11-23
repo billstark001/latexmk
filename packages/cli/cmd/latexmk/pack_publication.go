@@ -28,6 +28,9 @@ func applyPublication(packing *packOptions, opts *compileOptions, cfg config.Res
 		return errors.New("--publication cannot be combined with an entry, --target, or engine override")
 	}
 	opts.target = publication.Target
+	if !packing.preservePermissionsExplicit {
+		packing.preservePermissions = publication.PreservePermissions
+	}
 	if !packing.modeExplicit && publication.Mode != "" {
 		packing.mode = publication.Mode
 	}

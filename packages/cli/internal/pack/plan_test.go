@@ -124,13 +124,13 @@ func TestPublicationExclusionsCannotRemoveEntryOrHideCollisions(t *testing.T) {
 func TestMembersDigestIsOrderIndependentAndContentSensitive(t *testing.T) {
 	first := []projectarchive.File{{Path: "a.tex", SHA256: "a", Size: 1}, {Path: "b.tex", SHA256: "b", Size: 2}}
 	second := []projectarchive.File{first[1], first[0]}
-	a, _ := MembersDigest(first)
-	b, _ := MembersDigest(second)
+	a, _ := MembersDigest(first, nil)
+	b, _ := MembersDigest(second, nil)
 	if a != b {
 		t.Fatal("digest depends on member order")
 	}
 	second[0].SHA256 = "changed"
-	c, _ := MembersDigest(second)
+	c, _ := MembersDigest(second, nil)
 	if a == c {
 		t.Fatal("digest ignored content")
 	}

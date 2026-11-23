@@ -42,11 +42,11 @@ func capture(t *testing.T, content map[string]string) *projectarchive.Frozen {
 func TestZIPIsDeterministicAndUsesCapturedBytes(t *testing.T) {
 	frozen := capture(t, map[string]string{"main.tex": "source", "figures/a.pdf": "graphic"})
 	var first, second bytes.Buffer
-	if err := writeZIP(context.Background(), &first, frozen.Files); err != nil {
+	if err := writeZIP(context.Background(), &first, frozen.Files, nil); err != nil {
 		t.Fatal(err)
 	}
 	frozen.Files[0], frozen.Files[1] = frozen.Files[1], frozen.Files[0]
-	if err := writeZIP(context.Background(), &second, frozen.Files); err != nil {
+	if err := writeZIP(context.Background(), &second, frozen.Files, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(first.Bytes(), second.Bytes()) {
@@ -75,7 +75,7 @@ func TestFailedZIPPreservesExistingOutput(t *testing.T) {
 	if err := os.WriteFile(output, []byte("previous valid package"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := Write(context.Background(), output, frozen.Files); err == nil {
+	if err := Write(context.Background(), output, frozen.Files, nil); err == nil {
 		t.Fatal("accepted changed captured member")
 	}
 	data, err := os.ReadFile(output)
@@ -93,11 +93,11 @@ func TestZIPRejectsUnsafeDuplicateAndSymlinkMembers(t *testing.T) {
 	for _, name := range []string{"../escape.tex", "a/../main.tex", "/absolute.tex", `a\b.tex`} {
 		file := frozen.Files[0]
 		file.Path = name
-		if err := writeZIP(context.Background(), &bytes.Buffer{}, []projectarchive.File{file}); err == nil {
+		if err := writeZIP(context.Background(), &bytes.Buffer{}, []projectarchive.File{file}, nil); err == nil {
 			t.Fatalf("accepted %q", name)
 		}
 	}
-	if err := writeZIP(context.Background(), &bytes.Buffer{}, append(frozen.Files, frozen.Files...)); err == nil {
+	if err := writeZIP(context.Background(), &bytes.Buffer{}, append(frozen.Files, frozen.Files...), nil); err == nil {
 		t.Fatal("accepted duplicate")
 	}
 	outside := filepath.Join(t.TempDir(), "outside.tex")
@@ -110,7 +110,7 @@ func TestZIPRejectsUnsafeDuplicateAndSymlinkMembers(t *testing.T) {
 	if err := os.Symlink(outside, frozen.Files[0].Source); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if err := writeZIP(context.Background(), &bytes.Buffer{}, frozen.Files); err == nil {
+	if err := writeZIP(context.Background(), &bytes.Buffer{}, frozen.Files, nil); err == nil {
 		t.Fatal("followed a replaced symlink")
 	}
 }
@@ -150,7 +150,7 @@ func TestCancelledEmptyPackPreservesExistingOutput(t *testing.T) {
 	if err := os.WriteFile(output, original, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := Write(ctx, output, nil); !errors.Is(err, context.Canceled) {
+	if err := Write(ctx, output, nil, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled pack error=%v", err)
 	}
 	data, err := os.ReadFile(output)

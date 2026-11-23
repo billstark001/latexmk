@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/billstark001/latexmk/packages/shared/safefs"
@@ -45,4 +46,21 @@ func ReadFile(file File, limit int64) ([]byte, error) {
 		return nil, fmt.Errorf("file exceeds %d bytes: %s", limit, file.Path)
 	}
 	return data, err
+}
+
+// CapturePermissions reads metadata from the same confined regular-file handle
+// used for capture. File type and privileged mode bits never become permissions.
+func CapturePermissions(input *os.File) (*os.FileMode, error) {
+	info, err := input.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("permission source must be a regular file")
+	}
+	if runtime.GOOS == "windows" {
+		return nil, nil
+	}
+	permissions := info.Mode().Perm()
+	return &permissions, nil
 }

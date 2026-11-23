@@ -26,32 +26,35 @@ import (
 )
 
 type packOptions struct {
-	mode, output          string
-	outputTemplate        string
-	outputFromPublication bool
-	verifyMode            string
-	modeExplicit          bool
-	publication           string
-	verifyIn              string
-	resourceActions       map[string]string
-	includeFiles          []string
-	exclude               []string
-	explain               bool
+	mode, output                string
+	outputTemplate              string
+	outputFromPublication       bool
+	verifyMode                  string
+	modeExplicit                bool
+	publication                 string
+	verifyIn                    string
+	resourceActions             map[string]string
+	includeFiles                []string
+	exclude                     []string
+	explain                     bool
+	preservePermissions         bool
+	preservePermissionsExplicit bool
 }
 
 type packView struct {
-	Mode          string                 `json:"mode"`
-	Output        string                 `json:"output"`
-	Entry         string                 `json:"entry"`
-	Engine        string                 `json:"engine"`
-	Files         []projectarchive.File  `json:"files"`
-	RequiresBuild bool                   `json:"requiresBuild"`
-	Verified      bool                   `json:"verified"`
-	BuildJobID    string                 `json:"buildJobId,omitempty"`
-	Warnings      []string               `json:"warnings,omitempty"`
-	Publication   string                 `json:"publication,omitempty"`
-	Plan          *projectpack.Plan      `json:"plan,omitempty"`
-	Verification  resources.Verification `json:"verification"`
+	PreservePermissions bool                   `json:"preservePermissions"`
+	Mode                string                 `json:"mode"`
+	Output              string                 `json:"output"`
+	Entry               string                 `json:"entry"`
+	Engine              string                 `json:"engine"`
+	Files               []projectarchive.File  `json:"files"`
+	RequiresBuild       bool                   `json:"requiresBuild"`
+	Verified            bool                   `json:"verified"`
+	BuildJobID          string                 `json:"buildJobId,omitempty"`
+	Warnings            []string               `json:"warnings,omitempty"`
+	Publication         string                 `json:"publication,omitempty"`
+	Plan                *projectpack.Plan      `json:"plan,omitempty"`
+	Verification        resources.Verification `json:"verification"`
 }
 
 func packArguments() *argv.Options[packOptions] {
@@ -87,6 +90,10 @@ func packArguments() *argv.Options[packOptions] {
 			options.resourceActions = make(map[string]string)
 		}
 		options.resourceActions[id] = action
+		return nil
+	})
+	changes.Bool("preserve-permissions", func(options *packOptions, value bool) error {
+		options.preservePermissions, options.preservePermissionsExplicit = value, true
 		return nil
 	})
 	changes.Bool("explain", func(options *packOptions, value bool) error { options.explain = value; return nil })
@@ -247,10 +254,16 @@ func runPack(args []string) int {
 	opts.resourceCapture = resourceCapture
 	prepareCtx, cancelPrepare := context.WithTimeout(ctx, resourcePrepareTimeout(opts))
 	defer cancelPrepare()
-	view := packView{Mode: packing.mode, Output: packing.output, Entry: opts.entry, Engine: opts.engine,
-		Publication:   packing.publication,
-		RequiresBuild: packing.mode == "arxiv" || packing.verifyMode == "build" || packing.verifyMode == "target",
-		Verification:  resources.Verification{Status: "not-requested", Scope: publicationScope(packing)}}
+	view := packView{
+		PreservePermissions: packing.preservePermissions,
+		Mode:                packing.mode,
+		Output:              packing.output,
+		Entry:               opts.entry,
+		Engine:              opts.engine,
+		Publication:         packing.publication,
+		RequiresBuild:       packing.mode == "arxiv" || packing.verifyMode == "build" || packing.verifyMode == "target",
+		Verification:        resources.Verification{Status: "not-requested", Scope: publicationScope(packing)},
+	}
 	if view.RequiresBuild {
 		view.Verification.Status = "pending"
 	}
@@ -285,9 +298,16 @@ func runPack(args []string) int {
 			return fail(err)
 		}
 	}
-	planner, err := projectpack.NewPlanner(projectpack.PlanOptions{Entry: opts.entry, Mode: packing.mode,
-		Exclude: packing.exclude, Resources: resourceCapture.Resources, Actions: packing.resourceActions,
-		ResourceFiles: resourceCapture.MountFilesByID, Preview: opts.dryRun})
+	planner, err := projectpack.NewPlanner(projectpack.PlanOptions{
+		Entry:               opts.entry,
+		Mode:                packing.mode,
+		PreservePermissions: packing.preservePermissions,
+		Exclude:             packing.exclude,
+		Resources:           resourceCapture.Resources,
+		Actions:             packing.resourceActions,
+		ResourceFiles:       resourceCapture.MountFilesByID,
+		Preview:             opts.dryRun,
+	})
 	if err != nil {
 		return fail(err)
 	}
@@ -436,12 +456,12 @@ func runPack(args []string) int {
 		view.Verified = true
 		view.Verification.Status = "passed"
 	}
-	view.Verification.MembersDigest, err = projectpack.MembersDigest(files)
+	view.Verification.MembersDigest, err = projectpack.MembersDigest(files, plan.Permissions)
 	if err != nil {
 		return fail(err)
 	}
 	plan.Files = files
-	if err := publishPack(ctx, opts, packing, files); err != nil {
+	if err := publishPack(ctx, opts, packing, plan); err != nil {
 		return fail(err)
 	}
 	view.Files, view.RequiresBuild = files, false
@@ -470,8 +490,8 @@ func canonicalPackPath(output string) (string, error) {
 	}
 }
 
-func publishPack(ctx context.Context, opts compileOptions, packing packOptions, files []projectarchive.File) error {
-	prepared, err := projectpack.Prepare(ctx, packing.output, files)
+func publishPack(ctx context.Context, opts compileOptions, packing packOptions, plan projectpack.Plan) error {
+	prepared, err := projectpack.Prepare(ctx, packing.output, plan.Files, plan.Permissions)
 	if err != nil {
 		return err
 	}

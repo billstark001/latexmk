@@ -16,7 +16,7 @@ func TestPreparedZIPMetadataPrecedesAtomicPublication(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	prepared, err := Prepare(ctx, output, nil)
+	prepared, err := Prepare(ctx, output, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestPreparedZIPMetadataPrecedesAtomicPublication(t *testing.T) {
 	if err := prepared.Close(); err != nil {
 		t.Fatal(err)
 	}
-	prepared, err = Prepare(context.Background(), output, nil)
+	prepared, err = Prepare(context.Background(), output, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

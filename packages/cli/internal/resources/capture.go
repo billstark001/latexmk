@@ -319,6 +319,10 @@ func captureFile(
 		return file, err
 	}
 	defer func() { err = errors.Join(err, input.Close()) }()
+	file.SourcePermissions, err = projectarchive.CapturePermissions(input)
+	if err != nil {
+		return file, err
+	}
 	destination := path.Join("content", id, source.member)
 	if err := spool.MakeDirs(path.Dir(destination), 0700); err != nil {
 		return file, err
@@ -336,7 +340,9 @@ func (c *Captured) mount(file projectarchive.File, destination string) (projecta
 		if existing.SHA256 != file.SHA256 || existing.Size != file.Size {
 			return file, fmt.Errorf("resource mount collision: %s", destination)
 		}
-		return existing, nil
+		// Keep this resource's original permissions when identical bytes share a mount.
+		file.Path, file.Source = destination, existing.Source
+		return file, nil
 	}
 	target := filepath.Join(c.directory, "mounted", filepath.FromSlash(destination))
 	if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {

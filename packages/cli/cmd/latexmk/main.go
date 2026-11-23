@@ -1413,7 +1413,7 @@ Usage:
   latexmk artifacts get JOB_ID ARTIFACT_ID [--out-dir DIR] [--json]
   latexmk files [options] [main.tex]
   latexmk pack [options] [main.tex] --mode default|arxiv [--output FILE.zip] [--verify]
-  latexmk pack [options] [main.tex] --output-template TEMPLATE.zip
+  latexmk pack [options] [main.tex] --output-template TEMPLATE.zip [--preserve-permissions]
   latexmk name render --template TEMPLATE [main.tex|--target NAME] [--json]
   latexmk version
 

@@ -64,6 +64,15 @@ func Freeze(ctx context.Context, files []File, maxFiles int, maxBytes int64, pre
 		if err != nil {
 			return nil, err
 		}
+		if file.SourcePermissions == nil {
+			file.SourcePermissions, err = CapturePermissions(in)
+			if err != nil {
+				return nil, errors.Join(err, in.Close())
+			}
+		} else {
+			permissions := *file.SourcePermissions
+			file.SourcePermissions = &permissions
+		}
 		destination := filepath.Join(dir, filepath.FromSlash(file.Path))
 		if err := os.MkdirAll(filepath.Dir(destination), 0700); err != nil {
 			_ = in.Close()

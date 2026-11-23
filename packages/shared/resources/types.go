@@ -109,14 +109,15 @@ type Lock struct {
 }
 
 type Publication struct {
-	Target       string            `json:"target"`
-	Mode         string            `json:"mode,omitempty"`
-	Environment  string            `json:"environment,omitempty"`
-	Resources    map[string]string `json:"resources,omitempty"`
-	IncludeFiles []string          `json:"includeFiles,omitempty"`
-	Exclude      []string          `json:"exclude,omitempty"`
-	Verify       string            `json:"verify,omitempty"`
-	Output       string            `json:"output,omitempty"`
+	Target              string            `json:"target"`
+	PreservePermissions bool              `json:"preservePermissions,omitempty"`
+	Mode                string            `json:"mode,omitempty"`
+	Environment         string            `json:"environment,omitempty"`
+	Resources           map[string]string `json:"resources,omitempty"`
+	IncludeFiles        []string          `json:"includeFiles,omitempty"`
+	Exclude             []string          `json:"exclude,omitempty"`
+	Verify              string            `json:"verify,omitempty"`
+	Output              string            `json:"output,omitempty"`
 }
 
 type Verification struct {

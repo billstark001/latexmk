@@ -118,8 +118,8 @@ func ValidateOutput(output string) error {
 
 // Write publishes atomically only after every member passes its captured hash.
 // Sorted paths, fixed timestamps and modes make identical snapshots reproducible.
-func Write(ctx context.Context, output string, files []projectarchive.File) error {
-	prepared, err := Prepare(ctx, output, files)
+func Write(ctx context.Context, output string, files []projectarchive.File, permissions map[string]os.FileMode) error {
+	prepared, err := Prepare(ctx, output, files, permissions)
 	if err != nil {
 		return err
 	}
@@ -156,7 +156,12 @@ func (p *Prepared) Close() error {
 	return err
 }
 
-func Prepare(ctx context.Context, output string, files []projectarchive.File) (*Prepared, error) {
+func Prepare(
+	ctx context.Context,
+	output string,
+	files []projectarchive.File,
+	permissions map[string]os.FileMode,
+) (*Prepared, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -172,7 +177,7 @@ func Prepare(ctx context.Context, output string, files []projectarchive.File) (*
 	}
 	hash := sha256.New()
 	pending, err := root.Stage(filepath.Base(output), MaxBytes+maxZIPOverheadBytes, func(dst io.Writer) error {
-		return writeZIP(ctx, io.MultiWriter(dst, hash), files)
+		return writeZIP(ctx, io.MultiWriter(dst, hash), files, permissions)
 	})
 	if err != nil {
 		return nil, errors.Join(err, root.Close())
@@ -189,12 +194,20 @@ func Prepare(ctx context.Context, output string, files []projectarchive.File) (*
 	}, nil
 }
 
-func writeZIP(ctx context.Context, dst io.Writer, files []projectarchive.File) (err error) {
+func writeZIP(
+	ctx context.Context,
+	dst io.Writer,
+	files []projectarchive.File,
+	permissions map[string]os.FileMode,
+) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if len(files) > MaxFiles {
 		return errors.New("pack exceeds file limit")
+	}
+	if err := validatePermissions(files, permissions); err != nil {
+		return err
 	}
 	files = append([]projectarchive.File(nil), files...)
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
@@ -217,7 +230,7 @@ func writeZIP(ctx context.Context, dst io.Writer, files []projectarchive.File) (
 		total += file.Size
 		header := &zip.FileHeader{Name: file.Path, Method: zip.Deflate,
 			Modified: time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC)}
-		header.SetMode(0644)
+		header.SetMode(memberPermissions(file.Path, permissions))
 		member, err := writer.CreateHeader(header)
 		if err != nil {
 			return err
@@ -235,4 +248,36 @@ func writeZIP(ctx context.Context, dst io.Writer, files []projectarchive.File) (
 		}
 	}
 	return nil
+}
+
+func validatePermissions(files []projectarchive.File, permissions map[string]os.FileMode) error {
+	if permissions == nil {
+		return nil
+	}
+	if len(permissions) != len(files) {
+		return errors.New("pack permissions must identify every member exactly once")
+	}
+	selected := make(map[string]bool, len(files))
+	for _, file := range files {
+		selected[file.Path] = true
+		if _, exists := permissions[file.Path]; !exists {
+			return fmt.Errorf("missing permissions for pack member %q", file.Path)
+		}
+	}
+	for name, mode := range permissions {
+		if !selected[name] {
+			return fmt.Errorf("permissions reference an absent pack member %q", name)
+		}
+		if mode & ^os.ModePerm != 0 {
+			return fmt.Errorf("invalid ordinary file permissions for pack member %q", name)
+		}
+	}
+	return nil
+}
+
+func memberPermissions(name string, permissions map[string]os.FileMode) os.FileMode {
+	if permissions == nil {
+		return 0644
+	}
+	return permissions[name]
 }

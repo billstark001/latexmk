@@ -3,6 +3,7 @@ package pack
 import (
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"sort"
 
@@ -15,13 +16,17 @@ import (
 
 // Member explains an included or excluded member without revealing its local spool.
 type Member struct {
-	Path       string `json:"path"`
-	SHA256     string `json:"sha256,omitempty"`
-	Size       int64  `json:"size"`
-	Source     string `json:"source"`
-	ResourceID string `json:"resourceId,omitempty"`
-	Action     string `json:"action"`
-	Reason     string `json:"reason"`
+	Path             string `json:"path"`
+	SHA256           string `json:"sha256,omitempty"`
+	Size             int64  `json:"size"`
+	Source           string `json:"source"`
+	ResourceID       string `json:"resourceId,omitempty"`
+	Action           string `json:"action"`
+	Reason           string `json:"reason"`
+	FileMode         string `json:"fileMode,omitempty"`
+	PermissionPolicy string `json:"permissionPolicy,omitempty"`
+	PermissionReason string `json:"permissionReason,omitempty"`
+	permissions      os.FileMode
 }
 
 type ResourceAction struct {
@@ -31,19 +36,22 @@ type ResourceAction struct {
 }
 
 type Plan struct {
-	Files     []projectarchive.File `json:"-"`
-	Members   []Member              `json:"members"`
-	Resources []ResourceAction      `json:"resources,omitempty"`
+	PreservePermissions bool                   `json:"preservePermissions"`
+	Permissions         map[string]os.FileMode `json:"-"`
+	Files               []projectarchive.File  `json:"-"`
+	Members             []Member               `json:"members"`
+	Resources           []ResourceAction       `json:"resources,omitempty"`
 }
 
 type PlanOptions struct {
-	Entry         string
-	Mode          string
-	Exclude       []string
-	Resources     []resources.Resource
-	Actions       map[string]string
-	ResourceFiles map[string][]projectarchive.File
-	Preview       bool
+	PreservePermissions bool
+	Entry               string
+	Mode                string
+	Exclude             []string
+	Resources           []resources.Resource
+	Actions             map[string]string
+	ResourceFiles       map[string][]projectarchive.File
+	Preview             bool
 }
 
 type exclusion struct {
@@ -54,20 +62,23 @@ type exclusion struct {
 // Planner freezes publication policy once, before source or generated members
 // are selected. All build stages use the same exclusions and resource decisions.
 type Planner struct {
-	entry           string
-	mode            string
-	exclusions      []exclusion
-	resourceFiles   []projectarchive.File
-	resourceMembers []Member
-	actions         []ResourceAction
-	provided        []resources.Resource
+	entry               string
+	preservePermissions bool
+	resourcePermissions map[string]os.FileMode
+	mode                string
+	exclusions          []exclusion
+	resourceFiles       []projectarchive.File
+	resourceMembers     []Member
+	actions             []ResourceAction
+	provided            []resources.Resource
 }
 
 func NewPlanner(options PlanOptions) (*Planner, error) {
 	if err := ValidateMode(options.Mode); err != nil {
 		return nil, err
 	}
-	planner := &Planner{entry: options.Entry, mode: options.Mode}
+	planner := &Planner{entry: options.Entry, mode: options.Mode, preservePermissions: options.PreservePermissions,
+		resourcePermissions: make(map[string]os.FileMode)}
 	for _, expression := range options.Exclude {
 		pattern, err := dependency.NormalizePattern(expression)
 		if err != nil {
@@ -129,14 +140,19 @@ func NewPlanner(options PlanOptions) (*Planner, error) {
 			}
 			included := make(map[string]bool, len(files))
 			for _, file := range files {
-				member, err := planner.member(file, "resource", resource.ID)
+				member, err := planner.member(file, "resource", resource.ID, resource.Type == "files")
 				if err != nil {
 					return nil, err
 				}
 				planner.resourceMembers = append(planner.resourceMembers, member)
 				if member.Action == "include" {
 					included[file.Path] = true
+					if previous, exists := planner.resourcePermissions[file.Path]; exists &&
+						previous != member.permissions {
+						return nil, fmt.Errorf("publication permission collision at %q", file.Path)
+					}
 					planner.resourceFiles = append(planner.resourceFiles, file)
+					planner.resourcePermissions[file.Path] = member.permissions
 				}
 			}
 			for _, name := range resource.LicenseFiles {
@@ -215,7 +231,7 @@ func cloneResources(values []resources.Resource) []resources.Resource {
 	return result
 }
 
-func (p *Planner) member(file projectarchive.File, source, id string) (Member, error) {
+func (p *Planner) member(file projectarchive.File, source, id string, permissionsAllowed bool) (Member, error) {
 	reason := file.Reason
 	if reason == "" {
 		reason = source
@@ -237,20 +253,37 @@ func (p *Planner) member(file projectarchive.File, source, id string) (Member, e
 	}
 	if !keep {
 		member.Action, member.Reason = "exclude", p.mode+" packaging policy"
+		return member, nil
 	}
+	member.permissions, member.PermissionPolicy = 0644, "normalized"
+	switch {
+	case !p.preservePermissions:
+		member.PermissionReason = "permission preservation is disabled"
+	case !permissionsAllowed:
+		member.PermissionReason = source + " has no authorized original permission metadata"
+	case file.SourcePermissions == nil:
+		member.PermissionReason = "source does not expose portable POSIX permissions"
+	default:
+		member.permissions = file.SourcePermissions.Perm()
+		member.PermissionPolicy, member.PermissionReason = "preserved", "captured POSIX rwx bits only"
+	}
+	member.FileMode = fmt.Sprintf("%04o", member.permissions)
 	return member, nil
 }
 
 // Build applies the frozen policy to one complete set of source and generated
 // members. It never edits an earlier plan, even when a later build fails.
 func (p *Planner) Build(sources, generated []projectarchive.File) (Plan, error) {
-	plan := Plan{Members: slices.Clone(p.resourceMembers), Resources: slices.Clone(p.actions)}
+	plan := Plan{PreservePermissions: p.preservePermissions, Permissions: make(map[string]os.FileMode),
+		Members: slices.Clone(p.resourceMembers), Resources: slices.Clone(p.actions)}
 	byPath := make(map[string]projectarchive.File, len(sources)+len(generated)+len(p.resourceFiles))
-	add := func(file projectarchive.File) error {
-		if old, exists := byPath[file.Path]; exists && (old.SHA256 != file.SHA256 || old.Size != file.Size) {
+	add := func(file projectarchive.File, permissions os.FileMode) error {
+		if old, exists := byPath[file.Path]; exists && (old.SHA256 != file.SHA256 || old.Size != file.Size ||
+			plan.Permissions[file.Path] != permissions) {
 			return fmt.Errorf("publication member collision at %q", file.Path)
 		}
 		byPath[file.Path] = file
+		plan.Permissions[file.Path] = permissions
 		return nil
 	}
 	for _, group := range []struct {
@@ -258,20 +291,20 @@ func (p *Planner) Build(sources, generated []projectarchive.File) (Plan, error) 
 		files  []projectarchive.File
 	}{{"project", sources}, {"generated", generated}} {
 		for _, file := range group.files {
-			member, err := p.member(file, group.source, "")
+			member, err := p.member(file, group.source, "", group.source == "project")
 			if err != nil {
 				return Plan{}, err
 			}
 			plan.Members = append(plan.Members, member)
 			if member.Action == "include" {
-				if err := add(file); err != nil {
+				if err := add(file, member.permissions); err != nil {
 					return Plan{}, err
 				}
 			}
 		}
 	}
 	for _, file := range p.resourceFiles {
-		if err := add(file); err != nil {
+		if err := add(file, p.resourcePermissions[file.Path]); err != nil {
 			return Plan{}, err
 		}
 	}
@@ -293,10 +326,23 @@ func (p *Planner) Build(sources, generated []projectarchive.File) (Plan, error) 
 }
 
 // MembersDigest identifies only the final portable archive contents.
-func MembersDigest(files []projectarchive.File) (string, error) {
-	manifest := make([]resources.File, 0, len(files))
+func MembersDigest(files []projectarchive.File, permissions map[string]os.FileMode) (string, error) {
+	if err := validatePermissions(files, permissions); err != nil {
+		return "", err
+	}
+	type member struct {
+		Path        string `json:"path"`
+		SHA256      string `json:"sha256"`
+		Size        int64  `json:"size"`
+		Permissions uint32 `json:"permissions"`
+	}
+	manifest := make([]member, 0, len(files))
 	for _, file := range files {
-		manifest = append(manifest, resources.File{Path: file.Path, SHA256: file.SHA256, Size: file.Size})
+		mode := memberPermissions(file.Path, permissions)
+		manifest = append(
+			manifest,
+			member{Path: file.Path, SHA256: file.SHA256, Size: file.Size, Permissions: uint32(mode)},
+		)
 	}
 	sort.Slice(manifest, func(i, j int) bool { return manifest[i].Path < manifest[j].Path })
 	return resources.Hash(manifest)

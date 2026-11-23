@@ -13,7 +13,15 @@ latexmk pack --publication arxiv --explain --json
 latexmk pack --publication arxiv --verify-in arxiv-tl2025-r1
 ```
 
-`--mode` accepts only `default` and `arxiv`, defaulting to `default`. The default output is `ENTRY-default.zip` or `ENTRY-arxiv.zip` in the resolved `outDir`; an explicit `--output` is relative to the working directory. The output must end in `.zip` and is excluded from its own selection. Existing outputs are replaced atomically only after all members pass their captured size and SHA-256 checks. Sorted paths, fixed timestamps, and regular-file modes make identical packages reproducible within the same CLI/compression implementation. Failed builds, verification, or writes preserve the previous ZIP. Local capture/packing is bounded to 20,000 files and 2 GiB of expanded contents; verified builds must also satisfy the server’s advertised source and artifact limits.
+`--mode` accepts only `default` and `arxiv`, defaulting to `default`. The default output is `ENTRY-default.zip` or `ENTRY-arxiv.zip` in the resolved `outDir`; an explicit `--output` is relative to the working directory. The output must end in `.zip` and is excluded from its own selection. Existing outputs are replaced atomically only after all members pass their captured size and SHA-256 checks. Sorted paths, fixed timestamps, and normalized `0644` regular-file modes make identical packages reproducible within the same CLI/compression implementation. Failed builds, verification, or writes preserve the previous ZIP. Local capture/packing is bounded to 20,000 files and 2 GiB of expanded contents; verified builds must also satisfy the server’s advertised source and artifact limits.
+
+## File permissions
+
+Source ZIPs normalize every regular member to `0644` by default. Opt in with `pack --preserve-permissions`, or set `"preservePermissions": true` on a named publication. Explicit `--preserve-permissions=false` overrides a publication that enables preservation. This setting belongs to source packaging; it does not change ordinary compilation or resource activation.
+
+Preservation applies only to the captured POSIX `rwxrwxrwx` bits of project sources and local `files` resources that already pass their explicit `bundle`/redistribution/license policy. The permission bits are captured with the source bytes and survive later source chmods and private-spool recaptures. Private capture files remain `0600`. Generated build outputs, registered server resources without an original permission manifest, and sources on platforms without portable POSIX permissions (including Windows) remain `0644`, with the reason recorded in the plan. No owner/group IDs, ACLs, extended attributes, directory permissions, setuid, setgid, sticky or file-type bits are exported. Symlinks and special files remain prohibited. Go's [permission-bit definition](https://pkg.go.dev/io/fs#FileMode.Perm) and [ZIP mode metadata](https://pkg.go.dev/archive/zip#FileHeader.SetMode) describe the stored bits; extraction tools and destination filesystems may handle that metadata differently.
+
+The JSON plan reports the requested `preservePermissions` setting and each included member's octal `fileMode`, `permissionPolicy` (`preserved` or `normalized`) and `permissionReason`. The final member digest binds the effective modes as well as paths and contents. Two sources with identical bytes but conflicting effective modes cannot silently occupy the same archive path. arXiv mode uses the same source-file policy; this option neither grants execution privileges to the remote compiler nor proves that an external publication service preserves ZIP metadata. Verification still compiles the package bytes under the server's existing normalized file-permission policy.
 
 ## Default mode
 
@@ -51,6 +59,7 @@ A publication selects an existing build target and adds source-package rules. Ta
     "arxiv": {
       "target": "paper",
       "mode": "arxiv",
+      "preservePermissions": false,
       "environment": "arxiv-tl2025-r1",
       "resources": { "algorithms": "provided", "body-font": "bundle" },
       "includeFiles": ["README.txt"],
@@ -79,6 +88,7 @@ These policies do not rewrite LaTeX. For an uploaded font, the document should s
 | CLI option | Effect |
 | --- | --- |
 | `--publication NAME` | Select a configured publication. |
+| `--preserve-permissions[=false]` | Preserve allowed captured POSIX file permissions; defaults to false and overrides a publication setting when explicit. |
 | `--publish-resource ID=bundle\|provided\|omit` | Override one selected resource's publication policy; repeat for several resources. |
 | `--pack-include PATTERN` | Append a publication-only source inclusion, subject to existing deny/ignore rules. |
 | `--pack-exclude PATTERN` | Exclude matching final members, including generated submission files. Cannot remove the entry or bundled license files. |
