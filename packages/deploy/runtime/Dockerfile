@@ -34,6 +34,13 @@ RUN mkdir /font-build /font-output \
     && cp /font-build/Latexmk-*.otf /font-output/
 
 FROM tex AS runtime
+# Managed resource validation invokes the system xz executable directly.
+# Keep this after TeX installation and font conversion so adding runtime tools
+# does not invalidate those expensive cached stages.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends xz-utils \
+    && dpkg-query -W > /usr/local/lib/latexmk/debian-packages.txt
 COPY --from=fonts /font-output/ /usr/local/share/fonts/latexmk/
 COPY smoke.sh font-smoke.tex font-inventory.sh /usr/local/lib/latexmk/
 RUN fc-cache -f \
