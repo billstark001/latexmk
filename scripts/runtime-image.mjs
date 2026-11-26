@@ -42,12 +42,13 @@ export function verifyRuntimePackageIndex(directory, expected) {
   if (checksum !== `${sha256}  ${descriptor.path}`)
     throw new Error('Runtime package index checksum assertion differs from descriptor');
   const text = bytes.toString('utf8');
-  const location = /^location-url[\t ]+([^\r\n]+)\r?$/m.exec(text)?.[1];
+  const locations = [...text.matchAll(/^location-url(?:[\t ]+([^\r\n]*))?\r?$/gm)];
   if (
+    text.includes('\0') ||
     !Buffer.from(text, 'utf8').equals(bytes) ||
-    !location ||
-    location.replace(/\/+$/, '') !== expected.repository.replace(/\/+$/, '') ||
+    locations.some((match) => match[1]?.trim().replace(/\/+$/, '') !== expected.repository.replace(/\/+$/, '')) ||
     !new RegExp(`^depend release/${expected.texliveYear}\\r?$`, 'm').test(text) ||
+    !/^name 00texlive\.config\r?$/m.test(text) ||
     !/^containerchecksum [a-f0-9]{128}\r?$/m.test(text)
   )
     throw new Error('Runtime package index is not the complete selected remote export');

@@ -21,7 +21,7 @@ test('baked remote index verification binds exact bytes to the selected snapshot
   const out = mkdtempSync(join(tmpdir(), 'latexmk-verify-index-'));
   try {
     const expected = { repository: 'https://snapshot.example/2026/09/09/tlnet', texliveYear: 2026 };
-    const index = `location-url\t${expected.repository}\nname 00texlive.config\nrevision 1\ndepend release/2026\n\nname algorithms\nrevision 78101\ncontainerchecksum ${'a'.repeat(128)}\n`;
+    const index = `name 00texlive.config\nrevision 1\ndepend release/2026\n\nname algorithms\nrevision 78101\ncontainerchecksum ${'a'.repeat(128)}\n`;
     const sha256 = createHash('sha256').update(index).digest('hex');
     const descriptor = { version: 1, path: 'texlive-package-index.tlpdb', sha256, ...expected };
     const writeDescriptor = (value) => writeFileSync(join(out, 'texlive-package-index.json'), JSON.stringify(value));
@@ -41,6 +41,26 @@ test('baked remote index verification binds exact bytes to the selected snapshot
         }),
       /explicitly imported/,
     );
+    for (const preamble of [
+      `location-url\t${expected.repository}\n`,
+      'location-url\thttps://rolling.example/tlnet\n',
+      `location-url\t${expected.repository}\nlocation-url\thttps://rolling.example/tlnet\n`,
+      'location-url\n',
+    ]) {
+      const content = preamble + index;
+      const contentSHA = createHash('sha256').update(content).digest('hex');
+      writeDescriptor({ ...descriptor, sha256: contentSHA });
+      writeFileSync(join(out, descriptor.path), content);
+      writeFileSync(join(out, 'texlive-package-index.sha256'), `${contentSHA}  ${descriptor.path}\n`);
+      if (preamble === `location-url\t${expected.repository}\n`) {
+        assert.equal(verifyRuntimePackageIndex(out, expected).sha256, contentSHA);
+      } else {
+        assert.throws(() => verifyRuntimePackageIndex(out, expected), /remote export/);
+      }
+    }
+    writeDescriptor(descriptor);
+    writeFileSync(join(out, descriptor.path), index);
+    writeFileSync(join(out, 'texlive-package-index.sha256'), `${sha256}  ${descriptor.path}\n`);
     for (const update of [
       { repository: 'https://rolling.example/tlnet' },
       { texliveYear: 2001 },

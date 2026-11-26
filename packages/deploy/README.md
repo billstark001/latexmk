@@ -124,6 +124,8 @@ The complete remote package index is distinct from the installed-package invento
 - `texlive-package-index.json`: versioned descriptor binding its SHA-256, repository and TeX Live year;
 - `texlive-package-index.sha256`: build-time verification of the captured bytes.
 
+Native `tlmgr dump-tlpdb --remote` output may start directly with `name 00texlive.config`, without a `location-url` preamble. Runtime capture adds the selected repository as a canonical preamble when absent; an existing conflicting preamble is rejected. Explicit imports preserve the original bytes and expected SHA-256, including headerless exports. Their descriptor supplies the administrator-asserted repository/year binding, which CI also verifies.
+
 The server can use this immutable runtime artifact after a cold start instead of downloading the index again. Its SHA-256 and snapshot binding are checked before resolution. A generated application policy without an explicit index inherits the verified runtime index when present. Existing runtime images without that artifact retain the remote-index behavior.
 
 An administrator can import an existing trusted export into either bundle mode:
@@ -135,7 +137,7 @@ node packages/deploy/dist/index.js bundle \
   --out dist/app
 ```
 
-The two flags must be used together. The bundler freezes the imported bytes and rejects a wrong hash, a different `location-url`, a different release year, HTML, or an installed-only index lacking the remote metadata. The explicit import is an administrator trust decision: obtain the export and expected hash from the intended snapshot, rather than adding its URL to an arbitrary rolling index. The generated descriptor binds the import to the repository/year selected in `runtime/lock.json` (or a runtime bundle's explicit `--texlive-repository`).
+The two flags must be used together. The bundler freezes the imported bytes and rejects a wrong hash, a conflicting `location-url` when present, a different release year, HTML, or an installed-only index lacking the remote metadata. The explicit import is an administrator trust decision: obtain the export and expected hash from the intended snapshot. A `location-url` preamble is optional and is never accepted as proof of provenance by itself. The generated descriptor binds the import to the repository/year selected in `runtime/lock.json` (or a runtime bundle's explicit `--texlive-repository`).
 
 Archive fallback only covers managed runtime package additions. Runtime bootstrap still uses `tlmgr install` against the selected full snapshot because it installs collections and platform binaries as well. Supplying an index does not make bootstrap offline, and the archive mirror list does not permit runtime bootstrap to switch to a rolling repository. If the pinned snapshot is unavailable, use a trusted same-snapshot full repository or a previously published runtime. No Docker build or publication is performed merely by generating a context.
 

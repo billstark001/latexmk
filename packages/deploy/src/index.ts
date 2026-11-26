@@ -356,8 +356,8 @@ function validatePackageIndex(data: Buffer, repository: string, year: number) {
   const text = data.toString('utf8');
   if (text.includes('\0') || !Buffer.from(text, 'utf8').equals(data))
     throw new Error('TeX Live package index must be plain UTF-8 tlmgr dump-tlpdb output');
-  const location = /^location-url[\t ]+([^\r\n]+)\r?$/m.exec(text)?.[1];
-  if (!location || location.replace(/\/+$/, '') !== repository.replace(/\/+$/, ''))
+  const locations = [...text.matchAll(/^location-url(?:[\t ]+([^\r\n]*))?\r?$/gm)];
+  if (locations.some((match) => match[1]?.trim().replace(/\/+$/, '') !== repository.replace(/\/+$/, '')))
     throw new Error('TeX Live package index location-url must match the pinned snapshot repository');
   if (!new RegExp(`^depend release/${year}\\r?$`, 'm').test(text))
     throw new Error(`TeX Live package index must declare release/${year}`);

@@ -12,13 +12,22 @@ if [ -f "$index" ]; then
 fi
 
 pending="$index.pending"
-trap 'rm -f "$pending"' EXIT HUP INT TERM
+canonical="$index.canonical"
+trap 'rm -f "$pending" "$canonical"' EXIT HUP INT TERM
 tlmgr --repository "$repository" dump-tlpdb --remote > "$pending"
 test -s "$pending"
 awk -v expected="$repository" '
-  $1 == "location-url" { actual=$2; sub(/\/+$/, "", actual); sub(/\/+$/, "", expected); if (actual == expected) found=1 }
-  END { exit !found }
+  $1 == "location-url" {
+    actual=$2; sub(/\/+$/, "", actual); sub(/\/+$/, "", expected)
+    if (NF != 2 || actual != expected) invalid=1
+  }
+  END { exit invalid }
 ' "$pending"
+if ! grep -E '^location-url([[:space:]]|$)' "$pending" > /dev/null; then
+  printf 'location-url\t%s\n' "$repository" > "$canonical"
+  cat "$pending" >> "$canonical"
+  mv "$canonical" "$pending"
+fi
 grep -F -x "depend release/$year" "$pending"
 grep -E '^containerchecksum [a-f0-9]{128}$' "$pending" > /dev/null
 checksum=$(sha256sum "$pending")

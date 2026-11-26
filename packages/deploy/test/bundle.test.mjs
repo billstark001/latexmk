@@ -10,8 +10,9 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runtimeLock = JSON.parse(await readFile(path.join(root, 'runtime', 'lock.json'), 'utf8'));
 
-function remoteIndex(repository = runtimeLock.repository, year = runtimeLock.texliveYear) {
-  return `location-url\t${repository}\nname 00texlive.config\ncategory TLCore\nrevision 1\ndepend release/${year}\n\nname algorithms\ncategory Package\nrevision 78101\nrelocated 1\ncontainerchecksum ${'a'.repeat(128)}\nrunfiles size=1\n RELOC/tex/latex/algorithms/algorithm.sty\n`;
+function remoteIndex(repository, year = runtimeLock.texliveYear) {
+  const preamble = repository ? `location-url\t${repository}\n` : '';
+  return `${preamble}name 00texlive.config\ncategory TLCore\nrevision 1\ndepend release/${year}\n\nname algorithms\ncategory Package\nrevision 78101\nrelocated 1\ncontainerchecksum ${'a'.repeat(128)}\nrunfiles size=1\n RELOC/tex/latex/algorithms/algorithm.sty\n`;
 }
 
 function generateBundle(args, out) {
@@ -103,6 +104,21 @@ test('explicit remote index is captured and hash-bound in both build contexts', 
         (await readFile(path.join(out, '.dockerignore'), 'utf8')).split('\n').includes('!texlive-resources/**'),
       );
     }
+    const prefixed = remoteIndex(runtimeLock.repository);
+    const prefixedSHA = createHash('sha256').update(prefixed).digest('hex');
+    await writeFile(indexFile, prefixed);
+    const prefixedOut = path.join(temp, 'prefixed');
+    assert.equal(
+      generateBundle(
+        ['bundle', '--texlive-package-index', indexFile, '--texlive-package-index-sha256', prefixedSHA],
+        prefixedOut,
+      ).status,
+      0,
+    );
+    assert.equal(
+      await readFile(path.join(prefixedOut, 'texlive-resources', 'texlive-package-index.tlpdb'), 'utf8'),
+      prefixed,
+    );
     await writeFile(indexFile, 'changed after capture');
     assert.equal(
       await readFile(path.join(temp, 'bundle', 'texlive-resources', 'texlive-package-index.tlpdb'), 'utf8'),
@@ -133,6 +149,8 @@ test('invalid mirror and index assertions preserve the existing output', async (
     for (const contents of [
       remoteIndex(),
       remoteIndex('https://rolling.example/tlnet'),
+      `location-url\n${remoteIndex()}`,
+      `location-url\t${runtimeLock.repository}\n${remoteIndex('https://rolling.example/tlnet')}`,
       remoteIndex(runtimeLock.repository, 2001),
       '<html>Access Denied</html>',
       'name algorithms\nrevision 78101\n',
@@ -210,6 +228,7 @@ test('runtime captures only the selected remote index and verifies imported byte
       '--remote',
     ]);
     const index = await readFile(path.join(inventory, 'texlive-package-index.tlpdb'));
+    assert.equal(index.toString(), `location-url\t${runtimeLock.repository}\n${remoteIndex()}`);
     const descriptor = JSON.parse(await readFile(path.join(inventory, 'texlive-package-index.json'), 'utf8'));
     assert.equal(descriptor.sha256, createHash('sha256').update(index).digest('hex'));
     assert.equal(descriptor.repository, runtimeLock.repository);
@@ -220,10 +239,32 @@ test('runtime captures only the selected remote index and verifies imported byte
     await assert.rejects(stat(argumentsFile), { code: 'ENOENT' });
     await writeFile(path.join(inventory, 'texlive-package-index.tlpdb'), 'modified bytes');
     assert.notEqual(runCapture(inventory).status, 0);
+    const prefixedInventory = path.join(temp, 'prefixed');
+    await mkdir(prefixedInventory);
+    await writeFile(fixture, remoteIndex(runtimeLock.repository));
+    assert.equal(runCapture(prefixedInventory).status, 0);
+    assert.equal(
+      await readFile(path.join(prefixedInventory, 'texlive-package-index.tlpdb'), 'utf8'),
+      remoteIndex(runtimeLock.repository),
+    );
+    const importedInventory = path.join(temp, 'imported');
+    await mkdir(importedInventory);
+    await writeFile(path.join(importedInventory, 'texlive-package-index.tlpdb'), remoteIndex());
+    const importedSHA = createHash('sha256').update(remoteIndex()).digest('hex');
+    await writeFile(
+      path.join(importedInventory, 'texlive-package-index.sha256'),
+      `${importedSHA}  texlive-package-index.tlpdb\n`,
+    );
+    await rm(argumentsFile);
+    assert.equal(runCapture(importedInventory).status, 0);
+    await assert.rejects(stat(argumentsFile), { code: 'ENOENT' });
+    assert.equal(await readFile(path.join(importedInventory, 'texlive-package-index.tlpdb'), 'utf8'), remoteIndex());
     for (const [name, contents] of [
       ['html', '<html>Access denied</html>'],
       ['rolling', remoteIndex('https://rolling.example/tlnet')],
       ['year', remoteIndex(runtimeLock.repository, 2001)],
+      ['malformed', `location-url\n${remoteIndex()}`],
+      ['conflicting', `location-url\t${runtimeLock.repository}\n${remoteIndex('https://rolling.example/tlnet')}`],
     ]) {
       const directory = path.join(temp, name);
       await mkdir(directory);
