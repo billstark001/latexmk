@@ -23,7 +23,15 @@ func (r *Root) TryLock(name string) (*FileLock, error) {
 	if err := r.MakeDirs(filepath.ToSlash(filepath.Dir(local)), 0700); err != nil {
 		return nil, err
 	}
-	file, err := regularFile(r.Root.OpenFile(local, os.O_CREATE|os.O_RDWR|regularOpenFlags, 0600))
+	// Keep first publication atomic. Concurrent nonexclusive O_CREATE through
+	// os.Root can report ENOENT on Darwin while another caller creates the same
+	// name. Opening an existing inode without O_CREATE also preserves the single
+	// coordinating file rather than replacing it on contention.
+	file, err := r.Root.OpenFile(local, os.O_CREATE|os.O_EXCL|os.O_RDWR|regularOpenFlags, 0600)
+	if errors.Is(err, os.ErrExist) {
+		file, err = r.Root.OpenFile(local, os.O_RDWR|regularOpenFlags, 0)
+	}
+	file, err = regularFile(file, err)
 	if err != nil {
 		return nil, err
 	}
