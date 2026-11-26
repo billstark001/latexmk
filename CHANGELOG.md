@@ -22,6 +22,17 @@ All notable changes to latexmk are documented in this file. Entries follow the c
 
 ## [Unreleased]
 
+### Added
+
+- Try administrator-configured TeX Live archive mirrors in order while preserving locked revisions and SHA-512 checksums. Deployment bundles embed the source policy and capture or import a separately verified full snapshot package index for cold resource resolution.
+- Advertise `resourceArchiveUploads` and provide owner-authorized missing-archive negotiation and idempotent verified package uploads without changing environment or resource lock identities.
+- Cache public package archives in the CLI user cache, share verified bytes across projects, upload only archives missing on capable servers, and expose cache information/pruning and local Git exclude management.
+- Report typed resource acquisition failures with bounded stage/source/attempt diagnostics, request-correlated download logs and separate retry/failover decisions. Keep existing API error strings and CLI JSON envelopes compatible.
+
+### Fixed
+
+- Distinguish upstream HTML, byte limits, checksum failures, archive identity errors, installation failures and local storage errors instead of reporting them all as resource HTTP 400 failures. Preserve valid shared archives when a stricter caller's byte limit rejects them.
+
 ## [0.5.0] - 2026-11-23
 
 ### Added

@@ -8,6 +8,10 @@ This contract is for local agents and scripts. The CLI uses the same token, time
 
 New Agent-facing commands use a versioned JSON envelope. Successful attached `compile` output remains the raw compile result; request/preparation and result-download failures now use the failure envelope with command `compile` so HTTP diagnostics remain machine-readable. Earlier local argument/configuration errors retain their existing interface. Existing JSON output from `files`, `meta`, `cache ignore`, and `remote clean` remains unchanged. Their current top-level JSON shape will not change silently.
 
+Resource failures keep the same envelope and broad `error.code` classification. Typed API responses additionally populate `error.details.serverCode` and `error.details.resource` (stage, package/revision, source ID, status, bounded attempts and limits). An explicit server `retryable` value overrides the generic 5xx retry default. Failures during client-side acquisition use `details.resourceCode` with the same resource detail fields; raw upstream bodies, transport URLs, paths and credentials are omitted. Old servers returning only `error:string` retain the previous classification behavior.
+
+`cache resources info --json` and `cache resources prune [--all] --json` return the envelope with commands `cache.resources.info` / `cache.resources.prune`. Their data includes `directory`, `bytes`, `archives` and `maxBytes`; the count covers published public package archives. These commands do not contact the compilation service. `cache ignore --local --json` preserves the existing cache-ignore JSON shape, with `gitIgnore` pointing at Git's local exclude file.
+
 ## Envelope
 
 Success:

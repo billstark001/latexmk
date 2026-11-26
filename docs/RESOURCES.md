@@ -131,6 +131,26 @@ Additional TeX Live installation uses the controller's own pinned runtime. An al
 
 ## Commands and overrides
 
+### Package acquisition and client cache
+
+Snapshot identity and archive transport are separate. The baseline still selects its exact TeX Live year and snapshot repository. Administrators may configure a version 1 source policy through `LATEXMK_TEXLIVE_SOURCES_FILE`; deployment bundles embed a policy with ordered UIB, TUNA and USTC archive mirrors by default. Repeated deploy `--texlive-archive-mirror` flags replace that list, preserve input order and remove duplicates. The downloader requests `{name}.r{revision}.tar.xz` and accepts only the authoritative resolved SHA-512. A deployment with no source-policy file retains the original single-snapshot `{name}.tar.xz` behavior. Transport policy is not part of environment or lock identity.
+
+A new runtime captures a full remote package index from its selected snapshot, independently of its installed-package inventory. Its version 1 descriptor binds repository, release year, local path and expected SHA-256. Explicit trusted-index import is supported by deploy and takes precedence over the runtime descriptor. The server verifies bytes and binding before cold resolution; a rolling mirror's current index cannot stand in for the pinned date. See [deploy index import and runtime bootstrap](../packages/deploy/README.md). An administrator importing an index asserts its provenance; a self-computed hash alone does not prove that it belongs to a historical snapshot.
+
+When `resourceArchiveUploads` is advertised, the CLI's default `auto` acquisition queries a separate package-archive manifest after resolution. It verifies that the manifest contains exactly the locked package identities, obtains missing bytes from its user cache or the ordered mirrors, and uploads only missing archives. A local acquisition/storage failure warns and proceeds to server preparation; invalid manifests/configuration, cancellation and upload failures remain hard errors. Use `resourceCache.acquisition: "client"` or `--resource-acquisition client` to require client acquisition, or `server` to bypass client archive negotiation. Source policy and availability remain outside `Environment`, preserving the existing lock format. A ready environment skips archive negotiation. With an older server lacking this capability, `auto` and `server` use the existing server-side preparation interface and make no new archive requests; explicit `client` mode rejects missing support when archives are needed.
+
+The CLI cache uses SHA-512 names, verifies every hit, and leases each archive through upload. Failed downloads are discarded before atomic publication. Multiple projects reuse public archives; local fonts/data are not added to a shared persistent cache. Pruning skips leased objects. A stricter caller's limit rejects an oversized object without deleting valid bytes shared by other projects. See [cache locations and controls](CONFIGURATION.md#public-package-archive-cache).
+
+Servers only accept an archive checksum already resolved for the authenticated environment. They enforce byte/cache/concurrency limits, recompute SHA-512, atomically publish verified bytes, and retain their own archive-layout, package-revision and installation checks. Possessing a content hash does not authorize private resources. Client cache and uploaded archives do not activate fonts or replace the target runtime's toolchain.
+
+### Acquisition errors
+
+Resource errors retain the API's `error` string and may add `code`, `retryable`, and bounded `details`. Stages distinguish index acquisition/read, archive fetch/upload/cache, archive validation and installation. Details can identify the package/revision, source ID, upstream status, MIME, byte counts/limits and at most eight attempts; they omit raw upstream HTML, credentials, server paths and process output. The same request ID correlates incoming API and resource acquisition logs.
+
+Upstream connection/HTTP/HTML/checksum failures can advance to another configured source. Local write errors, exhausted limits, cancellation, hash-verified unsafe archives and installation failures do not. `application/octet-stream` remains valid when the actual archive prefix/checksum is correct. TLS verification is never disabled for mirror downloads.
+
+HTTP 502 describes upstream content/transport failures, 503 describes temporary availability/limits such as an occupied cache or upstream throttling, and 504 describes timeouts. Fixed byte/owner limits return 413. Uploading wrong bytes returns 400 with `resource_archive_checksum`; runtime and storage/install errors have distinct causes. A 5xx status does not alone imply retryability: use the optional typed `retryable` value. Retrying acquisition does not authorize duplicate job/session submission.
+
 ```sh
 latexmk resources inspect --target paper --json
 latexmk resources lock --target paper
