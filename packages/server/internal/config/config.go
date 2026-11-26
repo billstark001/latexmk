@@ -15,6 +15,7 @@ import (
 
 	"github.com/billstark001/latexmk/packages/shared/engine"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
+	sharedresources "github.com/billstark001/latexmk/packages/shared/resources"
 	"github.com/billstark001/latexmk/packages/shared/safefs"
 )
 
@@ -22,6 +23,8 @@ type Config struct {
 	ResourceCacheDir              string
 	ResourceRegistryFile          string
 	ResourceInventoryDir          string
+	ResourceSourcePolicy          *sharedresources.SourcePolicy
+	ResourcePackageIndex          *sharedresources.PinnedPackageIndex
 	MaxResourceBytes              int64
 	MaxResourceFiles              int
 	ResourceCacheBytes            int64

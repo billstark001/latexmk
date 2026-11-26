@@ -44,6 +44,9 @@ func TestCollectReportsCacheCapacityAndActivation(t *testing.T) {
 			if meta.Capabilities.CompileCache != test.enabled || meta.Capabilities.MaxCompileCacheBytes != test.bytes {
 				t.Fatalf("cache capability = %#v", meta.Capabilities)
 			}
+			if !meta.Capabilities.ResourceEnvironments || !meta.Capabilities.ResourceArchiveUploads {
+				t.Fatalf("package archive transport capability is missing: %#v", meta.Capabilities)
+			}
 		})
 	}
 }

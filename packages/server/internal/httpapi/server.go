@@ -85,6 +85,8 @@ func New(
 	engine.GET("/v1/environments", compileAuth, s.listEnvironments)
 	engine.POST("/v1/environments/resolve", compileAuth, s.resolveEnvironment)
 	engine.GET("/v1/environments/:digest", compileAuth, s.inspectEnvironment)
+	engine.GET("/v1/environments/:digest/package-archives", compileAuth, s.listEnvironmentPackageArchives)
+	engine.PUT("/v1/environments/:digest/package-archives/:sha512", compileAuth, s.putEnvironmentPackageArchive)
 	engine.PUT("/v1/environments/:digest/blobs/:sha", compileAuth, s.putEnvironmentBlob)
 	engine.POST("/v1/environments/:digest/prepare", compileAuth, s.prepareEnvironment)
 	engine.GET("/v1/environments/:digest/resources/:resourceID/blobs/:sha", compileAuth, s.exportEnvironmentBlob)

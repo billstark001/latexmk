@@ -98,6 +98,7 @@ func Collect(cfg config.Config, build BuildInfo) protocol.Metadata {
 		Database:        database,
 		Capabilities: protocol.Capabilities{
 			ResourceEnvironments:    true,
+			ResourceArchiveUploads:  true,
 			PublicationVerification: true,
 			RealtimeSessions:        cfg.MaxRealtimeSessions > 0,
 			IsolatedWorkspaces:      cfg.RunnerImage != "",

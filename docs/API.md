@@ -6,7 +6,7 @@ The current protocol version is `2`. Version 2 adds content-addressed, increment
 
 ## Error responses
 
-Service failures use the HTTP status and a JSON object `{ "error": "message" }`. `X-Request-ID` correlates the response with server logs, including authentication failures. The service does not currently define a separate structured error-code field. A gateway may return another content type or a standard `Retry-After` header; neither changes the service error schema.
+Service failures use the HTTP status and a JSON object `{ "error": "message" }`. Resource acquisition failures additionally include `code`, `retryable` and bounded `details`, while preserving the string `error` for existing clients. Details identify the stage, public package/revision, source identity, upstream HTTP status, content type, byte limits and at most eight source attempts when available. They do not include raw upstream bodies, server paths, credentials or process output. `details.fallbackAllowed` explicitly identifies failures for which client-side archive acquisition may help; clients must not infer that permission from a generic 4xx/5xx status. `X-Request-ID` correlates the response with server logs, including authentication failures. A gateway may return another content type or a standard `Retry-After` header; neither changes the service error schema.
 
 The CLI retains the status, request ID, validated retry delay and bounded JSON message in human and machine diagnostics. It does not print arbitrary gateway bodies or HTML. Malformed successful responses are reported with their actual 2xx status and an invalid-response diagnostic, separately from local filesystem failures. See [CLI HTTP failure details](AGENT_CLI.md#http-failure-details) for limits and JSON fields.
 
@@ -107,11 +107,35 @@ These endpoints require compilation authentication. Environment digests identify
 | `PUT /v1/environments/{digest}/blobs/{sha256}` | Exact declared resource bytes, verified by size and SHA-256 |
 | `POST /v1/environments/{digest}/prepare` | Empty body; prepares the authorized environment and returns its manifest |
 | `GET /v1/environments/{digest}` | Owner-authorized manifest and cache availability |
+| `GET /v1/environments/{digest}/package-archives` | Authorized resolved package identities, archive availability, per-archive byte limit and transport source policy |
+| `PUT /v1/environments/{digest}/package-archives/{sha512}` | Exact resolved TeX Live run archive, bounded and SHA-512 verified; `204 No Content` on success |
 | `GET /v1/environments/{digest}/resources/{resourceID}/blobs/{sha256}` | Exports a declared blob only when that specific resource permits redistribution |
 
 Resolve accepts transport manifests, not client paths, Docker images, shell commands or repository overrides. Each resource has an `id`, `type`, optional `kind`/`mount`, and package requirements, registered `ref`, or resource-relative `files` (`path`, `size`, `sha256`). `provided` checks the selected baseline and never installs missing packages. The current portable contract verifies baseline-provided TeX Live packages; file/server resources requiring exact project paths must be bundled or represented by a separate target's explicit baseline requirements.
 
 An environment contains its `digest`, full `baseline` identity, resolved `resources`, `provided`, `requires`, added TeX Live `packages` (revision and checksum), `ready` and `missing`. Availability is excluded from the content identity. Clients must verify the returned digest against the manifest and the compile result against the requested environment before publishing artifacts. See [resource configuration](RESOURCES.md).
+
+Package archive transport requires `capabilities.resourceArchiveUploads`. Older servers omit this capability, and their existing resource preparation flow remains supported. The archive manifest is separate from `Environment`, so download locations and cache availability do not alter existing environment digests or resource locks:
+
+```json
+{
+  "environmentDigest": "…64 hex chars…",
+  "archives": [
+    {
+      "package": { "name": "algorithms", "revision": 78101, "checksum": "…128 hex chars…" },
+      "present": false,
+      "maxBytes": 536870912
+    }
+  ],
+  "sources": {
+    "version": 1,
+    "archiveMirrors": ["https://ctan.example/systems/texlive/tlnet"],
+    "perSourceTimeout": "30s"
+  }
+}
+```
+
+The archive list contains exactly the resolved additional packages, including archives already present. `sources` is omitted for the legacy single-origin policy; clients then retain the baseline repository's existing archive naming behavior. Version 1 mirrors use revisioned archive names and do not replace the pinned package index. Server-local package-index paths are never exposed. Clients must validate identities against the authorized environment, honor the advertised limit and verify SHA-512 before upload. The server accepts only a checksum declared by that environment, verifies every request body including retries, shares the verified archive cache with normal server downloads, and prepares/validates the TEXMF tree with its own runtime afterward. A cache hit is transport availability, not proof that the environment has been prepared. Unknown environments, owners and undeclared checksums return `404`; checksum errors return `400`; fixed byte/owner/environment quota errors return `413`. Temporary exhaustion of available cache space or reservations returns `503` with `resource_cache_unavailable`, `retryable: true` and no acquisition fallback permission. Manifest hashing and uploads are bounded by preparation concurrency and timeout limits. There is no endpoint accepting arbitrary package manifests, URLs or client-prepared trees.
 
 ### `POST /v1/uploads/plans`
 

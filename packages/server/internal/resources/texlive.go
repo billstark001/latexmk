@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -193,17 +194,31 @@ func resolvePackageClosure(
 		}
 		pkg, exists := remote[name]
 		if !exists {
-			return fmt.Errorf("TeX Live package %q is unavailable in the registered snapshot", name)
+			return &sharedresources.AcquisitionError{
+				Code:    "resource_package_unavailable",
+				Stage:   "metadata-resolve",
+				Reason:  "snapshot",
+				Package: name,
+			}
 		}
 		if !pkg.Relocatable || pkg.hasBinary || pkg.unsafeFiles || strings.HasPrefix(name, "collection-") ||
 			strings.HasPrefix(name, "scheme-") {
-			return fmt.Errorf(
-				"TeX Live package %q requires a runtime image update; only relocatable packages are supported",
-				name,
-			)
+			return &sharedresources.AcquisitionError{
+				Code:     "resource_package_unsupported",
+				Stage:    "metadata-resolve",
+				Reason:   "runtime-required",
+				Package:  name,
+				Revision: pkg.Revision,
+			}
 		}
 		if pkg.Revision <= 0 || !validArchiveChecksum(pkg.Checksum) {
-			return fmt.Errorf("TeX Live package %q has no immutable archive identity", name)
+			return &sharedresources.AcquisitionError{
+				Code:     "resource_package_unsupported",
+				Stage:    "metadata-resolve",
+				Reason:   "archive-identity",
+				Package:  name,
+				Revision: pkg.Revision,
+			}
 		}
 		visited[name] = true
 		for _, dependency := range pkg.Depends {
@@ -231,7 +246,10 @@ func resolvePackages(
 	requested []string,
 	metadataDir string,
 	metadataLimit int64,
-) ([]sharedresources.Package, error) {
+	index *sharedresources.PinnedPackageIndex,
+) (packages []sharedresources.Package, err error) {
+	sourceID := "baseline"
+	defer func() { logIndexAcquisition(ctx, baseline, sourceID, err) }()
 	if len(requested) == 0 {
 		return nil, nil
 	}
@@ -251,6 +269,27 @@ func resolvePackages(
 	}
 	if err := validatePackageRepository(baseline); err != nil {
 		return nil, err
+	}
+	if index != nil {
+		sourceID = "pinned-index"
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		data, err := index.Read(baseline, maxPackageMetadataBytes)
+		if err != nil {
+			return nil, err
+		}
+		remote, err := parseTLPDB(bytes.NewReader(data))
+		if err != nil {
+			return nil, sharedresources.AsAcquisitionError(
+				err,
+				"resource_index_invalid",
+				"metadata-parse",
+				"tlpdb",
+				sharedresources.Package{},
+			)
+		}
+		return resolvePackageClosure(baseline.Packages, requested, remote)
 	}
 	if metadataLimit <= 0 {
 		return nil, errors.New("no cache capacity is available for the TeX Live package index")
@@ -276,10 +315,12 @@ func resolvePackages(
 	}
 	defer func() { _ = root.Close() }()
 	data, readErr := root.ReadLimited(name, metadataLimit)
+	sourceID = "metadata-cache"
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return nil, readErr
 	}
 	if errors.Is(readErr, os.ErrNotExist) {
+		sourceID = "snapshot"
 		home, err := os.MkdirTemp(metadataDir, ".probe-")
 		if err != nil {
 			return nil, err
@@ -289,7 +330,7 @@ func resolvePackages(
 			return nil, err
 		}
 		var output strings.Builder
-		run, err := runBoundedPackageProcess(
+		_, err = runBoundedPackageProcess(
 			ctx,
 			process.Spec{
 				Name: "tlmgr",
@@ -307,26 +348,46 @@ func resolvePackages(
 			20000,
 		)
 		if err != nil {
-			return nil, fmt.Errorf(
-				"read registered TeX Live snapshot within metadata budget: %w: %s",
+			return nil, sharedresources.AsAcquisitionError(
 				err,
-				strings.TrimSpace(string(run.Stderr)),
+				"resource_upstream_network",
+				"metadata-fetch",
+				"tlmgr",
+				sharedresources.Package{},
 			)
 		}
 		remote, err := parseTLPDB(strings.NewReader(output.String()))
 		if err != nil {
-			return nil, err
+			return nil, sharedresources.AsAcquisitionError(
+				err,
+				"resource_upstream_format",
+				"metadata-parse",
+				"tlpdb",
+				sharedresources.Package{},
+			)
 		}
 		data = packageIndex(remote)
 		if int64(len(data)) > metadataLimit {
-			return nil, errors.New("TeX Live package index exceeds the metadata cache budget")
+			return nil, &sharedresources.AcquisitionError{
+				Code:   "resource_limit_exceeded",
+				Stage:  "metadata-parse",
+				Reason: "bytes",
+				Bytes:  int64(len(data)),
+				Limit:  metadataLimit,
+			}
 		}
 		if _, err := root.WriteAtomic(
 			name,
 			metadataLimit,
 			func(w io.Writer) error { _, err := w.Write(data); return err },
 		); err != nil {
-			return nil, err
+			return nil, sharedresources.AsAcquisitionError(
+				err,
+				"resource_storage_failed",
+				"metadata-cache",
+				"write",
+				sharedresources.Package{},
+			)
 		}
 	}
 	remote, err := parseTLPDB(bytes.NewReader(data))
@@ -378,7 +439,11 @@ func validatePackageRepository(baseline sharedresources.Baseline) error {
 	u, err := url.Parse(baseline.Repository)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" ||
 		baseline.TexliveYear < 2000 {
-		return errors.New("baseline has no registered HTTPS TeX Live snapshot and release year")
+		return &sharedresources.AcquisitionError{
+			Code:   "resource_runtime_unavailable",
+			Stage:  "metadata-resolve",
+			Reason: "snapshot",
+		}
 	}
 	return nil
 }
@@ -408,13 +473,27 @@ func validateTeXLiveYear(ctx context.Context, year int, home, tree string) error
 		},
 	)
 	if run.Err != nil {
-		return fmt.Errorf("probe TeX Live %d tlmgr: %w: %s", year, run.Err, strings.TrimSpace(string(run.Stderr)))
+		return sharedresources.AsAcquisitionError(
+			run.Err,
+			"resource_runtime_unavailable",
+			"runtime-probe",
+			"tlmgr",
+			sharedresources.Package{},
+		)
 	}
 	if run.StdoutTruncated {
-		return fmt.Errorf("TeX Live %d tlmgr version output exceeds its limit", year)
+		return &sharedresources.AcquisitionError{
+			Code:   "resource_runtime_unavailable",
+			Stage:  "runtime-probe",
+			Reason: "version-output-limit",
+		}
 	}
 	if !regexp.MustCompile(`(?m)TeX Live[^\n]*\b` + strconv.Itoa(year) + `\b`).Match(run.Stdout) {
-		return fmt.Errorf("dependency preparation requires a working TeX Live %d tlmgr", year)
+		return &sharedresources.AcquisitionError{
+			Code:   "resource_runtime_unavailable",
+			Stage:  "runtime-probe",
+			Reason: "texlive-year",
+		}
 	}
 	return nil
 }
@@ -429,6 +508,7 @@ func preparePackages(
 	archiveDir, tree string,
 	maxBytes int64,
 	maxFiles int,
+	policy *sharedresources.SourcePolicy,
 ) error {
 	if len(pkgs) == 0 {
 		return nil
@@ -457,7 +537,7 @@ func preparePackages(
 	var expanded int64
 	var entries int
 	var archives []string
-	client := packageHTTPClient()
+	client := sharedresources.NewArchiveHTTPClient()
 	defer client.CloseIdleConnections()
 	for _, pkg := range pkgs {
 		if !texlivePackageName.MatchString(pkg.Name) || pkg.Revision <= 0 || !validArchiveChecksum(pkg.Checksum) {
@@ -470,6 +550,7 @@ func preparePackages(
 			pkg,
 			maxBytes-downloaded,
 			client,
+			policy,
 		)
 		if err != nil {
 			return err
@@ -511,7 +592,13 @@ func preparePackages(
 	}
 	for _, pkg := range pkgs {
 		if actual, exists := installed[pkg.Name]; !exists || actual.Revision != pkg.Revision {
-			return fmt.Errorf("installed TeX Live package %q does not match locked revision %d", pkg.Name, pkg.Revision)
+			return &sharedresources.AcquisitionError{
+				Code:     "resource_install_failed",
+				Stage:    "install-verify",
+				Reason:   "revision",
+				Package:  pkg.Name,
+				Revision: pkg.Revision,
+			}
 		}
 	}
 	if err := regularizePackageTree(tree, maxBytes, maxFiles); err != nil {
@@ -520,59 +607,34 @@ func preparePackages(
 	return checkPackageTree(tree, maxBytes, maxFiles, false)
 }
 
-func packageHTTPClient() *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{Proxy: nil},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if req.URL.Scheme != "https" || req.URL.User != nil || len(via) >= 10 {
-				return errors.New("package archive redirect must remain HTTPS")
-			}
-			return nil
-		},
-	}
-}
-
-func downloadPackageStream(
-	ctx context.Context,
-	repository string,
-	pkg sharedresources.Package,
-	destination io.Writer,
-	limit int64,
-	client *http.Client,
-) (int64, error) {
-	if limit <= 0 || !texlivePackageName.MatchString(pkg.Name) || !validArchiveChecksum(pkg.Checksum) {
-		return 0, errors.New("invalid package download identity or byte limit")
-	}
-	request, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodGet,
-		strings.TrimRight(repository, "/")+"/archive/"+pkg.Name+".tar.xz",
-		nil,
-	)
-	if err != nil {
-		return 0, err
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return 0, fmt.Errorf("download TeX Live package %s: %w", pkg.Name, err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("download TeX Live package %s: HTTP %d", pkg.Name, response.StatusCode)
-	}
-	hash := sha512.New()
-	size, err := io.Copy(io.MultiWriter(destination, hash), io.LimitReader(response.Body, limit+1))
-	if err != nil {
-		return 0, err
-	}
-	if size > limit || hex.EncodeToString(hash.Sum(nil)) != pkg.Checksum {
-		return 0, fmt.Errorf("TeX Live package %s exceeds its limit or has a checksum mismatch", pkg.Name)
-	}
-	return size, nil
-}
-
 var packageArchiveMu sync.Mutex
 var packageArchiveFlights = make(map[string]chan struct{})
+
+func acquirePackageArchive(ctx context.Context, directory, checksum string) (func(), error) {
+	key := directory + "\x00" + checksum
+	for {
+		packageArchiveMu.Lock()
+		waiting, exists := packageArchiveFlights[key]
+		if !exists {
+			waiting = make(chan struct{})
+			packageArchiveFlights[key] = waiting
+			packageArchiveMu.Unlock()
+			release := func() {
+				packageArchiveMu.Lock()
+				delete(packageArchiveFlights, key)
+				close(waiting)
+				packageArchiveMu.Unlock()
+			}
+			return release, nil
+		}
+		packageArchiveMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-waiting:
+		}
+	}
+}
 
 // Archives and prepared trees have independent identities and lifecycles. A
 // failed tree can retain verified archive bytes for another environment to use.
@@ -582,42 +644,28 @@ func cachedPackageArchive(
 	pkg sharedresources.Package,
 	limit int64,
 	client *http.Client,
-) (string, int64, error) {
+	policy *sharedresources.SourcePolicy,
+) (path string, size int64, err error) {
+	cacheHit := false
+	var result sharedresources.ArchiveFetchResult
+	defer func() { logArchiveAcquisition(ctx, pkg, cacheHit, result, err) }()
 	if !validArchiveChecksum(pkg.Checksum) || limit <= 0 {
 		return "", 0, errors.New("invalid archive cache identity or limit")
 	}
-	key := directory + "\x00" + pkg.Checksum
-	for {
-		packageArchiveMu.Lock()
-		waiting, exists := packageArchiveFlights[key]
-		if !exists {
-			waiting = make(chan struct{})
-			packageArchiveFlights[key] = waiting
-			packageArchiveMu.Unlock()
-			defer func() {
-				packageArchiveMu.Lock()
-				delete(packageArchiveFlights, key)
-				close(waiting)
-				packageArchiveMu.Unlock()
-			}()
-			break
-		}
-		packageArchiveMu.Unlock()
-		select {
-		case <-ctx.Done():
-			return "", 0, ctx.Err()
-		case <-waiting:
-		}
+	release, err := acquirePackageArchive(ctx, directory, pkg.Checksum)
+	if err != nil {
+		return "", 0, err
 	}
+	defer release()
 	if err := ctx.Err(); err != nil {
 		return "", 0, err
 	}
 	if err := os.MkdirAll(directory, 0700); err != nil {
-		return "", 0, err
+		return "", 0, sharedresources.AsAcquisitionError(err, "resource_storage_failed", "archive-cache", "mkdir", pkg)
 	}
 	root, err := safefs.Open(directory)
 	if err != nil {
-		return "", 0, err
+		return "", 0, sharedresources.AsAcquisitionError(err, "resource_storage_failed", "archive-cache", "open", pkg)
 	}
 	defer func() { _ = root.Close() }()
 	name := pkg.Checksum + ".tar.xz"
@@ -625,37 +673,52 @@ func cachedPackageArchive(
 		info, statErr := file.Stat()
 		if statErr == nil && info.Size() > limit {
 			_ = file.Close()
-			return "", 0, errors.New("cached TeX Live archive exceeds this environment's byte limit")
+			return "", 0, &sharedresources.AcquisitionError{
+				Code:     "resource_limit_exceeded",
+				Stage:    "archive-cache",
+				Reason:   "bytes",
+				Package:  pkg.Name,
+				Revision: pkg.Revision,
+				Bytes:    info.Size(),
+				Limit:    limit,
+			}
 		}
 		hash := sha512.New()
 		size, readErr := io.Copy(hash, io.LimitReader(safefs.WithContext(ctx, file), limit+1))
 		closeErr := file.Close()
 		if err := errors.Join(statErr, readErr, closeErr); err != nil {
-			return "", 0, err
+			return "", 0, sharedresources.AsAcquisitionError(
+				err,
+				"resource_storage_failed",
+				"archive-cache",
+				"read",
+				pkg,
+			)
 		}
 		if size <= limit && hex.EncodeToString(hash.Sum(nil)) == pkg.Checksum {
+			cacheHit, result.Bytes = true, size
 			return filepath.Join(directory, name), size, nil
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		return "", 0, err
+		return "", 0, sharedresources.AsAcquisitionError(err, "resource_storage_failed", "archive-cache", "open", pkg)
 	}
-	var downloaded int64
-	pending, err := root.Stage(name, limit, func(writer io.Writer) error {
-		var err error
-		downloaded, err = downloadPackageStream(ctx, repository, pkg, writer, limit, client)
-		return err
+	result, err = sharedresources.FetchArchive(ctx, sharedresources.ArchiveFetchOptions{
+		Client: client, Repository: repository, Package: pkg, Policy: policy, MaxBytes: limit,
+	}, func(write func(io.Writer) error) error {
+		pending, err := root.Stage(name, limit, write)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = pending.Close() }()
+		if err := pending.Chmod(0444); err != nil {
+			return err
+		}
+		return pending.Commit()
 	})
 	if err != nil {
 		return "", 0, err
 	}
-	defer func() { _ = pending.Close() }()
-	if err := pending.Chmod(0444); err != nil {
-		return "", 0, err
-	}
-	if err := pending.Commit(); err != nil {
-		return "", 0, err
-	}
-	return filepath.Join(directory, name), downloaded, nil
+	return filepath.Join(directory, name), result.Bytes, nil
 }
 
 type packageArchiveStats struct {
@@ -672,7 +735,13 @@ func validatePackageArchive(
 ) (packageArchiveStats, error) {
 	var stats packageArchiveStats
 	if maxBytes <= 0 || maxFiles <= 0 {
-		return stats, errors.New("TeX Live archives exceed the cumulative expanded resource limit")
+		return stats, &sharedresources.AcquisitionError{
+			Code:     "resource_limit_exceeded",
+			Stage:    "archive-validate",
+			Reason:   "expanded-bytes",
+			Package:  pkg.Name,
+			Revision: pkg.Revision,
+		}
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -706,7 +775,11 @@ func validatePackageArchive(
 		_ = input.Close()
 	}
 	if err := errors.Join(err, <-finished); err != nil {
-		return stats, fmt.Errorf("validate TeX Live package %s: %w", pkg.Name, err)
+		code, reason := "resource_archive_invalid", "xz-tar"
+		if errors.Is(err, exec.ErrNotFound) {
+			code, reason = "resource_runtime_unavailable", "xz"
+		}
+		return stats, sharedresources.AsAcquisitionError(err, code, "archive-validate", reason, pkg)
 	}
 	return stats, nil
 }
@@ -758,7 +831,15 @@ func inspectPackageTarCount(
 		seen[name] = true
 		files++
 		if files > maxFiles {
-			return errors.New("TeX Live archive exceeds resource file limit")
+			return &sharedresources.AcquisitionError{
+				Code:     "resource_limit_exceeded",
+				Stage:    "archive-validate",
+				Reason:   "files",
+				Package:  pkg.Name,
+				Revision: pkg.Revision,
+				Bytes:    int64(files),
+				Limit:    int64(maxFiles),
+			}
 		}
 		if header.Typeflag == tar.TypeDir {
 			continue
@@ -767,12 +848,26 @@ func inspectPackageTarCount(
 			return errors.New("TeX Live archive contains a link or nonregular file")
 		}
 		if header.Size < 0 || header.Size > maxBytes-total {
-			return errors.New("TeX Live archive exceeds resource limit")
+			return &sharedresources.AcquisitionError{
+				Code:     "resource_limit_exceeded",
+				Stage:    "archive-validate",
+				Reason:   "expanded-bytes",
+				Package:  pkg.Name,
+				Revision: pkg.Revision,
+				Bytes:    total + header.Size,
+				Limit:    maxBytes,
+			}
 		}
 		total += header.Size
 		if strings.HasPrefix(name, "tlpkg/tlpobj/") && strings.HasSuffix(name, ".tlpobj") {
 			if metadataFound || name != "tlpkg/tlpobj/"+pkg.Name+".tlpobj" || header.Size > 1<<20 {
-				return errors.New("TeX Live archive contains unexpected package metadata")
+				return &sharedresources.AcquisitionError{
+					Code:     "resource_archive_identity",
+					Stage:    "archive-validate",
+					Reason:   "metadata",
+					Package:  pkg.Name,
+					Revision: pkg.Revision,
+				}
 			}
 			metadataFound = true
 			metadata, err := parseTLPDB(io.LimitReader(reader, 1<<20))
@@ -781,7 +876,13 @@ func inspectPackageTarCount(
 			}
 			actual, exists := metadata[pkg.Name]
 			if len(metadata) != 1 || !exists || actual.Revision != pkg.Revision || !actual.Relocatable {
-				return errors.New("TeX Live archive does not match its locked relocatable package")
+				return &sharedresources.AcquisitionError{
+					Code:     "resource_archive_identity",
+					Stage:    "archive-validate",
+					Reason:   "revision-layout",
+					Package:  pkg.Name,
+					Revision: pkg.Revision,
+				}
 			}
 		}
 		if _, err := io.Copy(io.Discard, reader); err != nil {
@@ -789,7 +890,13 @@ func inspectPackageTarCount(
 		}
 	}
 	if !metadataFound {
-		return errors.New("TeX Live archive has no package metadata")
+		return &sharedresources.AcquisitionError{
+			Code:     "resource_archive_identity",
+			Stage:    "archive-validate",
+			Reason:   "metadata-missing",
+			Package:  pkg.Name,
+			Revision: pkg.Revision,
+		}
 	}
 	return nil
 }
@@ -797,7 +904,7 @@ func inspectPackageTarCount(
 // A watchdog bounds preparation output as it is created, in addition to the
 // final strict walk. Temporary input archives have their own bounded budget.
 func runPackagePreparation(ctx context.Context, home, tree string, args []string, maxBytes int64, maxFiles int) error {
-	run, err := runBoundedPackageProcess(
+	_, err := runBoundedPackageProcess(
 		ctx,
 		process.Spec{Name: "tlmgr", Args: args, Env: packageEnvironment(home, tree), Dir: home, MaxOutputBytes: 8192},
 		tree,
@@ -805,7 +912,11 @@ func runPackagePreparation(ctx context.Context, home, tree string, args []string
 		maxFiles,
 	)
 	if err != nil {
-		return fmt.Errorf("prepare TeX Live resources: %w: %s", err, strings.TrimSpace(string(run.Stderr)))
+		code, reason := "resource_install_failed", "tlmgr"
+		if errors.Is(err, exec.ErrNotFound) {
+			code, reason = "resource_runtime_unavailable", "tlmgr"
+		}
+		return sharedresources.AsAcquisitionError(err, code, "install", reason, sharedresources.Package{})
 	}
 	return nil
 }
@@ -871,16 +982,32 @@ func checkPackageTree(tree string, maxBytes int64, maxFiles int, allowLinks bool
 		}
 		files++
 		if files > maxFiles {
-			return errors.New("prepared TeX Live tree exceeds resource file limit")
+			return &sharedresources.AcquisitionError{
+				Code:   "resource_limit_exceeded",
+				Stage:  "install",
+				Reason: "files",
+				Bytes:  int64(files),
+				Limit:  int64(maxFiles),
+			}
 		}
 		if info.IsDir() || (allowLinks && info.Mode()&os.ModeSymlink != 0) {
 			return nil
 		}
 		if !info.Mode().IsRegular() {
-			return errors.New("prepared TeX Live tree contains a nonregular file")
+			return &sharedresources.AcquisitionError{
+				Code:   "resource_install_failed",
+				Stage:  "install",
+				Reason: "nonregular-file",
+			}
 		}
 		if info.Size() < 0 || info.Size() > maxBytes-total {
-			return errors.New("prepared TeX Live tree exceeds resource byte limit")
+			return &sharedresources.AcquisitionError{
+				Code:   "resource_limit_exceeded",
+				Stage:  "install",
+				Reason: "expanded-bytes",
+				Bytes:  total + info.Size(),
+				Limit:  maxBytes,
+			}
 		}
 		total += info.Size()
 		return nil

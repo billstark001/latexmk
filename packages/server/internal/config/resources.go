@@ -7,12 +7,32 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	sharedresources "github.com/billstark001/latexmk/packages/shared/resources"
 )
 
 func loadResourceConfig(cfg *Config) error {
 	cfg.ResourceCacheDir = os.Getenv("LATEXMK_RESOURCE_CACHE_DIR")
 	cfg.ResourceRegistryFile = os.Getenv("LATEXMK_RESOURCE_REGISTRY_FILE")
 	cfg.ResourceInventoryDir = env("LATEXMK_RUNTIME_INVENTORY_DIR", "/usr/local/lib/latexmk")
+	if file := os.Getenv("LATEXMK_TEXLIVE_SOURCES_FILE"); file != "" {
+		policy, err := sharedresources.LoadSourcePolicy(file)
+		if err != nil {
+			return fmt.Errorf("load TeX Live source policy: %w", err)
+		}
+		cfg.ResourceSourcePolicy = &policy
+		cfg.ResourcePackageIndex = policy.PackageIndex
+	}
+	if cfg.ResourcePackageIndex == nil {
+		index, err := sharedresources.LoadPinnedPackageIndex(
+			filepath.Join(cfg.ResourceInventoryDir, "texlive-package-index.json"),
+		)
+		if err == nil {
+			cfg.ResourcePackageIndex = &index
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("load TeX Live package index assertion: %w", err)
+		}
+	}
 	var err error
 	for _, value := range []struct {
 		name        string
