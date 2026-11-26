@@ -22,6 +22,23 @@ All notable changes to latexmk are documented in this file. Entries follow the c
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-26
+
+### Added
+
+- Try administrator-configured TeX Live archive mirrors in order while preserving locked revisions and SHA-512 checksums. Deployment bundles embed the source policy and capture or import a separately verified full snapshot package index for cold resource resolution.
+- Advertise `resourceArchiveUploads` and provide owner-authorized missing-archive negotiation and idempotent verified package uploads without changing environment or resource lock identities.
+- Cache public package archives in the CLI user cache, share verified bytes across projects, upload only archives missing on capable servers, and expose cache information/pruning and local Git exclude management. Select `auto`, strict `client`, or `server` acquisition through CLI/configuration/environment settings.
+- Report typed resource acquisition failures with bounded stage/source/attempt diagnostics, request-correlated download logs and separate retry/failover decisions. Keep existing API error strings and CLI JSON envelopes compatible.
+
+### Fixed
+
+- Distinguish upstream HTML, byte limits, checksum failures, archive identity errors, installation failures and local storage errors instead of reporting them all as resource HTTP 400 failures. Preserve valid shared archives when a stricter caller's byte limit rejects them.
+- Accept native headerless `tlmgr dump-tlpdb --remote` exports while retaining exact imported hashes, snapshot binding and conflict checks.
+- Install the system `xz` dependency required by managed package validation. Exercise real offline package installation, lookup, style compilation and font scanning in runtime smoke tests.
+- Separate active resource-tree leases from archive/manifest retention references so concurrent archive negotiation does not block preparation. Clean interrupted staged cache writes on restart.
+- Create filesystem lock inodes atomically under contention, including concurrent Go `os.Root` callers on macOS.
+
 ## [0.5.0] - 2026-11-23
 
 ### Added

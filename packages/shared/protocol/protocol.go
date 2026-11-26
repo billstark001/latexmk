@@ -185,6 +185,7 @@ type Metadata struct {
 
 type Capabilities struct {
 	ResourceEnvironments    bool     `json:"resourceEnvironments"`
+	ResourceArchiveUploads  bool     `json:"resourceArchiveUploads"`
 	PublicationVerification bool     `json:"publicationVerification"`
 	RealtimeSessions        bool     `json:"realtimeSessions"`
 	IsolatedWorkspaces      bool     `json:"isolatedWorkspaces"`

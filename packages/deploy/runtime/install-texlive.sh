@@ -2,6 +2,9 @@
 set -eu
 # The date-pinned repository must match the base TeX Live release.
 tlmgr --version | grep -F "version $TEXLIVE_YEAR"
+# Preserve the complete remote index separately from the installed inventory.
+# An imported index is an explicit administrator assertion, checked by deploy.
+sh /usr/local/lib/latexmk/capture-package-index.sh /usr/local/lib/latexmk "$TEXLIVE_REPOSITORY" "$TEXLIVE_YEAR"
 packages=$(sed '/^#/d; /^[[:space:]]*$/d' /usr/local/lib/latexmk/packages.txt)
 tlmgr option repository "$TEXLIVE_REPOSITORY"
 if [ -n "$packages" ]; then

@@ -44,6 +44,7 @@ type record struct {
 	Prepared    bool                    `json:"prepared"`
 	TreeFiles   []model.File            `json:"treeFiles,omitempty"`
 	refs        int
+	treeLeases  int
 	busy        chan struct{}
 }
 
@@ -99,6 +100,22 @@ func New(cfg config.Config, meta protocol.Metadata) (*Manager, error) {
 	for _, name := range []string{"records", "blobs", "trees", "staging", "metadata", "archives"} {
 		if err := root.MakeDirs(name, 0700); err != nil {
 			return nil, err
+		}
+	}
+	// Atomic archive/index publications stage beside their destinations. A
+	// process crash can leave those private siblings outside staging/, where
+	// they must not consume the persistent cache budget until normal retention.
+	for _, directory := range []string{"archives", "metadata"} {
+		entries, err := root.ReadDir(directory)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			if safefs.IsStagedName(entry.Name()) {
+				if err := root.Remove(directory + "/" + entry.Name()); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	m := &Manager{
@@ -434,11 +451,23 @@ func (m *Manager) resolvePackages(
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+	if index := m.cfg.ResourcePackageIndex; index != nil {
+		// The asserted runtime index is read in place and never populates the
+		// writable metadata cache. Admission still bounds concurrent parsing, and
+		// the reader enforces its byte limit and snapshot/checksum binding.
+		return resolvePackages(ctx, baseline, requested, "", maxPackageMetadataBytes, index)
+	}
 	m.mu.Lock()
 	used, err := diskBytes(m.dir)
 	limit := min(maxPackageMetadataBytes, m.cfg.ResourceCacheBytes-used-m.reserved)
 	if err == nil && limit <= 0 {
-		err = ErrQuota
+		err = &model.AcquisitionError{
+			Code:      "resource_cache_unavailable",
+			Stage:     "resource-cache",
+			Reason:    "capacity",
+			Retryable: true,
+			Cause:     ErrQuota,
+		}
 	}
 	if err == nil {
 		err = m.reserveLocked(limit)
@@ -448,7 +477,14 @@ func (m *Manager) resolvePackages(
 		return nil, err
 	}
 	defer func() { m.mu.Lock(); m.reserved -= limit; m.mu.Unlock() }()
-	return resolvePackages(ctx, baseline, requested, filepath.Join(m.dir, "metadata"), limit)
+	return resolvePackages(
+		ctx,
+		baseline,
+		requested,
+		filepath.Join(m.dir, "metadata"),
+		limit,
+		m.cfg.ResourcePackageIndex,
+	)
 }
 
 func manifestBytes(env model.Environment) int64 {
@@ -772,8 +808,17 @@ func (m *Manager) reserveLocked(n int64) error {
 	if err != nil {
 		return err
 	}
-	if n < 0 || n > m.cfg.ResourceCacheBytes-used-m.reserved {
+	if n < 0 || n > m.cfg.ResourceCacheBytes {
 		return ErrQuota
+	}
+	if n > m.cfg.ResourceCacheBytes-used-m.reserved {
+		return &model.AcquisitionError{
+			Code:      "resource_cache_unavailable",
+			Stage:     "resource-cache",
+			Reason:    "capacity",
+			Retryable: true,
+			Cause:     ErrQuota,
+		}
 	}
 	m.reserved += n
 	return nil

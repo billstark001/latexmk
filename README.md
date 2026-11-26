@@ -4,6 +4,8 @@ A remote LaTeX compiler for small research groups. A Go CLI selects project depe
 
 Projects can declare extra TeX Live packages, fonts and file resources without rebuilding the runtime image. Resources are locked by content, prepared in a bounded server cache, and attached to jobs by an immutable environment digest. Named publications select a build target, resource export rules and an optional independently registered verification environment. See [resources](docs/RESOURCES.md) and [source packages](docs/PACKING.md).
 
+Capable servers can ask the CLI to supply missing public package archives. The CLI downloads exact locked revisions through the server's ordered mirror policy, verifies and caches them in the OS user cache, and uploads only missing bytes. Servers recheck uploads and prepare resources with their own toolchain. Older servers continue to acquire packages themselves. Snapshot indexes and transport mirrors are configured separately; changing a mirror does not select newer packages.
+
 This documentation follows `main`. Changes newer than the latest published release require local builds; see the [changelog](CHANGELOG.md) for component versions.
 
 ## Install the CLI

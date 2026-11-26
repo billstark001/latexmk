@@ -2,8 +2,10 @@ package safefs
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -34,6 +36,70 @@ func TestTryLockContendsAndReleasesWithoutRemovingInode(t *testing.T) {
 	}
 	if err := third.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTryLockConcurrentInitialCreationPreservesOneCoordinatingInode(t *testing.T) {
+	root := testRoot(t)
+	if err := root.MakeDirs("locks", 0700); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		lock *FileLock
+		err  error
+	}
+	for round := range 64 {
+		name := fmt.Sprintf("locks/object-%d.lock", round)
+		start := make(chan struct{})
+		results := make(chan result, 8)
+		var workers sync.WaitGroup
+		for range cap(results) {
+			workers.Go(func() {
+				<-start
+				lock, err := root.TryLock(name)
+				results <- result{lock, err}
+			})
+		}
+		close(start)
+		workers.Wait()
+		close(results)
+		var held []*FileLock
+		for attempt := range results {
+			if attempt.err != nil && !errors.Is(attempt.err, ErrLocked) {
+				t.Errorf("concurrent initial lock creation failed: %v", attempt.err)
+			}
+			if attempt.lock != nil {
+				held = append(held, attempt.lock)
+			}
+		}
+		// Winners stay open until every contender has tried, making simultaneous
+		// creation and mutual exclusion deterministic without timing sleeps.
+		if len(held) != 1 {
+			for _, lock := range held {
+				_ = lock.Close()
+			}
+			t.Fatalf("simultaneous publishers held %d locks, want one", len(held))
+		}
+		first, err := held[0].file.Stat()
+		if err != nil {
+			_ = held[0].Close()
+			t.Fatal(err)
+		}
+		if err := held[0].Close(); err != nil {
+			t.Fatal(err)
+		}
+		next, err := root.TryLock(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after, err := next.file.Stat()
+		closeErr := next.Close()
+		if err != nil || closeErr != nil {
+			t.Fatalf("reopen coordinating inode: %v %v", err, closeErr)
+		}
+		if !os.SameFile(first, after) {
+			t.Fatal("contention replaced the coordinating lock inode")
+		}
 	}
 }
 

@@ -154,9 +154,45 @@ func TestPackageClosureRejectsUnknownArchAndUnpinnedPackages(t *testing.T) {
 
 func TestResolveInstalledPackagesDoesNotNeedTLMGR(t *testing.T) {
 	baseline := sharedresources.Baseline{Packages: []sharedresources.Package{{Name: "algorithms", Revision: 42}}}
-	packages, err := resolvePackages(context.Background(), baseline, []string{"algorithms"}, t.TempDir(), 4096)
+	packages, err := resolvePackages(context.Background(), baseline, []string{"algorithms"}, t.TempDir(), 4096, nil)
 	if err != nil || len(packages) != 0 {
 		t.Fatalf("baseline-provided package was not a no-op: %#v %v", packages, err)
+	}
+}
+
+func TestResolveColdUsesFullPinnedRemoteIndexWithoutTLMGR(t *testing.T) {
+	baseline := sharedresources.Baseline{
+		Repository: "https://snapshot.example/2026/09/09/tlnet", TexliveYear: 2026,
+		Packages: []sharedresources.Package{{Name: "float", Revision: 39}},
+	}
+	data := []byte(packageFixture("algorithms", 42, "float") + "\n" + packageFixture("float", 39))
+	hash := sha256.Sum256(data)
+	index := &sharedresources.PinnedPackageIndex{Version: 1, Path: filepath.Join(t.TempDir(), "remote.tlpdb"),
+		SHA256: hex.EncodeToString(hash[:]), Repository: baseline.Repository, TexliveYear: 2026}
+	if err := os.WriteFile(index.Path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	packages, err := resolvePackages(context.Background(), baseline, []string{"algorithms"}, "", 4096, index)
+	if err != nil || len(packages) != 1 || packages[0].Name != "algorithms" || packages[0].Revision != 42 {
+		t.Fatalf("cold pinned index failed: %#v %v", packages, err)
+	}
+	if err := os.WriteFile(index.Path, []byte("installed inventory with incomplete packages"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolvePackages(context.Background(), baseline, []string{"algorithms"}, "", 4096, index); err == nil {
+		t.Fatal("unasserted index mutation accepted")
+	}
+	installedOnly := []byte("name algorithms\nrevision 42\nrelocated 1\n")
+	installedHash := sha256.Sum256(installedOnly)
+	index.SHA256 = hex.EncodeToString(installedHash[:])
+	if err := os.WriteFile(index.Path, installedOnly, 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = resolvePackages(context.Background(), baseline, []string{"algorithms"}, "", 4096, index)
+	var failure *sharedresources.AcquisitionError
+	if !errors.As(err, &failure) || failure.Code != "resource_package_unsupported" ||
+		failure.Reason != "archive-identity" {
+		t.Fatalf("installed inventory was accepted as an immutable remote index: %#v %v", failure, err)
 	}
 }
 
@@ -175,7 +211,7 @@ func TestResolveUsesRegisteredBaselineMetadataAndCancellation(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	packages, err := resolvePackages(context.Background(), baseline, []string{"algorithms"}, directory, 4096)
+	packages, err := resolvePackages(context.Background(), baseline, []string{"algorithms"}, directory, 4096, nil)
 	if err != nil || len(packages) != 1 || packages[0].Revision != 42 {
 		t.Fatalf("cached snapshot was not resolved: %#v %v", packages, err)
 	}
@@ -187,6 +223,7 @@ func TestResolveUsesRegisteredBaselineMetadataAndCancellation(t *testing.T) {
 		[]string{"algorithms"},
 		directory,
 		4096,
+		nil,
 	); !errors.Is(
 		err,
 		context.Canceled,
@@ -204,7 +241,7 @@ func TestMetadataWaitHonorsCancellationBeforeTheCurrentFetchFinishes(t *testing.
 	directory := t.TempDir()
 	finished := make(chan error, 1)
 	go func() {
-		_, err := resolvePackages(ctx, baseline, []string{"algorithms"}, directory, 4096)
+		_, err := resolvePackages(ctx, baseline, []string{"algorithms"}, directory, 4096, nil)
 		finished <- err
 	}()
 	select {
@@ -262,7 +299,7 @@ func TestCompactPackageIndexPreservesIdentityAndSafetyWithoutFileInventories(t *
 }
 
 func TestArchiveCachePublishesOnlyVerifiedBytesWithinQuota(t *testing.T) {
-	contents := []byte("an exact compressed archive")
+	contents := append([]byte{0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00}, []byte("an exact compressed archive")...)
 	hash := sha512.Sum512(contents)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/snapshot/archive/algorithms.tar.xz" {
@@ -293,6 +330,7 @@ func TestArchiveCachePublishesOnlyVerifiedBytesWithinQuota(t *testing.T) {
 				selected,
 				test.limit,
 				server.Client(),
+				nil,
 			)
 			if (err != nil) != test.wantErr {
 				t.Fatalf("download returned size %d, error %v", size, err)
@@ -316,7 +354,9 @@ func TestArchiveCachePublishesOnlyVerifiedBytesWithinQuota(t *testing.T) {
 }
 
 func TestArchiveCacheSingleFlightRepairAndLeaseCancellation(t *testing.T) {
-	contents := []byte("one immutable archive shared by several resource sets")
+	contents := append(
+		[]byte{0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00},
+		[]byte("one immutable archive shared by several resource sets")...)
 	hash := sha512.Sum512(contents)
 	pkg := sharedresources.Package{Name: "algorithms", Revision: 42, Checksum: hex.EncodeToString(hash[:])}
 	var hits atomic.Int32
@@ -341,6 +381,7 @@ func TestArchiveCacheSingleFlightRepairAndLeaseCancellation(t *testing.T) {
 				pkg,
 				4096,
 				server.Client(),
+				nil,
 			)
 			if err == nil &&
 				(name != filepath.Join(directory, pkg.Checksum+".tar.xz") || size != int64(len(contents))) {
@@ -359,6 +400,7 @@ func TestArchiveCacheSingleFlightRepairAndLeaseCancellation(t *testing.T) {
 		pkg,
 		4096,
 		server.Client(),
+		nil,
 	); !errors.Is(
 		err,
 		context.Canceled,
@@ -390,6 +432,7 @@ func TestArchiveCacheSingleFlightRepairAndLeaseCancellation(t *testing.T) {
 		pkg,
 		4096,
 		server.Client(),
+		nil,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -404,6 +447,7 @@ func TestArchiveCacheSingleFlightRepairAndLeaseCancellation(t *testing.T) {
 		pkg,
 		1,
 		server.Client(),
+		nil,
 	); err == nil {
 		t.Fatal("cache hit bypassed the environment byte budget")
 	}

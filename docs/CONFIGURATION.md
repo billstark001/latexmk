@@ -26,6 +26,30 @@ LATEXMK_TOKEN_FILE=.latexmk-token
 
 Supported `LATEXMK_*` settings and variables explicitly named by a value source are consumed. Relative token-file paths from dotenv are relative to that file. Relative token/env paths declared in JSON are relative to the declaring JSON file. Dotenv and value/credential files are limited to 64 KiB based on the bytes actually read. Symlinks to regular files are accepted for secret mounts; directories and named pipes are rejected. Paths passed on the command line or through the process environment are relative to the current working directory. `projectRoot` and `outDir` in JSON are relative to their declaring JSON file. Manifest entries, ignore patterns, `includeFiles`, resource source `path`, resource `mount`, and resource lock paths are project-root-relative. Resource paths inherited from user JSON remain relative to the resolved project root, not the user configuration directory. Use `projectRoot: "."` when resources are shared by entries in nested directories.
 
+## Public package archive cache
+
+The CLI stores public TeX Live archives outside the project using the OS user cache: `~/Library/Caches/latexmk/resources/v1` on macOS, `$XDG_CACHE_HOME/latexmk/resources/v1` (normally `~/.cache/...`) on Linux, and `%LocalAppData%\\latexmk\\resources\\v1` on Windows. Its initial published-archive budget is 512 MiB. No local TeX installation is required.
+
+Set machine preferences in user JSON:
+
+```json
+{
+  "resourceCache": {
+    "directory": "/absolute/cache/location",
+    "maxBytes": 536870912,
+    "acquisition": "auto"
+  }
+}
+```
+
+`directory` must be absolute. Omit it for the platform default; omit `maxBytes` or use zero in JSON for the default. Explicit positive limits cannot exceed 1 TiB. User and project JSON merge these fields individually; process/dotenv `LATEXMK_CLI_RESOURCE_CACHE_DIR` and `LATEXMK_CLI_RESOURCE_CACHE_BYTES` override them, then `--resource-cache-dir DIR` and `--resource-cache-bytes N` take final precedence. Environment and CLI byte limits are positive decimal integers, without unit suffixes. These names are distinct from the server's `LATEXMK_RESOURCE_CACHE_DIR`.
+
+`acquisition` accepts `auto` (default), `client`, or `server`. `auto` first obtains missing public archives through the local cache/mirrors; if local downloading or cache storage fails, it warns and lets the server prepare the same locked environment. `client` requires client acquisition to succeed and rejects older servers that cannot accept needed package archives. `server` skips the archive manifest and client cache and uses server preparation directly. Invalid configuration or manifests, cancellation/deadlines, and archive upload failures remain errors in every mode. `LATEXMK_RESOURCE_ACQUISITION` overrides JSON; `--resource-acquisition MODE` overrides both. These transport choices do not change the resource lock or environment digest.
+
+The directory cannot equal or contain the project root. A selected cache directory inside a project is hard-excluded from ordinary source selection, explicit file-resource capture and source packing, independent of Git filtering. Absolute machine paths are not written to resource locks. The default location requires no additional project `.gitignore` rules. Existing `.latexmk-cache/` project identity/history remains separate; `latexmk cache ignore --local` writes cache and resource-lock guard rules to Git's local `info/exclude`, leaving the shared `.gitignore` unchanged.
+
+Use `latexmk cache resources info --json` to inspect directory/use/budget and `latexmk cache resources prune` to evict unused objects above the budget. `prune --all` removes every unlocked archive, preserving active uploads. Both accept the cache directory/budget flags. Existing `cache clean` still clears project auxiliary files only. Archive misses are staged one at a time; a single bounded staging archive can temporarily exist alongside the published budget. Cache deletion is safe and simply requires downloading the locked bytes again.
+
 ## Watching changes
 
 Ordinary `watch` / `--watch` and `--realtime` share the same timing configuration:

@@ -14,7 +14,7 @@ RUN go mod download
 COPY server/ ./
 ARG TARGETOS
 ARG TARGETARCH
-ARG VERSION=0.5.0
+ARG VERSION=0.5.1
 ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
 RUN __GO_CACHE_MOUNT__ \
@@ -26,6 +26,8 @@ FROM ${RUNTIME_IMAGE}
 RUN test "$LATEXMK_IMAGE_PROFILE" = "__IMAGE_PROFILE__"
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=builder --chmod=0755 /out/latexmk-server /usr/local/bin/latexmk-server
+COPY texlive-resources/ /usr/local/lib/latexmk/
+ENV LATEXMK_TEXLIVE_SOURCES_FILE=/usr/local/lib/latexmk/texlive-sources.json
 EXPOSE 8080
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/latexmk-server"]

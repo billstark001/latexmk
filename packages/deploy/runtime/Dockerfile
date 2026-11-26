@@ -18,7 +18,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
        fonts-dejavu-core fonts-liberation fonts-inconsolata fonts-noto-cjk \
        fonts-crosextra-carlito fonts-crosextra-caladea $packages
 # Release Apt cache locks before the long network-bound TeX installation.
-COPY packages.txt install-texlive.sh /usr/local/lib/latexmk/
+COPY packages.txt install-texlive.sh capture-package-index.sh /usr/local/lib/latexmk/
+COPY texlive-resources/ /usr/local/lib/latexmk/
 RUN sh /usr/local/lib/latexmk/install-texlive.sh
 
 # Editing font aliases only rebuilds this stage and the inexpensive final layer.
@@ -33,6 +34,13 @@ RUN mkdir /font-build /font-output \
     && cp /font-build/Latexmk-*.otf /font-output/
 
 FROM tex AS runtime
+# Managed resource validation invokes the system xz executable directly.
+# Keep this after TeX installation and font conversion so adding runtime tools
+# does not invalidate those expensive cached stages.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends xz-utils \
+    && dpkg-query -W > /usr/local/lib/latexmk/debian-packages.txt
 COPY --from=fonts /font-output/ /usr/local/share/fonts/latexmk/
 COPY smoke.sh font-smoke.tex font-inventory.sh /usr/local/lib/latexmk/
 RUN fc-cache -f \
@@ -44,6 +52,7 @@ ENV PORT=8080 \
     LATEXMK_IMAGE_PROFILE=__IMAGE_PROFILE__ \
     LATEXMK_ENGINES=__ENGINES__ \
     LATEXMK_TEMP_DIR=/tmp \
+    LATEXMK_TEXLIVE_SOURCES_FILE=/usr/local/lib/latexmk/texlive-sources.json \
     HOME=/home/latexmk \
     LANG=C.UTF-8
 USER 10001:10001

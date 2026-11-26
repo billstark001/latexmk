@@ -125,7 +125,7 @@ func (m *Manager) publishPreparedLocked(rec *record, access *ownerAccess, tree p
 	}
 	target := m.treePath(rec.Environment.Digest)
 	if tree.directory != "" {
-		if rec.refs > 1 {
+		if rec.treeLeases > 0 {
 			return errors.New("cannot replace a resource tree while it is leased")
 		}
 		if err := os.RemoveAll(target); err != nil {
@@ -180,6 +180,7 @@ func (m *Manager) prepareTree(ctx context.Context, env model.Environment) (tree 
 		stage,
 		m.cfg.MaxResourceBytes,
 		m.cfg.MaxResourceFiles,
+		m.cfg.ResourceSourcePolicy,
 	); err != nil {
 		return tree, err
 	}
@@ -341,6 +342,9 @@ func (m *Manager) Pin(owner, digest string) (*Lease, error) {
 	lease := &Lease{manager: m, record: rec, environment: env}
 	expectedTree := slices.Clone(rec.TreeFiles)
 	rec.refs++
+	if needsTree(env) {
+		rec.treeLeases++
+	}
 	m.mu.Unlock()
 	verified := false
 	defer func() {
@@ -466,5 +470,12 @@ func (l *Lease) Release() {
 	if l == nil {
 		return
 	}
-	l.once.Do(func() { l.manager.releaseRef(l.record) })
+	l.once.Do(func() {
+		l.manager.mu.Lock()
+		defer l.manager.mu.Unlock()
+		l.record.refs--
+		if needsTree(l.environment) {
+			l.record.treeLeases--
+		}
+	})
 }

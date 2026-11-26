@@ -37,12 +37,16 @@ node packages/deploy/dist/index.js bundle \
   --profile slim \
   --auth token \
   --out dist/paas-slim \
-  --tag registry.example.edu/latexmk:0.5.0 \
+  --tag registry.example.edu/latexmk:0.5.1 \
   --build \
-  --save dist/latexmk-0.5.0.tar
+  --save dist/latexmk-0.5.1.tar
 ```
 
 For production, publish the runtime and pass its immutable reference as `--runtime-image registry/name@sha256:...` when bundling the application. Server-only builds no longer install TeX. See the [deployment guide](../packages/deploy/README.md) for the two CI paths, fixed TeX snapshots, and external build caches.
+
+Application bundles embed an ordered TeX Live archive source policy. The generated defaults try UIB, TUNA and USTC; repeat `--texlive-archive-mirror HTTPS_BASE` to replace that list in the requested order. Every downloaded archive must match the already resolved revision and SHA-512. Archive mirrors are independent of the authoritative fixed snapshot index and do not upgrade dependencies.
+
+New runtimes also retain a complete, hashed remote snapshot index separately from their installed-package inventory, allowing cold resource resolution without another index download. To capture an administrator-supplied same-snapshot export, pass `--texlive-package-index FILE` and `--texlive-package-index-sha256 HASH` to either bundle mode. The generated policy and imported artifacts are copied into the image, not just written to `.env.example`. `LATEXMK_TEXLIVE_SOURCES_FILE` selects an administrator override. See [ordered package sources and trusted indexes](../packages/deploy/README.md#ordered-package-archive-sources) for validation, inheritance and runtime-bootstrap limits.
 
 ## Server modes
 

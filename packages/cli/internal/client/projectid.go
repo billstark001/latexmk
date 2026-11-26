@@ -199,14 +199,69 @@ func normalizeGitCheckPath(path string) string {
 
 // AddProjectCacheGitIgnore only appends an explicit rule and never replaces an
 // existing ignore file.
-func AddProjectCacheGitIgnore(root string) (ProjectCacheIgnoreResult, error) {
+func AddProjectCacheGitIgnore(root string, local bool, resourceLock string) (ProjectCacheIgnoreResult, error) {
 	resolved, err := resolvedProjectRoot(root)
 	if err != nil {
 		return ProjectCacheIgnoreResult{}, err
 	}
 	result := ProjectCacheIgnoreResult{ProjectRoot: resolved, GitIgnore: filepath.Join(resolved, ".gitignore")}
+	patterns := []string{".latexmk-cache/"}
+	if local {
+		command := exec.Command(
+			"git",
+			"-C",
+			resolved,
+			"rev-parse",
+			"--path-format=absolute",
+			"--git-path",
+			"info/exclude",
+		)
+		output, err := command.Output()
+		if err != nil {
+			return result, fmt.Errorf("locate Git local exclude file: %w", err)
+		}
+		result.GitIgnore = strings.TrimSpace(string(output))
+		command = exec.Command("git", "-C", resolved, "rev-parse", "--show-toplevel")
+		output, err = command.Output()
+		if err != nil {
+			return result, err
+		}
+		relative, err := filepath.Rel(strings.TrimSpace(string(output)), resolved)
+		if err != nil {
+			return result, err
+		}
+		escape := strings.NewReplacer(
+			"\\",
+			"\\\\",
+			"*",
+			"\\*",
+			"?",
+			"\\?",
+			"[",
+			"\\[",
+			"]",
+			"\\]",
+			"#",
+			"\\#",
+			"!",
+			"\\!",
+			" ",
+			"\\ ",
+		)
+		prefix := "/"
+		if relative != "." {
+			prefix += escape.Replace(filepath.ToSlash(relative)) + "/"
+		}
+		if resourceLock == "" {
+			resourceLock = ".latexmk-resources.lock.json"
+		}
+		patterns = []string{prefix + ".latexmk-cache/", prefix + escape.Replace(resourceLock) + ".guard"}
+		if err := os.MkdirAll(filepath.Dir(result.GitIgnore), 0700); err != nil {
+			return result, err
+		}
+	}
 	status, statusErr := InspectProjectCacheGitIgnore(resolved)
-	if statusErr == nil && status.InWorkTree && status.Ignored {
+	if !local && statusErr == nil && status.InWorkTree && status.Ignored {
 		return result, nil
 	}
 	knownNotIgnored := statusErr == nil && status.InWorkTree
@@ -226,12 +281,23 @@ func AddProjectCacheGitIgnore(root string) (ProjectCacheIgnoreResult, error) {
 	} else if !os.IsNotExist(err) {
 		return result, err
 	}
-	for _, line := range strings.Split(string(existing), "\n") {
-		if strings.TrimSpace(line) == ".latexmk-cache/" && !knownNotIgnored {
-			return result, nil
+	var missing []string
+	for _, pattern := range patterns {
+		found := false
+		for _, line := range strings.Split(string(existing), "\n") {
+			if strings.TrimSpace(line) == pattern && (local || !knownNotIgnored) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			missing = append(missing, pattern)
 		}
 	}
-	addition := []byte("# latexmk local project identity and dependency cache\n.latexmk-cache/\n")
+	if len(missing) == 0 {
+		return result, nil
+	}
+	addition := []byte("# latexmk local project state\n" + strings.Join(missing, "\n") + "\n")
 	if len(existing) > 0 && !bytes.HasSuffix(existing, []byte("\n")) {
 		addition = append([]byte("\n"), addition...)
 	}

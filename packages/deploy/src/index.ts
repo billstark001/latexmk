@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-import { cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +10,11 @@ import { parseArgs } from 'node:util';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(packageRoot, '..', '..');
+const DEFAULT_TEXLIVE_ARCHIVE_MIRRORS = [
+  'https://ctan.uib.no/systems/texlive/tlnet',
+  'https://mirrors.tuna.tsinghua.edu.cn/CTAN/systems/texlive/tlnet',
+  'https://mirrors.ustc.edu.cn/CTAN/systems/texlive/tlnet',
+];
 
 const DEPLOYMENT_PRESETS = {
   'railway-serverless': {
@@ -98,7 +104,7 @@ async function main(argv: string[]) {
     return 0;
   }
   if (command === 'version' || command === '--version') {
-    console.log('latexmk-deploy 0.5.0');
+    console.log('latexmk-deploy 0.5.1');
     return 0;
   }
   if (command !== 'bundle' && command !== 'runtime-bundle') {
@@ -123,6 +129,9 @@ function parseBundleOptions(args: string[], command: 'bundle' | 'runtime-bundle'
       'runtime-image': { type: 'string' },
       'texlive-image': { type: 'string' },
       'texlive-repository': { type: 'string' },
+      'texlive-archive-mirror': { type: 'string', multiple: true },
+      'texlive-package-index': { type: 'string' },
+      'texlive-package-index-sha256': { type: 'string' },
       platform: { type: 'string' },
       'cache-from': { type: 'string', multiple: true },
       'cache-to': { type: 'string', multiple: true },
@@ -158,6 +167,9 @@ function parseBundleOptions(args: string[], command: 'bundle' | 'runtime-bundle'
     runtimeImage: values['runtime-image'] ?? '',
     texliveImage: values['texlive-image'] ?? '',
     texliveRepository: values['texlive-repository'] ?? '',
+    texliveArchiveMirrors: orderedHTTPSURLs(values['texlive-archive-mirror'] ?? DEFAULT_TEXLIVE_ARCHIVE_MIRRORS),
+    texlivePackageIndex: values['texlive-package-index'] ? path.resolve(values['texlive-package-index']) : '',
+    texlivePackageIndexSHA256: values['texlive-package-index-sha256'] ?? '',
     platform: values.platform ?? '',
     cacheFrom: values['cache-from'] ?? [],
     cacheTo: values['cache-to'] ?? [],
@@ -250,6 +262,11 @@ function parseBundleOptions(args: string[], command: 'bundle' | 'runtime-bundle'
     throw new Error('--texlive-image must be pinned by sha256 digest');
   if (options.texliveRepository && !/^https:\/\/[^\s"'`$\\]+$/.test(options.texliveRepository))
     throw new Error('--texlive-repository must be an HTTPS URL');
+  if (options.texliveRepository) orderedHTTPSURLs([options.texliveRepository]);
+  if (Boolean(options.texlivePackageIndex) !== Boolean(options.texlivePackageIndexSHA256))
+    throw new Error('--texlive-package-index and --texlive-package-index-sha256 must be used together');
+  if (options.texlivePackageIndexSHA256 && !/^[a-f0-9]{64}$/.test(options.texlivePackageIndexSHA256))
+    throw new Error('--texlive-package-index-sha256 must contain 64 lowercase hexadecimal characters');
   if (command === 'bundle' && (options.texliveImage || options.texliveRepository))
     throw new Error('TeX options belong to runtime-bundle');
   if (options.push && !options.build) throw new Error('--push requires --build');
@@ -268,13 +285,114 @@ function resolvePreset(value = ''): keyof typeof DEPLOYMENT_PRESETS | '' {
 
 type BundleOptions = ReturnType<typeof parseBundleOptions>;
 
+function orderedHTTPSURLs(values: string[]): string[] {
+  const urls: string[] = [];
+  for (const value of values) {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new Error('TeX Live sources must be absolute HTTPS URLs');
+    }
+    if (
+      url.protocol !== 'https:' ||
+      !url.hostname ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      value.length > 4096 ||
+      /[\s"'`$\\]/.test(value)
+    )
+      throw new Error('TeX Live sources must be HTTPS URLs without credentials, queries or fragments');
+    const normalized = url.href.replace(/\/+$/, '');
+    if (!urls.includes(normalized)) urls.push(normalized);
+  }
+  if (urls.length > 8) throw new Error('At most eight TeX Live archive mirrors are supported');
+  return urls;
+}
+
+interface PackageIndexDescriptor {
+  version: 1;
+  path: string;
+  sha256: string;
+  repository: string;
+  texliveYear: number;
+}
+
+interface TeXLiveSources {
+  version: 1;
+  archiveMirrors: string[];
+  packageIndex?: PackageIndexDescriptor;
+}
+
+async function captureTeXLiveSources(options: BundleOptions, lock: RuntimeLock) {
+  const policy: TeXLiveSources = { version: 1, archiveMirrors: options.texliveArchiveMirrors };
+  let index: Buffer | undefined;
+  if (options.texlivePackageIndex) {
+    const info = await stat(options.texlivePackageIndex);
+    if (!info.isFile() || info.size === 0 || info.size > 100 * 1024 * 1024)
+      throw new Error('--texlive-package-index must be a non-empty regular file of at most 100 MiB');
+    index = await readFile(options.texlivePackageIndex);
+    if (index.length === 0 || index.length > 100 * 1024 * 1024)
+      throw new Error('--texlive-package-index changed size or exceeds 100 MiB');
+    const sha256 = createHash('sha256').update(index).digest('hex');
+    if (sha256 !== options.texlivePackageIndexSHA256)
+      throw new Error('--texlive-package-index does not match --texlive-package-index-sha256');
+    const repository = options.texliveRepository || lock.repository;
+    validatePackageIndex(index, repository, lock.texliveYear);
+    policy.packageIndex = {
+      version: 1,
+      path: 'texlive-package-index.tlpdb',
+      sha256,
+      repository,
+      texliveYear: lock.texliveYear,
+    };
+  }
+  return { policy, index };
+}
+
+function validatePackageIndex(data: Buffer, repository: string, year: number) {
+  const text = data.toString('utf8');
+  if (text.includes('\0') || !Buffer.from(text, 'utf8').equals(data))
+    throw new Error('TeX Live package index must be plain UTF-8 tlmgr dump-tlpdb output');
+  const locations = [...text.matchAll(/^location-url(?:[\t ]+([^\r\n]*))?\r?$/gm)];
+  if (locations.some((match) => match[1]?.trim().replace(/\/+$/, '') !== repository.replace(/\/+$/, '')))
+    throw new Error('TeX Live package index location-url must match the pinned snapshot repository');
+  if (!new RegExp(`^depend release/${year}\\r?$`, 'm').test(text))
+    throw new Error(`TeX Live package index must declare release/${year}`);
+  if (!/^name 00texlive\.config\r?$/m.test(text) || !/^containerchecksum [a-f0-9]{128}\r?$/m.test(text))
+    throw new Error('TeX Live package index must contain the remote release metadata and archive checksums');
+}
+
+async function writeTeXLiveSources(out: string, captured: Awaited<ReturnType<typeof captureTeXLiveSources>>) {
+  const directory = path.join(out, 'texlive-resources');
+  await mkdir(directory);
+  await writeFile(path.join(directory, 'texlive-sources.json'), JSON.stringify(captured.policy, null, 2) + '\n');
+  if (captured.index && captured.policy.packageIndex) {
+    await writeFile(path.join(directory, 'texlive-package-index.tlpdb'), captured.index);
+    await writeFile(
+      path.join(directory, 'texlive-package-index.json'),
+      JSON.stringify(captured.policy.packageIndex, null, 2) + '\n',
+    );
+    await writeFile(
+      path.join(directory, 'texlive-package-index.sha256'),
+      `${captured.policy.packageIndex.sha256}  texlive-package-index.tlpdb\n`,
+    );
+  }
+  await chmod(directory, 0o755);
+  for (const name of await readdir(directory)) await chmod(path.join(directory, name), 0o644);
+}
+
 async function bundle(options: BundleOptions) {
   await assertSeparateOutput(options.out, options.serverSource);
   await assertSeparateOutput(options.out, options.sharedSource);
   await ensureSource(options.serverSource);
   await ensureSource(options.sharedSource);
-  await prepareOutput(options.out, options.force);
   const lock = await readRuntimeLock();
+  const sources = await captureTeXLiveSources(options, lock);
+  await prepareOutput(options.out, options.force);
+  await writeTeXLiveSources(options.out, sources);
   await cp(options.serverSource, path.join(options.out, 'server'), {
     recursive: true,
     filter(source) {
@@ -309,6 +427,8 @@ async function bundle(options: BundleOptions) {
       '!server/**',
       '!shared/',
       '!shared/**',
+      '!texlive-resources/',
+      '!texlive-resources/**',
       'server/dist/',
       'server/.git/',
       'server/node_modules/',
@@ -360,6 +480,7 @@ async function bundle(options: BundleOptions) {
           .map((value) => value.trim())
           .filter(Boolean),
         shellEscapeAllowed: options.allowShellEscape,
+        texliveSources: sources.policy,
       },
       null,
       2,
@@ -385,7 +506,9 @@ async function readRuntimeLock(): Promise<RuntimeLock> {
 
 async function runtimeBundle(options: BundleOptions) {
   const lock = await readRuntimeLock();
+  const sources = await captureTeXLiveSources(options, lock);
   await prepareOutput(options.out, options.force);
+  await writeTeXLiveSources(options.out, sources);
   const image = options.texliveImage || lock.images[options.profile];
   const repository = options.texliveRepository || lock.repository;
   const template = await readFile(path.join(packageRoot, 'runtime', 'Dockerfile'), 'utf8');
@@ -399,7 +522,13 @@ async function runtimeBundle(options: BundleOptions) {
       .replaceAll('__IMAGE_PROFILE__', options.profile === 'slim' ? 'xelatex-cjk-slim' : 'texlive-full')
       .replaceAll('__ENGINES__', options.profile === 'slim' ? 'xelatex' : 'xelatex,lualatex,pdflatex'),
   );
-  for (const name of ['install-texlive.sh', 'smoke.sh', 'font-smoke.tex', 'font-inventory.sh']) {
+  for (const name of [
+    'install-texlive.sh',
+    'capture-package-index.sh',
+    'smoke.sh',
+    'font-smoke.tex',
+    'font-inventory.sh',
+  ]) {
     await cp(path.join(packageRoot, 'runtime', name), path.join(options.out, name));
   }
   await cp(
@@ -412,11 +541,12 @@ async function runtimeBundle(options: BundleOptions) {
   );
   await writeFile(
     path.join(options.out, '.dockerignore'),
-    '**\n!packages.txt\n!install-texlive.sh\n!smoke.sh\n!font-smoke.tex\n!font-inventory.sh\n!rename-compat-fonts.py\n',
+    '**\n!packages.txt\n!install-texlive.sh\n!capture-package-index.sh\n!smoke.sh\n!font-smoke.tex\n!font-inventory.sh\n!rename-compat-fonts.py\n!texlive-resources/\n!texlive-resources/**\n',
   );
   await writeFile(
     path.join(options.out, 'runtime-lock.json'),
-    JSON.stringify({ ...lock, profile: options.profile, image, repository }, null, 2) + '\n',
+    JSON.stringify({ ...lock, profile: options.profile, image, repository, texliveSources: sources.policy }, null, 2) +
+      '\n',
   );
   await writeFile(
     path.join(options.out, 'README.md'),
@@ -532,6 +662,7 @@ function renderEnv(options: BundleOptions) {
     `LATEXMK_MAX_LOG_BYTES=${options.maxLogBytes}`,
     `LATEXMK_MAX_STATE_BYTES=${options.maxStateBytes}`,
     `LATEXMK_RESOURCE_CACHE_DIR=${options.stateDir}/environments`,
+    'LATEXMK_TEXLIVE_SOURCES_FILE=/usr/local/lib/latexmk/texlive-sources.json',
     `LATEXMK_RESOURCE_CACHE_BYTES=${options.resourceCacheBytes}`,
     `LATEXMK_MAX_RESOURCE_BYTES=${options.maxResourceBytes}`,
     `LATEXMK_RESOURCE_OWNER_BYTES=${options.resourceOwnerBytes}`,
@@ -650,6 +781,10 @@ Runtime image: \`${options.runtimeImage}\`
 Build the runtime separately with \`latexmk-deploy runtime-bundle --profile ${options.profile} --build\`
 for local use, or supply a published digest with \`--runtime-image\` when generating this bundle.
 The application Dockerfile never installs TeX packages.
+It embeds \`texlive-resources/texlive-sources.json\` for ordered archive sources.
+Set \`LATEXMK_TEXLIVE_SOURCES_FILE\` to another administrator-managed file to override it.
+If no package index is imported here, the server uses a verified index from the
+runtime inventory when available; archive mirrors never select another package version.
 
 ## Local verification
 
@@ -723,6 +858,9 @@ Options:
   --runtime-image IMAGE        Application base (default: latexmk-runtime:PROFILE-local)
   --texlive-image IMAGE        Runtime only: digest-pinned TeX base override
   --texlive-repository URL     Runtime only: matching HTTPS TeX snapshot override
+  --texlive-archive-mirror URL Ordered archive source (repeatable; both bundle modes)
+  --texlive-package-index FILE Import trusted same-snapshot tlmgr dump-tlpdb output
+  --texlive-package-index-sha256 HASH Required SHA-256 assertion for imported index
   --platform LIST              Docker target platform(s); multiple requires --push
   --cache-from SPEC            Buildx external cache import (repeatable)
   --cache-to SPEC              Buildx external cache export (repeatable)

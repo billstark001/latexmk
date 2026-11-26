@@ -95,9 +95,10 @@ runs:
         mkdir -p dist/font-inventory
         printf '%s\n' "$ref" > dist/font-inventory/image.txt
         docker run --rm --entrypoint sh "$ref" -c 'sha256sum -c /usr/local/lib/latexmk/fonts.sha256' > dist/font-inventory/verification.txt
-        for file in fonts.tsv fonts.sha256 debian-packages.txt texlive.tlpdb texlive-repository.txt; do
+        for file in fonts.tsv fonts.sha256 debian-packages.txt texlive.tlpdb texlive-repository.txt texlive-package-index.json texlive-package-index.tlpdb texlive-package-index.sha256; do
           docker run --rm --entrypoint cat "$ref" "/usr/local/lib/latexmk/$file" > "dist/font-inventory/$file"
         done
+        node scripts/runtime-image.mjs verify-index --context dist/font-inventory --runtime-lock dist/runtime/runtime-lock.json
         echo "ref=$ref" >> "$GITHUB_OUTPUT"
     - name: Promote verified runtime recipe
       if: steps.context.outputs.reused != 'true'

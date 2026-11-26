@@ -20,6 +20,7 @@ import (
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
 	"github.com/billstark001/latexmk/packages/cli/internal/config"
 	"github.com/billstark001/latexmk/packages/cli/internal/dependency"
+	"github.com/billstark001/latexmk/packages/cli/internal/resourcecache"
 	cliresources "github.com/billstark001/latexmk/packages/cli/internal/resources"
 	"github.com/billstark001/latexmk/packages/shared/argv"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
@@ -27,7 +28,7 @@ import (
 )
 
 var (
-	version   = "0.5.0"
+	version   = "0.5.1"
 	commit    = "unknown"
 	buildDate = "unknown"
 )
@@ -35,6 +36,7 @@ var (
 type compileOptions struct {
 	resourceSpecs       map[string]sharedresources.Spec
 	resourceOptions     sharedresources.Options
+	resourceCache       resourcecache.Settings
 	resourceIDs         []string
 	resourceAddIDs      []string
 	resourceRemoveIDs   []string
@@ -562,6 +564,25 @@ func runWatch(c *client.Client, request protocol.CompileRequest, opts compileOpt
 
 func compileArguments() *argv.Options[compileOptions] {
 	options := &argv.Options[compileOptions]{}
+	options.Value("resource-acquisition", func(o *compileOptions, v string) error {
+		o.resourceCache.Acquisition = v
+		return o.resourceCache.Validate()
+	})
+	options.Value("resource-cache-dir", func(o *compileOptions, v string) error {
+		if !filepath.IsAbs(v) {
+			return errors.New("--resource-cache-dir requires an absolute path")
+		}
+		o.resourceCache.Directory = v
+		return nil
+	})
+	options.Value("resource-cache-bytes", func(o *compileOptions, v string) error {
+		limit, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || limit < 1 || limit > 1<<40 {
+			return errors.New("--resource-cache-bytes requires a positive byte count at most 1099511627776")
+		}
+		o.resourceCache.MaxBytes = limit
+		return nil
+	})
 	options.Value("resource", func(o *compileOptions, v string) error {
 		if !sharedresources.ValidID(v) {
 			return errors.New("--resource requires a resource ID")
@@ -882,7 +903,10 @@ func normalizeCompilePaths(opts *compileOptions, cwd string) error {
 		opts.outDir = filepath.Join(cwd, opts.outDir)
 	}
 	opts.outDir, err = filepath.Abs(opts.outDir)
-	return err
+	if err != nil {
+		return err
+	}
+	return resolveResourceCache(opts)
 }
 
 type manifestView struct {
@@ -1403,8 +1427,9 @@ Usage:
   latexmk doctor
   latexmk init [--server URL]
   latexmk clean [main.tex]
-  latexmk cache ignore [--project-root DIR] [--json]
+  latexmk cache ignore [--local] [--project-root DIR] [--json]
   latexmk cache clean [--project-root DIR] [--json]
+  latexmk cache resources info|prune [--all] [--json]
   latexmk --target NAME|all [options]
   latexmk remote clean --scope results|snapshot|cache|project [--dry-run] [--json]
   latexmk remote clean --plan-id PLAN_ID --yes [--json]
@@ -1435,6 +1460,9 @@ Compile options:
   --server-cache MODE          none, retain, or reuse; --force starts clean
   --server-cache-ttl DURATION   Requested auxiliary retention, capped by server limits
   --local-cache MODE           none, cache, or output (legacy JSON preserves output)
+  --resource-cache-dir DIR     Absolute user-level package archive cache directory
+  --resource-acquisition MODE  auto (default), client or server package acquisition
+  --resource-cache-bytes N     Package archive cache budget in bytes (default 536870912)
   --manifest FILE              Read project-relative paths/globs, one per line
   --include-file PATTERN       Add project-relative paths/globs (repeatable)
   --unmatched-glob MODE        error (default), warn, or ignore
