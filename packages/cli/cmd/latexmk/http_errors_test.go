@@ -146,6 +146,18 @@ func TestHTTPClassificationKeepsStatusAndRetryContract(t *testing.T) {
 	}
 }
 
+func TestTypedResourceRetryabilityOverridesHTTPDefault(t *testing.T) {
+	for _, retry := range []bool{true, false} {
+		failure := &client.HTTPError{StatusCode: 502, ServerCode: "resource_archive_checksum", Retryable: &retry,
+			ResourceDetails: map[string]any{"stage": "archive-fetch", "package": "algorithmicx"}}
+		code, details, retryable, exit := classifyAgentError(failure)
+		if code != "server_error" || retryable != retry || exit != 1 ||
+			details["serverCode"] != "resource_archive_checksum" {
+			t.Fatalf("typed retry contract changed: %s %#v %t %d", code, details, retryable, exit)
+		}
+	}
+}
+
 func TestCompileReporterPreservesSuccessShapeAndHumanHTTPDetails(t *testing.T) {
 	failure := &client.HTTPError{StatusCode: 429, RequestID: "req_capacity", RetryAfter: "60", Message: "queue full"}
 	code, _, stderr := captureCommandOutput(t, func() int {

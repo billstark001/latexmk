@@ -13,9 +13,13 @@ import (
 type cacheOptions struct {
 	root       string
 	jsonOutput bool
+	local      bool
 }
 
 func runCache(args []string) int {
+	if len(args) > 0 && args[0] == "resources" {
+		return runResourceCache(args[1:])
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return failAgent("cache", false, err)
@@ -23,6 +27,7 @@ func runCache(args []string) int {
 	changes := new(argv.Options[cacheOptions])
 	changes.Value("project-root", func(options *cacheOptions, value string) error { options.root = value; return nil })
 	changes.Bool("json", func(options *cacheOptions, value bool) error { options.jsonOutput = value; return nil })
+	changes.Bool("local", func(options *cacheOptions, value bool) error { options.local = value; return nil })
 	cfg, parsed, err := loadCommand("cache", cwd, args, changes.Flags()...)
 	jsonOutput := parsed != nil && parsed.Bool("json")
 	if err != nil {
@@ -41,13 +46,16 @@ func runCache(args []string) int {
 	}
 	root := opts.root
 	if positionals[0] == "clean" {
+		if opts.local {
+			return failAgentArguments("cache.clean", jsonOutput, errors.New("--local requires cache ignore"))
+		}
 		return cleanLocalCache(root, opts.jsonOutput)
 	}
 	root, err = filepath.Abs(root)
 	if err != nil {
 		return failAgent("cache.ignore", jsonOutput, err)
 	}
-	result, err := client.AddProjectCacheGitIgnore(root)
+	result, err := client.AddProjectCacheGitIgnore(root, opts.local, cfg.ResourceOptions.LockFile)
 	if err != nil {
 		return failAgent("cache.ignore", jsonOutput, err)
 	}

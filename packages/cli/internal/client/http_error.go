@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,8 @@ import (
 	"strings"
 	"syscall"
 	"unicode"
+
+	"github.com/billstark001/latexmk/packages/shared/resources"
 )
 
 const maxErrorBodyBytes = 64 << 10
@@ -35,6 +38,9 @@ type HTTPError struct {
 	ResponseIssue    string
 	BodyTruncated    bool
 	MessageTruncated bool
+	ServerCode       string
+	Retryable        *bool
+	ResourceDetails  map[string]any
 	cause            error
 }
 
@@ -127,7 +133,7 @@ func (c *Client) responseError(resp *http.Response, issue string, cause error) *
 		failure.RequestID = id
 	}
 	if retry := resp.Header.Get("Retry-After"); !c.containsCredential(retry) {
-		failure.RetryAfter = validRetryAfter(retry)
+		failure.RetryAfter = resources.CanonicalRetryAfter(retry)
 	}
 	if resp.Request != nil {
 		failure.Method = resp.Request.Method
@@ -158,14 +164,109 @@ func (c *Client) readHTTPError(resp *http.Response) *HTTPError {
 		return failure
 	}
 	var payload struct {
-		Error string `json:"error"`
+		Error     string                     `json:"error"`
+		Code      string                     `json:"code"`
+		Retryable *bool                      `json:"retryable"`
+		Details   map[string]json.RawMessage `json:"details"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil || payload.Error == "" {
 		failure.ResponseIssue = "invalid_error_body"
 		return failure
 	}
 	failure.Message, failure.MessageTruncated = c.safeResponseText(payload.Error, maxErrorMessageRunes)
+	if safeErrorCode(payload.Code) && !c.containsCredential(payload.Code) {
+		failure.ServerCode = payload.Code
+		failure.Retryable = payload.Retryable
+		failure.ResourceDetails = c.resourceErrorDetails(payload.Details, true)
+	}
 	return failure
+}
+
+func safeErrorCode(code string) bool {
+	if len(code) == 0 || len(code) > 80 {
+		return false
+	}
+	for _, r := range code {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+// Resource diagnostics are untrusted response data. Preserve a bounded, typed
+// allowlist rather than forwarding arbitrary server fields or upstream bodies.
+func (c *Client) resourceErrorDetails(fields map[string]json.RawMessage, attempts bool) map[string]any {
+	result := make(map[string]any)
+	for _, key := range []string{"stage", "reason", "package", "sourceId", "code", "contentType", "expected", "actual", "environmentDigest", "baselineDigest", "retryAfter"} {
+		var value string
+		if raw, ok := fields[key]; ok && json.Unmarshal(raw, &value) == nil {
+			limit := 128
+			if key == "reason" {
+				limit = 256
+			}
+			if value, truncated := c.safeResponseText(
+				value,
+				limit,
+			); value != "" && !truncated &&
+				safeResourceField(key, value) {
+				result[key] = value
+			}
+		}
+	}
+	for _, key := range []string{"revision", "upstreamStatus", "bytes", "limit"} {
+		var value int64
+		if raw, ok := fields[key]; ok && json.Unmarshal(raw, &value) == nil && value >= 0 {
+			if key != "upstreamStatus" || (value >= 100 && value <= 599) {
+				result[key] = value
+			}
+		}
+	}
+	for _, key := range []string{"retryable", "fallbackAllowed"} {
+		var value bool
+		if raw, ok := fields[key]; ok && json.Unmarshal(raw, &value) == nil {
+			result[key] = value
+		}
+	}
+	if attempts {
+		var items []map[string]json.RawMessage
+		if json.Unmarshal(fields["attempts"], &items) == nil && len(items) <= 8 {
+			bounded := make([]map[string]any, 0, len(items))
+			for _, item := range items {
+				bounded = append(bounded, c.resourceErrorDetails(item, false))
+			}
+			if len(bounded) > 0 {
+				result["attempts"] = bounded
+			}
+		}
+	}
+	return result
+}
+
+func safeResourceField(key, value string) bool {
+	switch key {
+	case "retryAfter":
+		return resources.CanonicalRetryAfter(value) == value
+	case "expected", "actual":
+		if len(value) != 64 && len(value) != 128 {
+			return false
+		}
+		_, err := hex.DecodeString(value)
+		return err == nil
+	case "environmentDigest", "baselineDigest":
+		return resources.ValidDigest(value)
+	case "contentType":
+		mediaType, _, err := mime.ParseMediaType(value)
+		return err == nil && value == mediaType
+	default:
+		for _, r := range value {
+			if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') &&
+				r != '_' && r != '-' && r != '.' && r != '+' {
+				return false
+			}
+		}
+		return true
+	}
 }
 
 func (c *Client) containsCredential(value string) bool {
@@ -200,23 +301,6 @@ func safeResponseID(value string) bool {
 		}
 	}
 	return true
-}
-
-func validRetryAfter(value string) string {
-	if len(value) > 128 {
-		return ""
-	}
-	if date, err := http.ParseTime(value); err == nil {
-		return date.UTC().Format(http.TimeFormat)
-	}
-	if value == "" || strings.IndexFunc(value, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
-		return ""
-	}
-	seconds, err := strconv.ParseUint(value, 10, 63)
-	if err != nil {
-		return ""
-	}
-	return strconv.FormatUint(seconds, 10)
 }
 
 // responseDecodeError marks failures caused by remote result bytes. Local file

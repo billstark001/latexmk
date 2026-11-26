@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/billstark001/latexmk/packages/cli/internal/resourcecache"
 	"github.com/billstark001/latexmk/packages/shared/jsonutil"
 	"github.com/billstark001/latexmk/packages/shared/protocol"
 	"github.com/billstark001/latexmk/packages/shared/resources"
@@ -60,6 +61,7 @@ type WatchSettings struct {
 }
 
 type FileConfig struct {
+	ResourceCache    resourcecache.Settings           `json:"resourceCache,omitempty"`
 	Resources        map[string]resources.Spec        `json:"resources,omitempty"`
 	ResourceOptions  resources.Options                `json:"resourceOptions,omitempty"`
 	DefaultResources []string                         `json:"defaultResources,omitempty"`
@@ -95,6 +97,7 @@ type FileConfig struct {
 }
 
 type Resolved struct {
+	ResourceCache    resourcecache.Settings
 	Resources        map[string]resources.Spec
 	ResourceOptions  resources.Options
 	DefaultResources []string
@@ -223,6 +226,32 @@ func load(start string, envOverride *string) (Resolved, error) {
 		value, _ := lookup(name)
 		return value
 	}
+	if value := get("LATEXMK_CLI_RESOURCE_CACHE_DIR"); value != "" {
+		cfg.ResourceCache.Directory = value
+	}
+	if value := get("LATEXMK_CLI_RESOURCE_CACHE_BYTES"); value != "" {
+		limit, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || limit <= 0 || limit > 1<<40 {
+			return Resolved{}, errors.New(
+				"LATEXMK_CLI_RESOURCE_CACHE_BYTES must be a positive byte count at most 1099511627776",
+			)
+		}
+		cfg.ResourceCache.MaxBytes = limit
+	}
+	if value := get("LATEXMK_RESOURCE_ACQUISITION"); value != "" {
+		cfg.ResourceCache.Acquisition = value
+	}
+	if cfg.ResourceCache.Acquisition == "" {
+		cfg.ResourceCache.Acquisition = "auto"
+	}
+	if err := cfg.ResourceCache.Validate(); err != nil {
+		return Resolved{}, err
+	}
+	cacheDirectory, err := resourcecache.Directory(cfg.ResourceCache.Directory, "")
+	if err != nil {
+		return Resolved{}, fmt.Errorf("resourceCache.directory: %w", err)
+	}
+	cfg.ResourceCache.Directory = cacheDirectory
 
 	cfg.Exclude = mergePatterns(cfg.Exclude, DefaultDeny())
 
@@ -356,6 +385,7 @@ func load(start string, envOverride *string) (Resolved, error) {
 	}
 	respectGitIgnore = cfg.RespectGitIgnore == nil || *cfg.RespectGitIgnore
 	return Resolved{
+		ResourceCache:    cfg.ResourceCache,
 		Resources:        cfg.Resources,
 		ResourceOptions:  cfg.ResourceOptions,
 		DefaultResources: cfg.DefaultResources,
@@ -372,6 +402,7 @@ func load(start string, envOverride *string) (Resolved, error) {
 		Targets:          cfg.Targets,
 		DefaultTarget:    cfg.DefaultTarget,
 		DenyFiles: []string{
+			cacheDirectory,
 			userPath,
 			filepath.Join(userDir, "token"),
 			envPath,

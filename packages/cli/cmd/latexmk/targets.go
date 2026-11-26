@@ -154,6 +154,7 @@ func exportPDF(opts compileOptions, out client.CompileOutput) error {
 
 func optionsFromConfig(cfg config.Resolved, dryRun bool) compileOptions {
 	return compileOptions{
+		resourceCache:   cfg.ResourceCache,
 		resourceSpecs:   cfg.Resources,
 		resourceOptions: cfg.ResourceOptions,
 		resourceIDs:     cfg.DefaultResources,

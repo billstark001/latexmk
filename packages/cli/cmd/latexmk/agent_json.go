@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/billstark001/latexmk/packages/cli/internal/client"
+	"github.com/billstark001/latexmk/packages/shared/resources"
 )
 
 const agentJSONSchemaVersion = 1
@@ -81,6 +82,25 @@ func classifyAgentError(err error) (string, map[string]any, bool, int) {
 	if errors.As(err, &httpErr) {
 		return classifyHTTPError(err, httpErr)
 	}
+	var resourceErr *resources.AcquisitionError
+	if errors.As(err, &resourceErr) {
+		data, marshalErr := json.Marshal(resourceErr)
+		if marshalErr != nil {
+			return "command_failed", nil, false, 1
+		}
+		var details map[string]any
+		if json.Unmarshal(data, &details) != nil {
+			return "command_failed", nil, false, 1
+		}
+		exitCode := 1
+		if resourceErr.Code == "resource_prepare_timeout" {
+			exitCode = 124
+		}
+		return "command_failed", map[string]any{
+			"resourceCode": resourceErr.Code,
+			"resource":     details,
+		}, resourceErr.Retryable, exitCode
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "timeout", nil, true, 124
 	}
@@ -126,6 +146,12 @@ func classifyHTTPError(cause error, err *client.HTTPError) (string, map[string]a
 	if err.MessageTruncated {
 		details["messageTruncated"] = true
 	}
+	if err.ServerCode != "" {
+		details["serverCode"] = err.ServerCode
+		if len(err.ResourceDetails) > 0 {
+			details["resource"] = err.ResourceDetails
+		}
+	}
 	if err.StatusCode >= 200 && err.StatusCode < 300 {
 		if errors.Is(cause, context.DeadlineExceeded) {
 			return "timeout", details, true, 124
@@ -140,6 +166,11 @@ func classifyHTTPError(cause error, err *client.HTTPError) (string, map[string]a
 		}
 		return "invalid_response", details, false, 1
 	}
+	retryable := err.StatusCode >= 500 || err.StatusCode == http.StatusTooManyRequests ||
+		err.StatusCode == http.StatusRequestTimeout
+	if err.Retryable != nil {
+		retryable = *err.Retryable
+	}
 	switch err.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return "authentication_failed", details, false, 1
@@ -148,11 +179,11 @@ func classifyHTTPError(cause error, err *client.HTTPError) (string, map[string]a
 	case http.StatusConflict:
 		return "conflict", details, false, 1
 	case http.StatusTooManyRequests:
-		return "rate_limited", details, true, 1
+		return "rate_limited", details, retryable, 1
 	default:
 		if err.StatusCode >= 500 {
-			return "server_error", details, true, 1
+			return "server_error", details, retryable, 1
 		}
-		return "http_error", details, err.StatusCode == http.StatusRequestTimeout, 1
+		return "http_error", details, retryable, 1
 	}
 }

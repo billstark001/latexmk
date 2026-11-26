@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -75,12 +76,50 @@ func TestCacheIgnoreCoversNegatedEntry(t *testing.T) {
 	if status.Ignored {
 		t.Fatal("negated cache entry must not be reported as fully ignored")
 	}
-	result, err := AddProjectCacheGitIgnore(root)
+	result, err := AddProjectCacheGitIgnore(root, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !result.Changed {
 		t.Fatal("expected an explicit trailing cache rule")
+	}
+}
+
+func TestCacheIgnoreLocalDoesNotModifyTrackedIgnoreFile(t *testing.T) {
+	root := t.TempDir()
+	if output, err := exec.Command("git", "-C", root, "init", "--quiet").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %s %v", output, err)
+	}
+	project := filepath.Join(root, "nested paper")
+	if err := os.Mkdir(project, 0700); err != nil {
+		t.Fatal(err)
+	}
+	result, err := AddProjectCacheGitIgnore(project, true, ".latexmk-resources.lock.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed || !strings.HasSuffix(filepath.ToSlash(result.GitIgnore), "info/exclude") {
+		t.Fatalf("wrong local destination: %#v", result)
+	}
+	if _, err := os.Stat(filepath.Join(project, ".gitignore")); !os.IsNotExist(err) {
+		t.Fatal("created shared .gitignore")
+	}
+	status, err := InspectProjectCacheGitIgnore(project)
+	if err != nil || !status.Ignored {
+		t.Fatalf("local rule does not exclude project cache: %#v %v", status, err)
+	}
+	second, err := AddProjectCacheGitIgnore(project, true, ".latexmk-resources.lock.json")
+	if err != nil || second.Changed {
+		t.Fatalf("local ignore append is not idempotent: %#v %v", second, err)
+	}
+	if _, err := exec.Command(
+		"git",
+		"-C",
+		project,
+		"check-ignore",
+		".latexmk-resources.lock.json.guard",
+	).Output(); err != nil {
+		t.Fatal("resource guard not locally ignored", err)
 	}
 }
 

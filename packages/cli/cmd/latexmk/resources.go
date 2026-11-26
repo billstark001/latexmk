@@ -125,6 +125,9 @@ func resolveResourceEnvironment(
 		)
 	}
 	if operation == resourcePrepare {
+		if err := preparePackageArchives(ctx, c, opts, meta, environment); err != nil {
+			return environment, err
+		}
 		var blobs map[string]projectarchive.File
 		if captured != nil {
 			blobs = captured.Blobs
@@ -269,6 +272,9 @@ func runResources(args []string) int {
 	}
 	opts.projectRoot, err = filepath.Abs(opts.projectRoot)
 	if err != nil {
+		return failAgentArguments(command, jsonOutput, err)
+	}
+	if err := resolveResourceCache(&opts); err != nil {
 		return failAgentArguments(command, jsonOutput, err)
 	}
 	finalizeResourceOptions(&opts)

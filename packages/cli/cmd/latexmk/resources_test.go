@@ -100,6 +100,41 @@ func TestFilesWithResourcesIsOfflineAndDoesNotCreateLock(t *testing.T) {
 	}
 }
 
+func TestCustomResourceCacheIsExcludedFromOfflineSourceAndFileResourceCapture(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cache := filepath.Join(root, "downloads")
+	t.Setenv("LATEXMK_CLI_RESOURCE_CACHE_DIR", cache)
+	if err := os.MkdirAll(cache, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "secret.tex"), []byte("cache contents"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		"main.tex",
+		[]byte(`\documentclass{article}\begin{document}x\end{document}`),
+		0600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := captureCommandOutput(t, func() int {
+		return run([]string{"latexmk", "files", "--upload-mode", "all", "--no-gitignore", "--json", "main.tex"})
+	})
+	if code != 0 || strings.Contains(stdout, "secret.tex") {
+		t.Fatalf("cache leaked into source selection: %d %s %s", code, stdout, stderr)
+	}
+	data := `{"resources":{"cached":{"type":"files","path":"downloads"}},"defaultResources":["cached"]}`
+	if err := os.WriteFile(".latexmk.json", []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	code, _, _ = captureCommandOutput(t, func() int { return run([]string{"latexmk", "files", "--json", "main.tex"}) })
+	if code == 0 {
+		t.Fatal("explicit resource declaration admitted the local archive cache")
+	}
+}
+
 func TestLockedEnvironmentPinsBaselineAndFrozenRejectsChangedSpecOffline(t *testing.T) {
 	root := t.TempDir()
 	defaultID := "slim-v1"
