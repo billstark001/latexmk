@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 
@@ -12,12 +12,47 @@ export const runtimeInputs = [
   'Dockerfile',
   'packages.txt',
   'install-texlive.sh',
+  'capture-package-index.sh',
   'smoke.sh',
   'font-smoke.tex',
   'font-inventory.sh',
   'rename-compat-fonts.py',
+  'texlive-resources/texlive-sources.json',
 ];
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
+
+/** Verify the baked remote index against the selected snapshot declaration. */
+export function verifyRuntimePackageIndex(directory, expected) {
+  const descriptor = JSON.parse(readFileSync(join(directory, 'texlive-package-index.json'), 'utf8'));
+  if (
+    descriptor.version !== 1 ||
+    descriptor.path !== 'texlive-package-index.tlpdb' ||
+    descriptor.repository !== expected.repository ||
+    descriptor.texliveYear !== expected.texliveYear ||
+    !/^[a-f0-9]{64}$/.test(descriptor.sha256)
+  )
+    throw new Error('Runtime package index descriptor does not match the selected snapshot');
+  const imported = expected.texliveSources?.packageIndex;
+  if (imported && descriptor.sha256 !== imported.sha256)
+    throw new Error('Runtime package index differs from the explicitly imported SHA-256 assertion');
+  const bytes = readFileSync(join(directory, descriptor.path));
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  if (sha256 !== descriptor.sha256) throw new Error('Runtime package index SHA-256 mismatch');
+  const checksum = readFileSync(join(directory, 'texlive-package-index.sha256'), 'utf8').trim();
+  if (checksum !== `${sha256}  ${descriptor.path}`)
+    throw new Error('Runtime package index checksum assertion differs from descriptor');
+  const text = bytes.toString('utf8');
+  const location = /^location-url[\t ]+([^\r\n]+)\r?$/m.exec(text)?.[1];
+  if (
+    !Buffer.from(text, 'utf8').equals(bytes) ||
+    !location ||
+    location.replace(/\/+$/, '') !== expected.repository.replace(/\/+$/, '') ||
+    !new RegExp(`^depend release/${expected.texliveYear}\\r?$`, 'm').test(text) ||
+    !/^containerchecksum [a-f0-9]{128}\r?$/m.test(text)
+  )
+    throw new Error('Runtime package index is not the complete selected remote export');
+  return descriptor;
+}
 
 /** Identify the selected runtime recipe, independent of app metadata and checkout path. */
 export function runtimeFingerprint(context, platform) {
@@ -25,14 +60,25 @@ export function runtimeFingerprint(context, platform) {
   const admitted = readFileSync(join(context, '.dockerignore'), 'utf8').trim().split('\n');
   const expected = [
     '**',
-    ...runtimeInputs.filter((name) => !['Dockerfile', '.dockerignore'].includes(name)).map((name) => `!${name}`),
+    ...runtimeInputs
+      .filter((name) => !['Dockerfile', '.dockerignore'].includes(name) && !name.startsWith('texlive-resources/'))
+      .map((name) => `!${name}`),
+    '!texlive-resources/',
+    '!texlive-resources/**',
   ];
   if (admitted.length !== expected.length || admitted.some((line) => !expected.includes(line))) {
     throw new Error('Runtime context allowlist changed; update runtimeInputs before using cached images');
   }
   const hash = createHash('sha256');
   hash.update(`latexmk-runtime-v1\0${platform}\0`);
-  for (const name of runtimeInputs) {
+  const inputs = new Set(runtimeInputs);
+  const sources = join(context, 'texlive-resources');
+  for (const name of readdirSync(sources)) {
+    const info = lstatSync(join(sources, name));
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error('Runtime source artifacts must be regular files');
+    inputs.add(`texlive-resources/${name}`);
+  }
+  for (const name of [...inputs].sort()) {
     const bytes = readFileSync(join(context, name));
     hash.update(`${name}\0${bytes.length}\0`);
     hash.update(bytes);
@@ -82,6 +128,7 @@ if (import.meta.main) {
       image: { type: 'string' },
       tag: { type: 'string' },
       ref: { type: 'string' },
+      'runtime-lock': { type: 'string' },
     },
   });
   switch (positionals[0]) {
@@ -94,7 +141,10 @@ if (import.meta.main) {
     case 'promote':
       promoteRuntime(values.image, values.tag, values.ref);
       break;
+    case 'verify-index':
+      verifyRuntimePackageIndex(values.context, JSON.parse(readFileSync(values['runtime-lock'], 'utf8')));
+      break;
     default:
-      throw new Error('Expected fingerprint, resolve, or promote');
+      throw new Error('Expected fingerprint, resolve, promote, or verify-index');
   }
 }

@@ -26,6 +26,8 @@ FROM ${RUNTIME_IMAGE}
 RUN test "$LATEXMK_IMAGE_PROFILE" = "__IMAGE_PROFILE__"
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=builder --chmod=0755 /out/latexmk-server /usr/local/bin/latexmk-server
+COPY texlive-resources/ /usr/local/lib/latexmk/
+ENV LATEXMK_TEXLIVE_SOURCES_FILE=/usr/local/lib/latexmk/texlive-sources.json
 EXPOSE 8080
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/latexmk-server"]

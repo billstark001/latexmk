@@ -68,6 +68,8 @@ No repository runtime variables or manual adoption step are required. Existing `
 
 `runtime-image.yml` is a manual entry point for the same runtime selection and verification, without building the application. Both workflows serialize writes for each profile and registry destination, and upload font inventories and SHA-256 verification results. A failed verification cannot promote a recipe or application tag. Candidate tags are unique to a workflow attempt; they may remain in GHCR after a failed publishing run and are not release tags.
 
+Runtime verification also exports the complete remote package index, its descriptor and checksum assertion. Before promotion, `scripts/runtime-image.mjs verify-index` checks the retained bytes against the selected repository/year and SHA-256, so an installed-only index or a foreign snapshot cannot pass as the cold-resolution artifact.
+
 ### Testing a feature branch in Actions
 
 Manual dispatch defaults to `publish=false`. It builds into a disposable registry on the runner, and still tests exact image digests. This writes no GHCR images and creates no GitHub releases. Run the complete chain, including an explicit cache hit check, with:
@@ -96,6 +98,46 @@ Runtime and application builds use separate GHA cache scopes with `mode=max`. Re
 `runtime/lock.json` pins the upstream slim/full and Go images by digest, plus a TeX Live year and date-specific repository snapshot. Update these deliberately and together. The build rejects a base from a different TeX Live year. `--texlive-image` requires a digest; `--texlive-repository` can select another matching HTTPS snapshot. Change `texliveYear` in the lock when upgrading years.
 
 Installed package revisions are recorded in `/usr/local/lib/latexmk/texlive.tlpdb`, with the repository URL and Debian package inventory beside it. Debian package repositories are not snapshot-pinned, so rebuilding a runtime can pick up OS fixes; the _published runtime digest_ is the exact reproducibility boundary. Never reuse a release tag to imply that rebuilt bytes are identical.
+
+## Ordered package archive sources
+
+Both bundle modes generate `texlive-resources/texlive-sources.json` and copy its contents into `/usr/local/lib/latexmk/` in the image. The application Dockerfile sets `LATEXMK_TEXLIVE_SOURCES_FILE` to the generated policy; this works when deploying the image directly to Railway, without importing `.env.example` or using Compose. Set that environment variable to another administrator-managed policy file to override the embedded one.
+
+The default archive source order is UIB, TUNA, then USTC. Repeated `--texlive-archive-mirror` flags replace the defaults, preserve order, and remove duplicate URLs:
+
+```sh
+node packages/deploy/dist/index.js bundle \
+  --profile slim --preset railway-serverless \
+  --runtime-image 'registry.example.edu/latexmk-runtime@sha256:REPLACE_WITH_DIGEST' \
+  --texlive-archive-mirror https://ctan.uib.no/systems/texlive/tlnet \
+  --texlive-archive-mirror https://mirrors.tuna.tsinghua.edu.cn/CTAN/systems/texlive/tlnet \
+  --out dist/railway
+```
+
+Each mirror must be an HTTPS repository base without credentials, query strings or fragments. The server requests the already resolved package revision and verifies its locked SHA-512 before admitting it to the archive cache. These are transport sources: they do not supply a rolling replacement package index or change the selected package versions. The source policy is recorded in `latexmk-deploy.json` / `runtime-lock.json`; its mirror list is separate from the compiler environment identity. Changing an isolated runner image still changes that baseline's image identity.
+
+### Trusted snapshot index
+
+The complete remote package index is distinct from the installed-package inventory. A new runtime build captures `tlmgr --repository SNAPSHOT dump-tlpdb --remote` from the selected date-pinned repository, checks its release metadata, and stores:
+
+- `texlive-package-index.tlpdb`: the complete remote export, including archive checksums;
+- `texlive-package-index.json`: versioned descriptor binding its SHA-256, repository and TeX Live year;
+- `texlive-package-index.sha256`: build-time verification of the captured bytes.
+
+The server can use this immutable runtime artifact after a cold start instead of downloading the index again. Its SHA-256 and snapshot binding are checked before resolution. A generated application policy without an explicit index inherits the verified runtime index when present. Existing runtime images without that artifact retain the remote-index behavior.
+
+An administrator can import an existing trusted export into either bundle mode:
+
+```sh
+node packages/deploy/dist/index.js bundle \
+  --texlive-package-index /trusted/snapshot-2026-09-09.tlpdb \
+  --texlive-package-index-sha256 REPLACE_WITH_64_LOWERCASE_HEX_DIGITS \
+  --out dist/app
+```
+
+The two flags must be used together. The bundler freezes the imported bytes and rejects a wrong hash, a different `location-url`, a different release year, HTML, or an installed-only index lacking the remote metadata. The explicit import is an administrator trust decision: obtain the export and expected hash from the intended snapshot, rather than adding its URL to an arbitrary rolling index. The generated descriptor binds the import to the repository/year selected in `runtime/lock.json` (or a runtime bundle's explicit `--texlive-repository`).
+
+Archive fallback only covers managed runtime package additions. Runtime bootstrap still uses `tlmgr install` against the selected full snapshot because it installs collections and platform binaries as well. Supplying an index does not make bootstrap offline, and the archive mirror list does not permit runtime bootstrap to switch to a rolling repository. If the pinned snapshot is unavailable, use a trusted same-snapshot full repository or a previously published runtime. No Docker build or publication is performed merely by generating a context.
 
 The font conversion stage adds Python/fontTools only to an intermediate image; the final runtime copies just the compatibility fonts. Editing the font script reuses the TeX installation stage. Slim installs Perl HTTPS support so `tlmgr` can reuse connections rather than start a fresh download connection for each package. The generated Compose tmpfs explicitly permits execution: the upstream packed Biber executable unpacks a Perl interpreter under `/tmp` and must execute it. The root filesystem remains read-only, with capabilities dropped. The build smoke test exercises every enabled engine, Chinese text, the Times New Roman compatibility family, and a Biber bibliography as the non-root user. Font loading tests also exercise body, code, CJK glyphs and OpenType math in XeLaTeX (both profiles) and LuaLaTeX (full). See [runtime fonts](../../docs/FONTS.md) for the baseline, verifiable inventories, substitutions and user font installation.
 
